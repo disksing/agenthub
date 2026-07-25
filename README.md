@@ -1,25 +1,27 @@
 # AgentHub
 
-AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon 统一管理本机 Codex、Kimi、Pi/Grok 和 OpenCode，Web UI 与 CLI 都通过同一套 HTTP API 和 SSE 事件流工作。
+[简体中文](README.zh-CN.md)
 
-## 能力
+AgentHub is a local agent launcher and session hub. A single Go daemon manages Codex, Kimi, Pi/Grok, and OpenCode on your machine, and both the Web UI and the CLI work through the same HTTP API and SSE event stream.
 
-- 默认仅监听 loopback，可显式配置局域网/通配/IPv6 地址；无账号、token 或 API 鉴权。
-- 独立的 provider、agent 和 agent profile 配置。
-- Agent Profile 显式选择或按 profile key/tag 自动路由。
-- 真实 Provider Adapter：
+## Capabilities
+
+- Listens on loopback only by default; LAN/wildcard/IPv6 addresses can be configured explicitly. No accounts, tokens, or API authentication.
+- Independent provider, agent, and agent profile configuration.
+- Agent profiles selected explicitly or routed automatically by profile key/tag.
+- Real provider adapters:
   - Codex app-server
   - Kimi / OpenCode ACP v1
-  - Pi JSONL RPC，包括 Kimi K3 与 Grok 等模型
-- Session 创建、聊天、steer、interrupt、stop、resume、archive 和 approval。
-- daemon 重启后按需恢复 provider 原生 session/thread。
-- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止和 JSON 配置编辑。
-- CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
-- 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
+  - Pi JSONL RPC, including models such as Kimi K3 and Grok
+- Session creation, chat, steer, interrupt, stop, resume, archive, and approvals.
+- On-demand recovery of provider-native sessions/threads after a daemon restart.
+- Same-origin Web UI: session list, real-time chat, status, approvals, stop, and JSON config editing.
+- CLI: one-shot runs, interactive chat, attach, event queries, and session management.
+- Each session stores only `session.json` and an append-only `events.jsonl`; turns and approvals are events, with no separate files.
 
-## 构建与启动
+## Build and Run
 
-需要 Go 1.24+ 和 Node.js。Web UI 位于 `frontend/`，构建后由 daemon 同源提供：
+Requires Go 1.24+ and Node.js. The Web UI lives in `frontend/` and is served same-origin by the daemon after building:
 
 ```bash
 cd frontend
@@ -30,34 +32,34 @@ go build -o agenthub ./cmd/agenthub
 ./agenthub serve
 ```
 
-打开 <http://127.0.0.1:4646>。
+Open <http://127.0.0.1:4646>.
 
-### 监听地址
+### Listen Address
 
-默认只监听 loopback，`agenthub serve` 等价于 `agenthub serve --addr 127.0.0.1:4646`。需要让局域网内其他设备访问时，可以用 `--addr host:port` 显式选择本机地址：
+By default the daemon listens on loopback only; `agenthub serve` is equivalent to `agenthub serve --addr 127.0.0.1:4646`. To make the daemon reachable from other devices on the LAN, explicitly choose a local address with `--addr host:port`:
 
 ```bash
-agenthub serve --addr 192.168.2.150:4646   # 具体局域网 IPv4
-agenthub serve --addr 0.0.0.0:4646         # 所有 IPv4 接口（通配）
-agenthub serve --addr '[::]:4646'          # 所有 IPv6 接口（通配）
-agenthub serve --addr '[::1]:4646'         # 仅 IPv6 loopback
-agenthub serve --addr myhost.local:4646    # 解析到本机接口的主机名/域名
+agenthub serve --addr 192.168.2.150:4646   # a specific LAN IPv4 address
+agenthub serve --addr 0.0.0.0:4646         # all IPv4 interfaces (wildcard)
+agenthub serve --addr '[::]:4646'          # all IPv6 interfaces (wildcard)
+agenthub serve --addr '[::1]:4646'         # IPv6 loopback only
+agenthub serve --addr myhost.local:4646    # a hostname/domain that resolves to a local interface
 ```
 
-主机名必须能解析到本机网络接口或 loopback。无法解析的主机名、非本机接口的地址、错误的格式和非法端口都会在启动时直接报错，不会静默回退到其他地址。IPv6 地址必须用方括号括起来。
+The hostname must resolve to a local network interface or loopback. Unresolvable hostnames, addresses of non-local interfaces, malformed values, and invalid ports all fail at startup with an error; there is no silent fallback to another address. IPv6 addresses must be enclosed in square brackets.
 
-> **安全警告**：AgentHub 没有账号、token 或 API 鉴权。监听非 loopback 或通配地址时，任何能访问该地址的设备都可以完全控制 daemon（运行 Agent、修改 Session 和配置）。只在可信网络中使用，不要直接暴露到公网。启动日志会打印同样的警告。
+> **Security warning**: AgentHub has no accounts, tokens, or API authentication. When listening on a non-loopback or wildcard address, any device that can reach that address gets full control of the daemon (running agents, modifying sessions and configuration). Only use this on trusted networks, and never expose it directly to the public internet. The startup log prints the same warning.
 
-非 loopback 监听时，本机 CLI 仍通过 `server.json` 中的 loopback endpoint 自动发现 daemon。浏览器写请求仍要求 `Origin` 与请求 `Host` 一致，且 `Host` 必须是本机接口地址或本机主机名（防止 DNS rebinding），不接受任意 Origin。
+When listening on a non-loopback address, the local CLI still discovers the daemon automatically through the loopback endpoint in `server.json`. Browser write requests still require the `Origin` to match the request `Host`, and the `Host` must be a local interface address or the local hostname (to prevent DNS rebinding); arbitrary origins are not accepted.
 
-开发时可分别运行：
+During development you can run the two parts separately:
 
 ```bash
 go run ./cmd/agenthub serve
 cd frontend && npm run dev
 ```
 
-Vite 会把 `/v1` 代理到默认 daemon 端口。
+Vite proxies `/v1` to the default daemon port.
 
 ## CLI
 
@@ -65,8 +67,8 @@ Vite 会把 `/v1` 代理到默认 daemon 端口。
 agenthub status
 agenthub agents
 
-agenthub run --tag fast --cwd . "检查测试失败原因"
-agenthub run --agent pi-kimi --cwd . "实现这个功能并运行测试"
+agenthub run --tag fast --cwd . "Investigate why the tests fail"
+agenthub run --agent pi-kimi --cwd . "Implement this feature and run the tests"
 
 agenthub chat --agent gpt-5-6-sol --cwd .
 agenthub session attach <session-id>
@@ -80,17 +82,17 @@ agenthub session approve --decision accept <session-id> <approval-id>
 agenthub session archive <session-id>
 ```
 
-交互聊天支持 `/interrupt`、`/stop` 和 `/quit`。CLI 自动从 daemon 的 `server.json` 发现 endpoint；也可设置 `AGENTHUB_ENDPOINT`。
+Interactive chat supports `/interrupt`, `/stop`, and `/quit`. The CLI automatically discovers the endpoint from the daemon's `server.json`; you can also set `AGENTHUB_ENDPOINT`.
 
-## 配置
+## Configuration
 
-默认配置文件是：
+The default config file is:
 
 ```text
 $HOME/.agenthub/config.json
 ```
 
-首次启动时，如果配置不存在，AgentHub 会直接生成自己的最小默认配置，不读取或迁移其他程序的配置。配置结构：
+On first startup, if the config does not exist, AgentHub generates its own minimal default configuration; it does not read or migrate any other program's config. Config structure:
 
 ```json
 {
@@ -115,17 +117,18 @@ $HOME/.agenthub/config.json
 }
 ```
 
-命令发现顺序为：provider 的 `command`、`AGENTHUB_*_CLI`、`PATH`。支持：
+Command discovery order: the provider's `command`, `AGENTHUB_*_CLI`, then `PATH`. Supported:
 
 - `AGENTHUB_CODEX_CLI`
 - `AGENTHUB_OPENCODE_CLI`
 - `AGENTHUB_KIMI_CLI`
 - `AGENTHUB_PI_CLI`
-`AGENTHUB_HOME=/path` 可把配置、数据和 runtime 状态全部隔离到一个目录，配置文件此时位于 `/path/config/config.json`，适合测试。
+
+`AGENTHUB_HOME=/path` isolates all config, data, and runtime state into a single directory; the config file then lives at `/path/config/config.json`, which is useful for testing.
 
 ## API
 
-主要端点：
+Main endpoints:
 
 ```text
 GET    /v1/health
@@ -146,11 +149,11 @@ POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
 ```
 
-事件端点在普通请求下返回 JSON；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并支持 `Last-Event-ID`。
+The events endpoint returns JSON for plain requests; with `Accept: text/event-stream` or `?stream=true` it returns SSE and supports `Last-Event-ID`.
 
-## 数据与安全
+## Data and Security
 
-配置默认位于 `$HOME/.agenthub/config.json`；Session 数据与运行状态仍遵循操作系统用户数据目录。每个 Session：
+The config lives at `$HOME/.agenthub/config.json` by default; session data and runtime state follow the operating system's user data directory. For each session:
 
 ```text
 sessions/<session-id>/
@@ -158,11 +161,11 @@ sessions/<session-id>/
   events.jsonl
 ```
 
-`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。
+`events.jsonl` is the single source of truth, and `session.json` is a rebuildable projection. Writes use append + fsync; snapshots use a temporary file + fsync + rename. Truncated trailing log lines are repaired at startup.
 
-无鉴权模式只适合本机和可信网络：默认仅监听 loopback，不发送 CORS 许可，拒绝跨 origin 的浏览器写请求，并校验请求 Host 必须指向本机地址。
+The no-authentication mode is only suitable for the local machine and trusted networks: it listens on loopback only by default, sends no permissive CORS headers, rejects cross-origin browser write requests, and verifies that the request Host points to a local address.
 
-## 验证
+## Verification
 
 ```bash
 go test -race ./...
@@ -172,8 +175,8 @@ npm run build
 npm run test:sites
 ```
 
-实现还经过本机真实联调：Codex app-server、Kimi ACP、Pi/Kimi K3、Pi/Grok、Codex 原生 thread 重启恢复，以及 Kimi 创建并写入工作区文件。
+The implementation has also been integration-tested locally against real providers: Codex app-server, Kimi ACP, Pi/Kimi K3, Pi/Grok, Codex native thread recovery across restarts, and Kimi creating and writing files in the workspace.
 
-## 许可证
+## License
 
-本项目采用 [BSD 3-Clause License](LICENSE)（New BSD License / Revised BSD License）发布。
+This project is released under the [BSD 3-Clause License](LICENSE) (New BSD License / Revised BSD License).
