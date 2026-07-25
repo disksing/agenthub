@@ -63,7 +63,7 @@ func run(args []string) error {
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	address := flags.String("addr", "127.0.0.1:4646", "loopback address")
-	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./dist when present)")
+	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./frontend/dist/client when present)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func runServe(args []string) error {
 	manager := runtime.New(store, cfg)
 	defer manager.Close()
 	if *webDir == "" {
-		if absolute, statErr := filepath.Abs(filepath.Join("dist", "client")); statErr == nil {
+		if absolute, statErr := filepath.Abs(filepath.Join("frontend", "dist", "client")); statErr == nil {
 			if info, statErr := os.Stat(absolute); statErr == nil && info.IsDir() {
 				*webDir = absolute
 			}
