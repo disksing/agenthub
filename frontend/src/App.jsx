@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CaretRight, Check, Copy, Gear, List, PaperPlaneTilt, Plus,
   SidebarSimple, Stop, TerminalWindow, X,
 } from "@phosphor-icons/react";
+import { api } from "./api";
+import { SettingsModal } from "./settings/SettingsModal.jsx";
 
 const eventTypes = [
   "session.created", "session.state", "session.provider", "message.user",
@@ -10,16 +12,6 @@ const eventTypes = [
   "tool.event", "approval.requested", "approval.resolved", "turn.started",
   "turn.completed", "turn.failed", "turn.cancelled", "provider.error", "provider.stderr",
 ];
-
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: options.body ? { "Content-Type": "application/json", ...options.headers } : options.headers,
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error?.message || response.statusText);
-  return body;
-}
 
 function displayTime(value) {
   const date = new Date(value);
@@ -81,7 +73,7 @@ export function App() {
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [configText, setConfigText] = useState("");
+  const settingsTriggerRef = useRef(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -160,21 +152,16 @@ export function App() {
     } catch (value) { setError(value.message); }
   };
 
-  const openSettings = async () => {
+  const refreshAgents = async () => {
     try {
-      const body = await api("/v1/config");
-      setConfigText(JSON.stringify(body.config, null, 2));
-      setSettingsOpen(true);
-    } catch (value) { setError(value.message); }
-  };
-
-  const saveSettings = async () => {
-    try {
-      const config = JSON.parse(configText);
-      await api("/v1/config", { method: "PUT", body: JSON.stringify({ config }) });
       const body = await api("/v1/agents");
-      setAgents(body.agents || []);
-      setSettingsOpen(false);
+      const list = body.agents || [];
+      setAgents(list);
+      setSelectedAgent((current) => (
+        list.some((agent) => agent.id === current)
+          ? current
+          : body.defaultChatAgentId || list[0]?.id || ""
+      ));
     } catch (value) { setError(value.message); }
   };
 
@@ -193,7 +180,7 @@ export function App() {
             ))}
           </nav>
         </div>
-        <button className="settings-link" onClick={openSettings}><Gear size={20} />设置</button>
+        <button className="settings-link" ref={settingsTriggerRef} onClick={() => setSettingsOpen(true)}><Gear size={20} />设置</button>
       </aside>
 
       <section className="workspace">
@@ -240,13 +227,11 @@ export function App() {
       </aside>
 
       {settingsOpen && (
-        <div className="modal-backdrop">
-          <section className="settings-modal">
-            <header><div><h2>Agent 配置</h2><p>配置 provider、agent 与按标签选择 Agent 的 profile。</p></div><button className="icon-button" onClick={() => setSettingsOpen(false)}><X size={19} /></button></header>
-            <textarea value={configText} onChange={(event) => setConfigText(event.target.value)} spellCheck={false} />
-            <footer><button onClick={() => setSettingsOpen(false)}>取消</button><button className="primary-small" onClick={saveSettings}>保存并应用</button></footer>
-          </section>
-        </div>
+        <SettingsModal
+          triggerRef={settingsTriggerRef}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={refreshAgents}
+        />
       )}
     </main>
   );

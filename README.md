@@ -15,7 +15,7 @@ AgentHub is a local agent launcher and session hub. A single Go daemon manages C
   - Pi JSONL RPC, including models such as Kimi K3 and Grok
 - Session creation, chat, steer, interrupt, stop, resume, archive, and approvals.
 - On-demand recovery of provider-native sessions/threads after a daemon restart.
-- Same-origin Web UI: session list, real-time chat, status, approvals, stop, and JSON config editing.
+- Same-origin Web UI: session list, real-time chat, status, approvals, stop, and a structured settings panel for providers, agents, and profiles.
 - CLI: one-shot runs, interactive chat, attach, event queries, and session management.
 - Each session stores only `session.json` and an append-only `events.jsonl`; turns and approvals are events, with no separate files.
 
@@ -116,6 +116,8 @@ On first startup, if the config does not exist, AgentHub generates its own minim
   ]
 }
 ```
+
+The Web UI's **Settings** panel is the recommended way to edit this configuration. It provides structured, validated forms for providers, agents, agent profiles, and the default chat agent, along with provider command availability probes. All changes go through the daemon API (`PUT /v1/config`), which remains the only writer of the config file — no manual JSON editing is required.
 
 Command discovery order: the provider's `command`, `AGENTHUB_*_CLI`, then `PATH`. Supported:
 

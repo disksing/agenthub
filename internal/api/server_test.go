@@ -153,7 +153,8 @@ func TestMutationRejectsCrossOriginBrowser(t *testing.T) {
 	}
 }
 
-func TestAgentsAndConfigAPI(t *testing.T) {
+func newConfigTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
 	root := t.TempDir()
 	store, err := session.Open(root)
 	if err != nil {
@@ -167,7 +168,12 @@ func TestAgentsAndConfigAPI(t *testing.T) {
 	}
 	manager := runtime.New(store, cfg)
 	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager, ConfigPath: filepath.Join(root, "config.json")}).Handler())
-	defer server.Close()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestAgentsAndConfigAPI(t *testing.T) {
+	server := newConfigTestServer(t)
 	response, err := http.Get(server.URL + "/v1/agents")
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +191,144 @@ func TestAgentsAndConfigAPI(t *testing.T) {
 	}
 	if len(body.Profiles) != 1 || len(body.Probes) != 1 || body.Probes[0].Available {
 		t.Fatalf("unexpected response: %+v", body)
+	}
+}
+
+func putConfig(t *testing.T, server *httptest.Server, body string) (int, string) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPut, server.URL+"/v1/config", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var parsed struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode, parsed.Error.Code
+}
+
+func TestPutConfigRoundTrip(t *testing.T) {
+	server := newConfigTestServer(t)
+	updated := `{"config":{
+		"version": 1,
+		"defaultChatAgentId": "agent-b",
+		"agentProviders": [
+			{"id": "provider", "name": "Pi", "type": "pi", "enabled": true, "command": "missing-test-command"},
+			{"id": "second", "name": "Kimi", "type": "kimi", "enabled": false}
+		],
+		"agents": [
+			{"id": "agent", "name": "Pi Agent", "providerId": "provider"},
+			{"id": "agent-b", "name": "Pi Agent B", "providerId": "provider", "options": {"model": "m"}}
+		],
+		"agentProfiles": [{"key": "fast", "agentId": "agent-b", "description": "fast lane"}]
+	}}`
+	status, code := putConfig(t, server, updated)
+	if status != http.StatusOK || code != "" {
+		t.Fatalf("PUT /v1/config: status = %d, code = %q", status, code)
+	}
+
+	response, err := http.Get(server.URL + "/v1/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var configBody struct {
+		Config config.Config `json:"config"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&configBody); err != nil {
+		t.Fatal(err)
+	}
+	cfg := configBody.Config
+	if cfg.DefaultChatAgentID != "agent-b" || len(cfg.AgentProviders) != 2 || len(cfg.Agents) != 2 || len(cfg.AgentProfiles) != 1 {
+		t.Fatalf("unexpected config after save: %+v", cfg)
+	}
+	if cfg.Agents[1].Options["model"] != "m" || cfg.AgentProfiles[0].Description != "fast lane" {
+		t.Fatalf("saved fields lost: %+v", cfg)
+	}
+
+	response, err = http.Get(server.URL + "/v1/agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var agentsBody struct {
+		DefaultChatAgentID string           `json:"defaultChatAgentId"`
+		Agents             []config.Agent   `json:"agents"`
+		Probes             []config.Probe   `json:"probes"`
+		Profiles           []config.Profile `json:"profiles"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&agentsBody); err != nil {
+		t.Fatal(err)
+	}
+	if agentsBody.DefaultChatAgentID != "agent-b" || len(agentsBody.Agents) != 2 {
+		t.Fatalf("GET /v1/agents does not reflect saved config: %+v", agentsBody)
+	}
+	// 只有启用的 provider 会被探测；禁用的 second 不出现。
+	if len(agentsBody.Probes) != 1 || agentsBody.Probes[0].ProviderID != "provider" {
+		t.Fatalf("unexpected probes after save: %+v", agentsBody.Probes)
+	}
+	if len(agentsBody.Profiles) != 1 || agentsBody.Profiles[0].AgentID != "agent-b" {
+		t.Fatalf("unexpected profiles after save: %+v", agentsBody.Profiles)
+	}
+}
+
+func TestPutConfigRejectsInvalidConfig(t *testing.T) {
+	server := newConfigTestServer(t)
+	cases := map[string]string{
+		"duplicate provider id": `{"config":{"agentProviders":[
+			{"id":"p","type":"pi","enabled":true},
+			{"id":"p","type":"kimi","enabled":true}]}}`,
+		"unsupported provider type": `{"config":{"agentProviders":[
+			{"id":"p","type":"bogus","enabled":true}]}}`,
+		"dangling agent provider": `{"config":{"agentProviders":[
+			{"id":"p","type":"pi","enabled":true}],
+			"agents":[{"id":"a","providerId":"ghost"}]}}`,
+	}
+	for name, body := range cases {
+		status, code := putConfig(t, server, body)
+		if status != http.StatusUnprocessableEntity || code != "invalid_config" {
+			t.Errorf("%s: status = %d, code = %q, want 422 invalid_config", name, status, code)
+		}
+	}
+	// 失败的保存不应改变现有配置。
+	response, err := http.Get(server.URL + "/v1/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var configBody struct {
+		Config config.Config `json:"config"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&configBody); err != nil {
+		t.Fatal(err)
+	}
+	if configBody.Config.DefaultChatAgentID != "agent" || len(configBody.Config.Agents) != 1 {
+		t.Fatalf("config changed after rejected saves: %+v", configBody.Config)
+	}
+}
+
+func TestPutConfigRejectsInvalidRequest(t *testing.T) {
+	server := newConfigTestServer(t)
+	cases := map[string]string{
+		"malformed JSON":               `{"config":`,
+		"wrong config type":            `{"config":"nope"}`,
+		"unknown field without config": `{"conf":{}}`,
+	}
+	for name, body := range cases {
+		status, code := putConfig(t, server, body)
+		if status != http.StatusBadRequest || code != "invalid_request" {
+			t.Errorf("%s: status = %d, code = %q, want 400 invalid_request", name, status, code)
+		}
 	}
 }
 

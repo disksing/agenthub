@@ -15,7 +15,7 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
   - Pi JSONL RPC，包括 Kimi K3 与 Grok 等模型
 - Session 创建、聊天、steer、interrupt、stop、resume、archive 和 approval。
 - daemon 重启后按需恢复 provider 原生 session/thread。
-- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止和 JSON 配置编辑。
+- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及用于管理 provider、agent 和 profile 的结构化设置界面。
 - CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
 - 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
 
@@ -116,6 +116,8 @@ $HOME/.agenthub/config.json
   ]
 }
 ```
+
+推荐使用 Web UI 的**设置**界面编辑配置：它为 provider、agent、agent profile 和默认聊天 Agent 提供结构化、带校验的表单，并展示 provider 命令可用性探测结果。所有修改都通过 daemon API（`PUT /v1/config`）提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
 
 命令发现顺序为：provider 的 `command`、`AGENTHUB_*_CLI`、`PATH`。支持：
 
