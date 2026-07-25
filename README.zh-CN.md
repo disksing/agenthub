@@ -63,7 +63,13 @@ Vite 会把 `/v1` 代理到默认 daemon 端口。
 
 ## CLI
 
+CLI 提供分层帮助：`agenthub help` 输出总览和概念导读（Provider、Agent、Session、Turn、Approval、事件），`agenthub help <command>`（或 `agenthub help session <subcommand>`）输出单条命令的用法、选项、默认值和示例，`agenthub <command> --help` 效果相同。未知命令和错误参数会以非零状态退出，并提示对应的帮助入口。
+
 ```bash
+agenthub help
+agenthub help session approve
+agenthub serve --help
+
 agenthub status
 agenthub agents
 
@@ -71,6 +77,7 @@ agenthub run --agent pi-kimi --cwd . "检查测试失败原因"
 agenthub run --agent codex-default --cwd . "实现这个功能并运行测试"
 
 agenthub chat --agent gpt-5-6-sol --cwd .
+agenthub session create --agent pi-kimi --title "bug hunt"
 agenthub session attach <session-id>
 agenthub session list
 agenthub session show <session-id>

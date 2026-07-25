@@ -63,7 +63,13 @@ Vite proxies `/v1` to the default daemon port.
 
 ## CLI
 
+The CLI ships layered help: `agenthub help` prints an overview plus a concept guide (providers, agents, sessions, turns, approvals, events), `agenthub help <command>` (optionally `agenthub help session <subcommand>`) prints per-command usage, options, defaults and examples, and `agenthub <command> --help` does the same inline. Unknown commands and invalid arguments exit non-zero with a pointer to the matching help topic.
+
 ```bash
+agenthub help
+agenthub help session approve
+agenthub serve --help
+
 agenthub status
 agenthub agents
 
@@ -71,6 +77,7 @@ agenthub run --agent pi-kimi --cwd . "Investigate why the tests fail"
 agenthub run --agent codex-default --cwd . "Implement this feature and run the tests"
 
 agenthub chat --agent gpt-5-6-sol --cwd .
+agenthub session create --agent pi-kimi --title "bug hunt"
 agenthub session attach <session-id>
 agenthub session list
 agenthub session show <session-id>
