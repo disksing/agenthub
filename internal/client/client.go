@@ -1,0 +1,207 @@
+package client
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/disksing/project-incubator/agenthub/internal/daemon"
+	"github.com/disksing/project-incubator/agenthub/internal/paths"
+	"github.com/disksing/project-incubator/agenthub/internal/session"
+)
+
+type Client struct {
+	endpoint string
+	http     *http.Client
+}
+
+func Discover() (*Client, error) {
+	if endpoint := strings.TrimRight(strings.TrimSpace(os.Getenv("AGENTHUB_ENDPOINT")), "/"); endpoint != "" {
+		return New(endpoint), nil
+	}
+	resolved, err := paths.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	state, err := daemon.ReadState(resolved.ServerFile)
+	if err != nil {
+		return nil, fmt.Errorf("discover agenthub daemon: %w", err)
+	}
+	return New(state.Endpoint), nil
+}
+
+func New(endpoint string) *Client {
+	return &Client{
+		endpoint: strings.TrimRight(endpoint, "/"),
+		http:     &http.Client{Timeout: 30 * time.Minute},
+	}
+}
+
+func (c *Client) Status() (map[string]any, error) {
+	var result map[string]any
+	if err := c.request(http.MethodGet, "/v1/status", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) CreateSession(title, cwd, agentID string, tags []string) (session.Session, error) {
+	return c.CreateSessionWithMessage(title, cwd, agentID, tags, "")
+}
+
+func (c *Client) CreateSessionWithMessage(title, cwd, agentID string, tags []string, message string) (session.Session, error) {
+	body := map[string]any{
+		"title":   title,
+		"cwd":     cwd,
+		"agentId": agentID,
+		"selector": map[string]any{
+			"tags": tags,
+		},
+	}
+	if strings.TrimSpace(message) != "" {
+		body["initialMessage"] = map[string]any{"text": message}
+	}
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	if err := c.request(http.MethodPost, "/v1/sessions", body, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
+func (c *Client) Agents() (map[string]any, error) {
+	var result map[string]any
+	if err := c.request(http.MethodGet, "/v1/agents", nil, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) SendMessage(id, text string, steer bool) (session.Session, error) {
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	if err := c.request(http.MethodPost, "/v1/sessions/"+id+"/messages", map[string]any{"text": text, "steer": steer}, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
+func (c *Client) SessionAction(id, action string) (session.Session, error) {
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	if err := c.request(http.MethodPost, "/v1/sessions/"+id+"/"+action, map[string]any{}, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
+func (c *Client) ResolveApproval(id, approvalID, decision string) (session.Session, error) {
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	path := "/v1/sessions/" + id + "/approvals/" + approvalID
+	if err := c.request(http.MethodPost, path, map[string]any{"decision": decision}, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
+func (c *Client) EventsAfter(id string, after int64) ([]session.Event, error) {
+	var result struct {
+		Events []session.Event `json:"events"`
+	}
+	path := fmt.Sprintf("/v1/sessions/%s/events?after=%d&limit=1000", id, after)
+	if err := c.request(http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result.Events, nil
+}
+
+func (c *Client) ListSessions(includeArchived bool) ([]session.Session, error) {
+	path := "/v1/sessions"
+	if includeArchived {
+		path += "?includeArchived=true"
+	}
+	var result struct {
+		Sessions []session.Session `json:"sessions"`
+	}
+	if err := c.request(http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result.Sessions, nil
+}
+
+func (c *Client) GetSession(id string) (session.Session, error) {
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	if err := c.request(http.MethodGet, "/v1/sessions/"+id, nil, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
+func (c *Client) ArchiveSession(id string) (session.Session, error) {
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	if err := c.request(http.MethodDelete, "/v1/sessions/"+id, map[string]any{}, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
+func (c *Client) request(method, path string, body any, target any) error {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(data)
+	}
+	request, err := http.NewRequest(method, c.endpoint+path, reader)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
+		var apiError struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(data, &apiError) == nil && apiError.Error.Message != "" {
+			return fmt.Errorf("%s: %s", apiError.Error.Code, apiError.Error.Message)
+		}
+		return fmt.Errorf("agenthub API returned %s", response.Status)
+	}
+	if target == nil || response.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
