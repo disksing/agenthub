@@ -273,7 +273,7 @@ func TestPutConfigRoundTrip(t *testing.T) {
 	if agentsBody.DefaultChatAgentID != "agent-b" || len(agentsBody.Agents) != 2 {
 		t.Fatalf("GET /v1/agents does not reflect saved config: %+v", agentsBody)
 	}
-	// 只有启用的 provider 会被探测；禁用的 second 不出现。
+	// Only enabled providers are probed; the disabled second one is absent.
 	if len(agentsBody.Probes) != 1 || agentsBody.Probes[0].ProviderID != "provider" {
 		t.Fatalf("unexpected probes after save: %+v", agentsBody.Probes)
 	}
@@ -300,7 +300,7 @@ func TestPutConfigRejectsInvalidConfig(t *testing.T) {
 			t.Errorf("%s: status = %d, code = %q, want 422 invalid_config", name, status, code)
 		}
 	}
-	// 失败的保存不应改变现有配置。
+	// A failed save must not change the existing config.
 	response, err := http.Get(server.URL + "/v1/config")
 	if err != nil {
 		t.Fatal(err)

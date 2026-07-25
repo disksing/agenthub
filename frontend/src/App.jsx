@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CaretRight, Check, Copy, Gear, List, PaperPlaneTilt, Plus,
-  SidebarSimple, Stop, TerminalWindow, X,
+  SidebarSimple, Stop, TerminalWindow, User, X,
 } from "@phosphor-icons/react";
 import { api } from "./api";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
@@ -15,7 +15,7 @@ const eventTypes = [
 
 function displayTime(value) {
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(date.valueOf()) ? "" : date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 function messagesFromEvents(events) {
@@ -31,9 +31,9 @@ function messagesFromEvents(events) {
         messages.push({ key: event.id, role: "agent", turnId: event.turnId, text: event.data?.text || "", time: displayTime(event.time) });
       }
     } else if (event.type === "approval.requested") {
-      messages.push({ key: event.id, role: "approval", approvalId: event.data?.approvalId, text: event.data?.method || "需要确认操作", time: displayTime(event.time) });
+      messages.push({ key: event.id, role: "approval", approvalId: event.data?.approvalId, text: event.data?.method || "Approval requested", time: displayTime(event.time) });
     } else if (event.type === "provider.error") {
-      messages.push({ key: event.id, role: "error", text: event.data?.message || "Provider 发生错误", time: displayTime(event.time) });
+      messages.push({ key: event.id, role: "error", text: event.data?.message || "The provider reported an error", time: displayTime(event.time) });
     }
   }
   return messages;
@@ -43,10 +43,10 @@ function Message({ message, agent, onApproval }) {
   if (message.role === "approval") {
     return (
       <article className="notice-card">
-        <strong>需要审批</strong><span>{message.text}</span>
+        <strong>Approval required</strong><span>{message.text}</span>
         <div>
-          <button onClick={() => onApproval(message.approvalId, "decline")}>拒绝</button>
-          <button className="primary-small" onClick={() => onApproval(message.approvalId, "accept")}>允许一次</button>
+          <button onClick={() => onApproval(message.approvalId, "decline")}>Decline</button>
+          <button className="primary-small" onClick={() => onApproval(message.approvalId, "accept")}>Allow once</button>
         </div>
       </article>
     );
@@ -54,9 +54,9 @@ function Message({ message, agent, onApproval }) {
   const isUser = message.role === "user";
   return (
     <article className={`message ${isUser ? "message-user" : "message-agent"} ${message.role === "error" ? "message-error" : ""}`}>
-      <span className={`avatar ${isUser ? "avatar-user" : "avatar-agent"}`}>{isUser ? "你" : <TerminalWindow size={19} weight="bold" />}</span>
+      <span className={`avatar ${isUser ? "avatar-user" : "avatar-agent"}`}>{isUser ? <User size={17} weight="bold" /> : <TerminalWindow size={19} weight="bold" />}</span>
       <div className="message-body">
-        <div className="message-meta"><strong>{isUser ? "你" : agent}</strong><span>{message.time}</span></div>
+        <div className="message-meta"><strong>{isUser ? "You" : agent}</strong><span>{message.time}</span></div>
         <p>{message.text}</p>
       </div>
     </article>
@@ -70,8 +70,13 @@ export function App() {
   const [events, setEvents] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState("");
   const [draft, setDraft] = useState("");
-  const [detailsOpen, setDetailsOpen] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // On narrow viewports the details panel is hidden entirely (see styles.css);
+  // start with it closed there.
+  const isNarrow = () => window.matchMedia("(max-width: 760px)").matches;
+  const [detailsOpen, setDetailsOpen] = useState(() => !isNarrow());
+  // On narrow viewports the sidebar overlays the workspace; start with it
+  // hidden and close it again after picking a session.
+  const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrow());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsTriggerRef = useRef(null);
   const [error, setError] = useState("");
@@ -118,11 +123,11 @@ export function App() {
   }, [activeId]);
 
   const startNewSession = async () => {
-    const cwd = window.prompt("工作目录", activeSession?.cwd || "");
+    const cwd = window.prompt("Working directory", activeSession?.cwd || "");
     if (!cwd) return;
     setError("");
     try {
-      const body = await api("/v1/sessions", { method: "POST", body: JSON.stringify({ cwd, title: "新的 Session", agentId: selectedAgent }) });
+      const body = await api("/v1/sessions", { method: "POST", body: JSON.stringify({ cwd, title: "New Session", agentId: selectedAgent }) });
       await refreshSessions();
       setActiveId(body.session.id);
     } catch (value) { setError(value.message); }
@@ -170,60 +175,60 @@ export function App() {
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">AgentHub</div>
-          <button className="new-session" onClick={startNewSession}><Plus size={20} />新建 Session</button>
-          <div className="session-label">最近的 Session</div>
-          <nav className="session-list">
+          <button className="new-session" onClick={startNewSession}><Plus size={20} />New Session</button>
+          <div className="session-label">Recent Sessions</div>
+          <nav className="session-list" aria-label="Recent sessions">
             {sessions.map((item) => (
-              <button key={item.id} className={`session-row ${item.id === activeId ? "active" : ""}`} onClick={() => setActiveId(item.id)}>
+              <button key={item.id} className={`session-row ${item.id === activeId ? "active" : ""}`} onClick={() => { setActiveId(item.id); if (isNarrow()) setSidebarOpen(false); }}>
                 <span>{item.title}</span><time>{displayTime(item.updatedAt)}</time>
               </button>
             ))}
           </nav>
         </div>
-        <button className="settings-link" ref={settingsTriggerRef} onClick={() => setSettingsOpen(true)}><Gear size={20} />设置</button>
+        <button className="settings-link" ref={settingsTriggerRef} onClick={() => setSettingsOpen(true)}><Gear size={20} />Settings</button>
       </aside>
 
       <section className="workspace">
         <header className="workspace-header">
           <div>
             <h1>{activeSession?.title || "AgentHub"}</h1>
-            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentId || selectedAgent || "未选择 Agent"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "等待创建 Session"}</strong></div>
+            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentId || selectedAgent || "No agent selected"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "No session yet"}</strong></div>
           </div>
           <div className="header-actions">
-            <button className="icon-button mobile-sidebar-toggle" onClick={() => setSidebarOpen((value) => !value)}><List size={20} /></button>
-            {activeSession && <button className="icon-button" title="停止或中断" onClick={stopSession}><Stop size={19} /></button>}
-            <button className="icon-button" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? <CaretRight size={18} /> : <SidebarSimple size={18} />}</button>
+            <button className="icon-button mobile-sidebar-toggle" aria-label="Toggle session list" onClick={() => setSidebarOpen((value) => !value)}><List size={20} /></button>
+            {activeSession && <button className="icon-button" aria-label="Stop or interrupt session" title="Stop or interrupt" onClick={stopSession}><Stop size={19} /></button>}
+            <button className="icon-button details-toggle" aria-label="Toggle details panel" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? <CaretRight size={18} /> : <SidebarSimple size={18} />}</button>
           </div>
         </header>
 
         <div className="conversation">
-          {error && <div className="error-banner">{error}<button onClick={() => setError("")}><X size={15} /></button></div>}
+          {error && <div className="error-banner">{error}<button aria-label="Dismiss error" onClick={() => setError("")}><X size={15} /></button></div>}
           {messages.length ? messages.map((message) => <Message key={message.key} message={message} agent={activeSession?.agentId || "Agent"} onApproval={resolveApproval} />) : (
-            <div className="empty-state"><span className="empty-icon"><Plus size={24} /></span><h2>开始新的 Session</h2><p>选择本地 Agent，输入工作目录，然后开始对话。</p></div>
+            <div className="empty-state"><span className="empty-icon"><Plus size={24} /></span><h2>Start a new Session</h2><p>Pick a local agent, set a working directory, and start the conversation.</p></div>
           )}
         </div>
 
         <div className="composer">
-          <textarea aria-label="消息" value={draft} disabled={!activeSession || activeSession.state === "stopped"} onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder="继续输入你的问题…" />
+          <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopped"} onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder="Type a message…" />
           <div className="composer-footer">
-            <select className="agent-select" value={selectedAgent} onChange={(event) => setSelectedAgent(event.target.value)} disabled={Boolean(activeSession)}>
+            <select className="agent-select" aria-label="Agent" value={selectedAgent} onChange={(event) => setSelectedAgent(event.target.value)} disabled={Boolean(activeSession)}>
               {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>)}
             </select>
-            <button className="send-button" onClick={sendMessage} disabled={!draft.trim() || !activeSession}><PaperPlaneTilt size={20} weight="fill" /></button>
+            <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession}><PaperPlaneTilt size={20} weight="fill" /></button>
           </div>
         </div>
       </section>
 
       <aside className="details">
-        <div className="details-heading"><strong>详情</strong></div>
-        <div className="detail-row"><div><span className="detail-label">工作目录</span><code>{activeSession?.cwd || "—"}</code></div></div>
+        <div className="details-heading"><strong>Details</strong></div>
+        <div className="detail-row"><div><span className="detail-label">Working directory</span><code>{activeSession?.cwd || "—"}</code></div></div>
         <div className="detail-row"><div><span className="detail-label">Provider</span><code>{activeSession?.provider || "—"}</code></div></div>
         <div className="detail-row">
           <div><span className="detail-label">Session ID</span><code className="session-id">{activeSession?.id || "—"}</code></div>
-          <button className="icon-button" onClick={async () => { await navigator.clipboard?.writeText(activeSession?.id || ""); setCopied(true); setTimeout(() => setCopied(false), 1000); }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button>
+          <button className="icon-button" aria-label="Copy session ID" title="Copy session ID" onClick={async () => { await navigator.clipboard?.writeText(activeSession?.id || ""); setCopied(true); setTimeout(() => setCopied(false), 1000); }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button>
         </div>
-        <div className="detail-row"><div><span className="detail-label">原生 Session ID</span><code>{activeSession?.providerSessionId || "—"}</code></div></div>
+        <div className="detail-row"><div><span className="detail-label">Provider session ID</span><code>{activeSession?.providerSessionId || "—"}</code></div></div>
       </aside>
 
       {settingsOpen && (

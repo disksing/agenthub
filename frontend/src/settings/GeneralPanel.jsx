@@ -7,12 +7,12 @@ export function GeneralPanel({ draft, errors, showErrors, mutate }) {
   const currentUsable = usable.some((agent) => agent.id === current);
 
   return (
-    <section aria-label="常规设置">
-      <h3 className="settings-section-title">常规</h3>
-      <p className="settings-section-desc">会话相关的默认行为。</p>
+    <section aria-label="General settings">
+      <h3 className="settings-section-title">General</h3>
+      <p className="settings-section-desc">Default behavior for sessions.</p>
       <div className="settings-grid settings-grid-single">
         <Field
-          label="默认聊天 Agent"
+          label="Default chat agent"
           htmlFor="settings-default-agent"
           error={showErrors ? fieldError(errors, "general", null, "defaultChatAgentId") : ""}
         >
@@ -25,15 +25,15 @@ export function GeneralPanel({ draft, errors, showErrors, mutate }) {
               else delete next.defaultChatAgentId;
             })}
           >
-            <option value="">（不设置）</option>
-            {current && !currentUsable ? <option value={current}>{current}（不可用）</option> : null}
+            <option value="">(None)</option>
+            {current && !currentUsable ? <option value={current}>{current} (unavailable)</option> : null}
             {usable.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>)}
           </select>
         </Field>
       </div>
       <dl className="settings-meta">
-        <div><dt>配置版本</dt><dd>v{draft.version}</dd></div>
-        <div><dt>规模</dt><dd>{draft.agentProviders.length} 个提供方 · {draft.agents.length} 个 Agent · {draft.agentProfiles.length} 条 Profile</dd></div>
+        <div><dt>Config version</dt><dd>v{draft.version}</dd></div>
+        <div><dt>Size</dt><dd>{draft.agentProviders.length} providers · {draft.agents.length} agents · {draft.agentProfiles.length} profiles</dd></div>
       </dl>
     </section>
   );

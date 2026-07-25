@@ -2,6 +2,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
+// Captures the running AgentHub Web UI and builds a side-by-side comparison
+// against the source design image. Expects the seeded QA environment serving
+// the built app at http://127.0.0.1:4173/ (English fixtures only).
+
 const [sourcePath, outputDir] = process.argv.slice(2);
 
 if (!sourcePath || !outputDir) {
@@ -22,26 +26,31 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => consoleErrors.push(error.message));
 
+// The New Session flow asks for the working directory via window.prompt.
+page.on("dialog", (dialog) => dialog.accept("/tmp/agenthub-qa"));
+
 await page.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
-await page.getByRole("button", { name: "Codex", exact: true }).click();
+
+const agentPicker = page.getByRole("combobox", { name: "Agent" });
+await agentPicker.selectOption({ label: "Codex" });
 
 const implementationPath = path.join(outputDir, "agenthub-implementation.png");
 await page.screenshot({ path: implementationPath, fullPage: false });
 
-await page.getByRole("button", { name: "Kimi", exact: true }).click();
-await page.getByText("Kimi", { exact: true }).first().waitFor();
+await agentPicker.selectOption({ label: "Kimi" });
 
-const composer = page.getByRole("textbox", { name: "消息" });
-await composer.fill("请检查这个修复是否覆盖了 refresh token 过期的情况。");
-await page.getByRole("button", { name: "发送消息" }).click();
-await page.getByText("收到。我会先检查相关文件和当前实现，再给出最小范围的修改与验证结果。").waitFor();
+const composer = page.getByRole("textbox", { name: "Message" });
+const fixtureMessage = "Please check whether this fix covers the refresh token expiry case.";
+await composer.fill(fixtureMessage);
+await page.getByRole("button", { name: "Send message" }).click();
+await page.getByText(fixtureMessage, { exact: true }).waitFor();
 
-await page.getByRole("button", { name: "新建 Session" }).click();
-await page.getByRole("heading", { name: "开始新的 Session" }).waitFor();
-await page.getByRole("button", { name: "修复登录接口" }).click();
+await page.getByRole("button", { name: "New Session" }).click();
+await page.getByRole("heading", { name: "Start a new Session" }).waitFor();
+await page.getByRole("button", { name: "Fix the login endpoint" }).click();
 
-await page.getByRole("button", { name: "收起详情" }).click();
-await page.getByRole("button", { name: "切换详情" }).click();
+await page.getByRole("button", { name: "Toggle details panel" }).click();
+await page.getByRole("button", { name: "Toggle details panel" }).click();
 await page.getByText("Session ID", { exact: true }).waitFor();
 
 const sourceData = (await readFile(sourcePath)).toString("base64");
@@ -84,8 +93,8 @@ const report = {
   implementationPath,
   comparisonPath,
   primaryInteractions: [
-    "Opened the Agent picker and selected Kimi",
-    "Sent a message and received a mock Agent response",
+    "Selected Codex and then Kimi in the Agent picker",
+    "Sent a message and observed it in the conversation",
     "Created a new Session and observed the empty state",
     "Returned to an existing Session",
     "Collapsed and reopened the details panel",

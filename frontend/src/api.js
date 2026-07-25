@@ -1,4 +1,5 @@
-// 统一的 daemon API 访问入口，错误消息取自服务端 error.message。
+// Single entry point for daemon API access; error messages come from the
+// server-provided error.message.
 export async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,

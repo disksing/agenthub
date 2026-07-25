@@ -1,5 +1,5 @@
-// 纯数据 helper：不依赖 React，供设置界面与测试共用。
-// 配置模型与 internal/config/config.go 保持一致。
+// Pure data helpers with no React dependency, shared by the settings UI and tests.
+// The config model mirrors internal/config/config.go.
 
 export const PROVIDER_TYPES = [
   { value: "codex", label: "Codex" },
@@ -9,40 +9,41 @@ export const PROVIDER_TYPES = [
 ];
 
 export const SANDBOX_OPTIONS = [
-  { value: "read-only", label: "只读" },
-  { value: "workspace-write", label: "工作区写入" },
-  { value: "danger-full-access", label: "完全访问" },
+  { value: "read-only", label: "Read only" },
+  { value: "workspace-write", label: "Workspace write" },
+  { value: "danger-full-access", label: "Danger full access" },
 ];
 
 export const APPROVAL_OPTIONS = [
-  { value: "untrusted", label: "不可信时询问" },
-  { value: "on-failure", label: "失败时询问" },
-  { value: "on-request", label: "每次询问" },
-  { value: "never", label: "从不询问" },
+  { value: "untrusted", label: "Ask when untrusted" },
+  { value: "on-failure", label: "Ask on failure" },
+  { value: "on-request", label: "Ask on request" },
+  { value: "never", label: "Never ask" },
 ];
 
 export const MODE_OPTIONS = [
-  { value: "", label: "默认" },
-  { value: "build", label: "构建" },
-  { value: "plan", label: "计划" },
+  { value: "", label: "Default" },
+  { value: "build", label: "Build" },
+  { value: "plan", label: "Plan" },
 ];
 
-const MODEL_FIELD = { key: "model", kind: "text", label: "模型", placeholder: "留空使用 Provider 默认模型" };
+const MODEL_FIELD = { key: "model", kind: "text", label: "Model", placeholder: "Leave empty to use the provider default model" };
 
-// providerOptionSchema 返回某 provider 类型支持的 Agent options 表单描述。
+// providerOptionSchema returns the form description of the Agent options a
+// provider type supports.
 export function providerOptionSchema(type) {
   switch (type) {
     case "codex":
       return [
         MODEL_FIELD,
-        { key: "sandbox", kind: "enum", label: "沙箱", options: SANDBOX_OPTIONS, fallback: "workspace-write" },
-        { key: "approval", kind: "enum", label: "审批策略", options: APPROVAL_OPTIONS, fallback: "on-request" },
+        { key: "sandbox", kind: "enum", label: "Sandbox", options: SANDBOX_OPTIONS, fallback: "workspace-write" },
+        { key: "approval", kind: "enum", label: "Approval policy", options: APPROVAL_OPTIONS, fallback: "on-request" },
       ];
     case "kimi":
     case "opencode":
       return [
         MODEL_FIELD,
-        { key: "mode", kind: "enum", label: "模式", options: MODE_OPTIONS, fallback: "" },
+        { key: "mode", kind: "enum", label: "Mode", options: MODE_OPTIONS, fallback: "" },
       ];
     case "pi":
       return [MODEL_FIELD];
@@ -60,8 +61,9 @@ function cleanOptions(options) {
   return result;
 }
 
-// normalizeConfig 把任意来源的配置深拷贝并规范化为固定结构：
-// 数组缺省补空、字符串转字符串、剔除空白 options 键与空的可选字段。
+// normalizeConfig deep-copies config from any source and normalizes it into a
+// fixed shape: missing arrays become empty, values become strings, blank
+// option keys and empty optional fields are dropped.
 export function normalizeConfig(config = {}) {
   const providers = (Array.isArray(config.agentProviders) ? config.agentProviders : []).map((provider) => {
     const result = {
@@ -104,24 +106,28 @@ export function normalizeConfig(config = {}) {
   return result;
 }
 
-// createDraft 从服务端配置生成编辑用 draft（深拷贝 + 规范化）。
+// createDraft builds an editing draft (deep copy + normalization) from the
+// server-side config.
 export function createDraft(config) {
   return normalizeConfig(config);
 }
 
-// isDirty 比较 draft 与打开时快照（双方都规范化后深比较，避免等价差异误报）。
+// isDirty compares a draft against the snapshot taken when it was opened. Both
+// sides are normalized before the deep comparison so equivalent differences do
+// not report false positives.
 export function isDirty(draft, snapshot) {
   return JSON.stringify(normalizeConfig(draft)) !== JSON.stringify(normalizeConfig(snapshot));
 }
 
-// buildPayload 由 draft 生成 PUT /v1/config 用的 config 对象，
-// 保留 version 与所有受支持字段，剔除空 options 键。
+// buildPayload produces the config object for PUT /v1/config from a draft,
+// keeping the version and all supported fields and dropping empty option keys.
 export function buildPayload(draft) {
   return normalizeConfig(draft);
 }
 
-// normalizeAgentOptions 在切换 provider 时清理不适用字段：
-// 只保留新 schema 的键；枚举值非法时回退默认；model 有值保留。
+// normalizeAgentOptions drops fields that do not apply after a provider
+// switch: only keys from the new schema are kept, invalid enum values fall
+// back to the default, and a non-empty model is preserved.
 export function normalizeAgentOptions(providerType, oldOptions = {}) {
   const result = {};
   for (const field of providerOptionSchema(providerType)) {
@@ -146,14 +152,16 @@ function agentProviderEnabled(providers, agent) {
   return Boolean(provider && provider.enabled);
 }
 
-// agentReferences 返回某 agent 被默认聊天 Agent 与 Profile 引用的情况。
+// agentReferences reports how an agent is referenced by the default chat agent
+// and by profiles.
 export function agentReferences(draft, agentId) {
   const profiles = (draft.agentProfiles || []).filter((profile) => profile.agentId === agentId).map((profile) => profile.key);
   return { isDefault: (draft.defaultChatAgentId || "") === agentId, profiles };
 }
 
-// providerReferences 返回某 provider 被引用的情况：
-// 直接使用它的 agent，以及经由这些 agent 产生的默认 Agent / Profile 间接引用。
+// providerReferences reports how a provider is referenced: the agents that use
+// it directly, plus the default-agent and profile references that go through
+// those agents.
 export function providerReferences(draft, providerId) {
   const agents = (draft.agents || []).filter((agent) => agent.providerId === providerId).map((agent) => agent.id);
   const profiles = [];
@@ -166,7 +174,8 @@ export function providerReferences(draft, providerId) {
   return { agents, isDefault, profiles: [...new Set(profiles)] };
 }
 
-// renameAgentId 原子地重命名 agent id 并同步 defaultChatAgentId 与 profiles 引用。
+// renameAgentId atomically renames an agent id and syncs the
+// defaultChatAgentId and profile references.
 export function renameAgentId(draft, oldId, newId) {
   const next = normalizeConfig(draft);
   for (const agent of next.agents) {
@@ -183,8 +192,9 @@ export function normalizeProfileKey(key) {
   return String(key ?? "").trim().toLowerCase();
 }
 
-// validateDraft 客户端完整校验，返回结构化错误列表：
-// { section, index, field, message }，section ∈ providers/agents/profiles/general。
+// validateDraft performs full client-side validation and returns structured
+// errors: { section, index, field, message },
+// section ∈ providers/agents/profiles/general.
 export function validateDraft(draft) {
   const errors = [];
   const push = (section, index, field, message) => errors.push({ section, index, field, message });
@@ -192,12 +202,12 @@ export function validateDraft(draft) {
   const providers = draft.agentProviders || [];
   const providerIds = new Set();
   providers.forEach((provider, index) => {
-    if (!provider.id.trim()) push("providers", index, "id", "提供方 ID 必填");
-    else if (providerIds.has(provider.id)) push("providers", index, "id", `提供方 ID “${provider.id}” 重复`);
+    if (!provider.id.trim()) push("providers", index, "id", "Provider ID is required");
+    else if (providerIds.has(provider.id)) push("providers", index, "id", `Provider ID "${provider.id}" is already used`);
     providerIds.add(provider.id);
-    if (!provider.type.trim()) push("providers", index, "type", "类型必选");
+    if (!provider.type.trim()) push("providers", index, "type", "Provider type is required");
     else if (!PROVIDER_TYPES.some((type) => type.value === provider.type)) {
-      push("providers", index, "type", `不支持的类型 “${provider.type}”`);
+      push("providers", index, "type", `Unsupported provider type "${provider.type}"`);
     }
   });
 
@@ -205,30 +215,31 @@ export function validateDraft(draft) {
   const agents = draft.agents || [];
   const agentIds = new Set();
   agents.forEach((agent, index) => {
-    if (!agent.id.trim()) push("agents", index, "id", "Agent ID 必填");
-    else if (agentIds.has(agent.id)) push("agents", index, "id", `Agent ID “${agent.id}” 重复`);
+    if (!agent.id.trim()) push("agents", index, "id", "Agent ID is required");
+    else if (agentIds.has(agent.id)) push("agents", index, "id", `Agent ID "${agent.id}" is already used`);
     agentIds.add(agent.id);
-    if (!agent.providerId.trim()) push("agents", index, "providerId", "必须选择提供方");
+    if (!agent.providerId.trim()) push("agents", index, "providerId", "Select a provider");
     else if (!providerById.has(agent.providerId)) {
-      push("agents", index, "providerId", `引用的提供方 “${agent.providerId}” 不存在`);
+      push("agents", index, "providerId", `Referenced provider "${agent.providerId}" does not exist`);
     }
   });
 
-  // 可用 agent = provider 存在且已启用；禁用/删除 provider 导致的间接引用破坏在此暴露。
+  // An agent is usable when its provider exists and is enabled; indirect
+  // references broken by disabling or deleting a provider surface here.
   const availableAgents = new Set(
     agents.filter((agent) => agentProviderEnabled(providerById, agent)).map((agent) => agent.id),
   );
   const explainUnavailable = (agentId) => {
     const agent = agents.find((item) => item.id === agentId);
-    if (!agent) return `引用的 Agent “${agentId}” 不存在`;
+    if (!agent) return `agent "${agentId}" does not exist`;
     const provider = providerById.get(agent.providerId);
-    if (!provider) return `Agent “${agentId}” 的提供方 “${agent.providerId}” 已被删除`;
-    return `Agent “${agentId}” 的提供方 “${provider.name || provider.id}” 已被禁用`;
+    if (!provider) return `the provider "${agent.providerId}" of agent "${agentId}" has been deleted`;
+    return `the provider "${provider.name || provider.id}" of agent "${agentId}" is disabled`;
   };
 
   if ((draft.defaultChatAgentId || "").trim()) {
     if (!availableAgents.has(draft.defaultChatAgentId)) {
-      push("general", null, "defaultChatAgentId", `默认聊天 Agent 不可用：${explainUnavailable(draft.defaultChatAgentId)}`);
+      push("general", null, "defaultChatAgentId", `Default chat agent is unavailable: ${explainUnavailable(draft.defaultChatAgentId)}`);
     }
   }
 
@@ -236,19 +247,19 @@ export function validateDraft(draft) {
   const keys = new Set();
   profiles.forEach((profile, index) => {
     const key = normalizeProfileKey(profile.key);
-    if (!key) push("profiles", index, "key", "Profile key 必填");
-    else if (keys.has(key)) push("profiles", index, "key", `Profile key “${key}” 重复（忽略大小写与首尾空格）`);
+    if (!key) push("profiles", index, "key", "Profile key is required");
+    else if (keys.has(key)) push("profiles", index, "key", `Profile key "${key}" is already used (case and surrounding whitespace are ignored)`);
     keys.add(key);
-    if (!String(profile.agentId ?? "").trim()) push("profiles", index, "agentId", "必须选择 Agent");
+    if (!String(profile.agentId ?? "").trim()) push("profiles", index, "agentId", "Select an agent");
     else if (!availableAgents.has(profile.agentId)) {
-      push("profiles", index, "agentId", `Profile 路由不可用：${explainUnavailable(profile.agentId)}`);
+      push("profiles", index, "agentId", `Profile route is unavailable: ${explainUnavailable(profile.agentId)}`);
     }
   });
 
   return errors;
 }
 
-// slugify 从名称生成 id 基础形式。
+// slugify derives the base form of an id from a name.
 export function slugify(name) {
   const slug = String(name ?? "")
     .trim()
@@ -258,7 +269,7 @@ export function slugify(name) {
   return slug || "agent";
 }
 
-// uniqueId 在 existing 中冲突时追加 -2 / -3 …
+// uniqueId appends -2 / -3 … when the base id is already taken.
 export function uniqueId(base, existing) {
   const taken = new Set(existing);
   if (!taken.has(base)) return base;
@@ -268,7 +279,7 @@ export function uniqueId(base, existing) {
   }
 }
 
-// summarizeOptions 生成 agent 摘要 pill 文本用的键值对。
+// summarizeOptions builds the key=value pairs shown in an agent summary pill.
 export function summarizeOptions(options = {}) {
   return Object.entries(options)
     .filter(([, value]) => String(value ?? "").trim())

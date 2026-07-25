@@ -7,7 +7,7 @@ final result: passed
 - Source visual truth: `/Users/disksing/projects/nonwork/project6-project-incubator/task3/artifacts/agenthub-direction-2-light-session-workspace.png`
 - Final implementation screenshot: `/Users/disksing/projects/nonwork/project6-project-incubator/task3/artifacts/qa-pass-3/agenthub-implementation.png`
 - Side-by-side comparison evidence: `/Users/disksing/projects/nonwork/project6-project-incubator/task3/artifacts/qa-pass-3/agenthub-comparison.png`
-- State: active “修复登录接口” Session with the Agent picker open and Codex selected.
+- State: active “Fix the login endpoint” Session with the Agent picker set to Codex.
 - Browser viewport: 1440 × 1024 CSS px at deviceScaleFactor 1.
 - Source pixels: 1488 × 1057.
 - Implementation pixels: 1440 × 1024.
@@ -24,11 +24,11 @@ final result: passed
 
 ## Required Fidelity Surfaces
 
-- Fonts and typography: system sans with Chinese platform fallbacks matches the source’s neutral product typography. Heading weight, 14–16 px body scale, code monospace, and truncation behavior were checked at full resolution.
+- Fonts and typography: system sans with CJK platform fallbacks matches the source’s neutral product typography. Heading weight, 14–16 px body scale, code monospace, and truncation behavior were checked at full resolution.
 - Spacing and layout rhythm: three-column proportions, header alignment, message indents, divider rhythm, composer placement, radii, and near-flat elevation match the source. The layout remains usable at narrower desktop and mobile widths.
 - Colors and visual tokens: warm white surfaces, cool gray separators, charcoal text, and restrained teal status/action color match the selected direction. Contrast remains readable.
 - Image quality and asset fidelity: the source contains no raster imagery. All visible interface icons use Phosphor Icons; no custom SVG, CSS drawings, emoji, or placeholder art is used.
-- Copy and content: product name, Session labels, Agent names, active status, realistic Chinese messages, working directory, and Session ID reflect the selected design.
+- Copy and content: product name, Session labels, Agent names, active status, realistic English messages, working directory, and Session ID reflect the selected design.
 
 ## Interaction And Runtime Checks
 

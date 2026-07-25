@@ -8,13 +8,14 @@ import { ProfilesPanel } from "./ProfilesPanel";
 import { GeneralPanel } from "./GeneralPanel";
 
 const SECTIONS = [
-  { id: "providers", label: "提供方" },
-  { id: "agents", label: "Agent" },
-  { id: "profiles", label: "Profile 路由" },
-  { id: "general", label: "常规" },
+  { id: "providers", label: "Providers" },
+  { id: "agents", label: "Agents" },
+  { id: "profiles", label: "Profiles" },
+  { id: "general", label: "General" },
 ];
 
-// draft 只包含 JSON 安全数据（全部来自 normalizeConfig），用 JSON 深拷贝即可。
+// The draft only contains JSON-safe data (all of it produced by
+// normalizeConfig), so a JSON round trip is a safe deep copy.
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -51,7 +52,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
       setProbes(agentsBody.probes || []);
       setPhase("ready");
     } catch (value) {
-      setLoadError(value.message || "加载配置失败");
+      setLoadError(value.message || "Failed to load the configuration");
       setPhase("error");
     }
   }, []);
@@ -60,7 +61,8 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     load();
   }, [load]);
 
-  // 初始焦点进入对话框；卸载时焦点回到触发按钮。
+  // Move focus into the dialog on open; restore it to the trigger button on
+  // unmount.
   useEffect(() => {
     dialogRef.current?.focus();
     return () => {
@@ -70,7 +72,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
   }, [triggerRef]);
 
   const requestClose = useCallback(() => {
-    if (dirty && !window.confirm("设置尚未保存，确定要关闭并丢弃修改吗？")) return;
+    if (dirty && !window.confirm("You have unsaved changes. Close settings and discard them?")) return;
     onClose();
   }, [dirty, onClose]);
 
@@ -109,7 +111,8 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     setSaveError("");
     try {
       if (!force) {
-        // 并发保护：保存前确认服务端配置未被其他客户端修改。
+        // Concurrency guard: make sure the server-side config has not been
+        // changed by another client before saving.
         const current = await api("/v1/config");
         if (JSON.stringify(normalizeConfig(current.config)) !== JSON.stringify(normalizeConfig(snapshot))) {
           setConflict(true);
@@ -128,7 +131,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
       savedTimer.current = setTimeout(() => setSavedOk(false), 3000);
       onSaved?.();
     } catch (value) {
-      setSaveError(value.message || "保存失败");
+      setSaveError(value.message || "Failed to save");
     } finally {
       setSaving(false);
     }
@@ -153,25 +156,25 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
       >
         <header className="settings-dialog-header">
           <div>
-            <h2 id="settings-dialog-title">设置</h2>
-            <p>配置提供方、Agent、Profile 路由与默认行为，保存后统一生效。</p>
+            <h2 id="settings-dialog-title">Settings</h2>
+            <p>Configure providers, agents, profile routing, and default behavior. Changes take effect when saved.</p>
           </div>
-          <button className="icon-button" aria-label="关闭设置" onClick={requestClose}>
+          <button className="icon-button" aria-label="Close settings" onClick={requestClose}>
             <X size={19} />
           </button>
         </header>
 
-        {phase === "loading" ? <div className="settings-status">正在加载配置…</div> : null}
+        {phase === "loading" ? <div className="settings-status">Loading configuration…</div> : null}
         {phase === "error" ? (
           <div className="settings-status">
             <p className="settings-load-error" role="alert">{loadError}</p>
-            <button className="settings-button" onClick={load}>重试</button>
+            <button className="settings-button" onClick={load}>Retry</button>
           </div>
         ) : null}
 
         {phase === "ready" ? (
           <div className="settings-body">
-            <nav className="settings-nav" aria-label="设置分类">
+            <nav className="settings-nav" aria-label="Settings sections">
               {SECTIONS.map((item) => {
                 const count = sectionErrorCount(item.id);
                 return (
@@ -205,27 +208,27 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
               <footer className="settings-savebar">
                 {conflict ? (
                   <div className="settings-conflict" role="alert">
-                    <span><Warning size={15} />配置已被其他客户端修改，直接保存会覆盖对方的改动。</span>
-                    <button onClick={load} disabled={saving}>重新加载</button>
-                    <button onClick={() => save(true)} disabled={saving}>强制覆盖</button>
+                    <span><Warning size={15} />The configuration was changed by another client. Saving now will overwrite those changes.</span>
+                    <button onClick={load} disabled={saving}>Reload</button>
+                    <button onClick={() => save(true)} disabled={saving}>Overwrite</button>
                   </div>
                 ) : null}
                 {saveError ? <p className="settings-save-error" role="alert">{saveError}</p> : null}
                 <div className="settings-savebar-row">
                   <div className="settings-savebar-status">
-                    {dirty ? <span className="settings-dirty">有未保存的修改</span> : null}
+                    {dirty ? <span className="settings-dirty">Unsaved changes</span> : null}
                     {savedOk && !dirty ? (
-                      <span className="settings-save-ok" role="status"><CheckCircle size={15} />已保存</span>
+                      <span className="settings-save-ok" role="status"><CheckCircle size={15} />Saved</span>
                     ) : null}
                   </div>
                   <div className="settings-savebar-actions">
-                    <button className="settings-button" onClick={requestClose} disabled={saving}>取消</button>
+                    <button className="settings-button" onClick={requestClose} disabled={saving}>Cancel</button>
                     <button
                       className="settings-button settings-button-primary"
                       onClick={() => save(false)}
                       disabled={!dirty || saving}
                     >
-                      {saving ? "保存中…" : "保存全部"}
+                      {saving ? "Saving…" : "Save all"}
                     </button>
                   </div>
                 </div>

@@ -117,7 +117,7 @@ $HOME/.agenthub/config.json
 }
 ```
 
-推荐使用 Web UI 的**设置**界面编辑配置：它为 provider、agent、agent profile 和默认聊天 Agent 提供结构化、带校验的表单，并展示 provider 命令可用性探测结果。所有修改都通过 daemon API（`PUT /v1/config`）提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
+推荐使用 Web UI 的 **Settings** 界面编辑配置：它为 provider、agent、agent profile 和默认聊天 Agent 提供结构化、带校验的表单，并展示 provider 命令可用性探测结果。所有修改都通过 daemon API（`PUT /v1/config`）提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
 
 命令发现顺序为：provider 的 `command`、`AGENTHUB_*_CLI`、`PATH`。支持：
 

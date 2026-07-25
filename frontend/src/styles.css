@@ -756,6 +756,11 @@ select {
 }
 
 @media (max-width: 720px) {
+  /* The full-screen dialog must sit flush with the viewport edges. */
+  .modal-backdrop {
+    padding: 0;
+  }
+
   .settings-dialog {
     width: 100vw;
     height: 100vh;
@@ -1278,6 +1283,13 @@ select {
 
   .mobile-sidebar-toggle {
     display: inline-flex;
+  }
+
+  /* The details panel has no room on phone-width screens; hide it and its
+     toggle so neither can trap pointer events over the workspace. */
+  .details,
+  .details-toggle {
+    display: none;
   }
 
   .workspace-header {

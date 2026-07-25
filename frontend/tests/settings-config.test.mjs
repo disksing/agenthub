@@ -26,13 +26,13 @@ function sampleConfig() {
       { id: "backup", name: "", providerId: "kimi" },
     ],
     agentProfiles: [
-      { key: "fast", agentId: "main", description: " 快速 " },
+      { key: "fast", agentId: "main", description: " Quick lane " },
       { key: "slow", agentId: "backup" },
     ],
   };
 }
 
-test("normalizeConfig 规范结构并剔除空白字段", () => {
+test("normalizeConfig normalizes the structure and drops blank fields", () => {
   const normalized = normalizeConfig(sampleConfig());
   assert.deepEqual(normalized, {
     version: 1,
@@ -46,13 +46,13 @@ test("normalizeConfig 规范结构并剔除空白字段", () => {
       { id: "backup", name: "", providerId: "kimi" },
     ],
     agentProfiles: [
-      { key: "fast", agentId: "main", description: "快速" },
+      { key: "fast", agentId: "main", description: "Quick lane" },
       { key: "slow", agentId: "backup" },
     ],
   });
 });
 
-test("normalizeConfig 容忍空配置与缺省数组", () => {
+test("normalizeConfig tolerates empty config and missing arrays", () => {
   assert.deepEqual(normalizeConfig(undefined), {
     version: 1,
     agentProviders: [],
@@ -62,19 +62,19 @@ test("normalizeConfig 容忍空配置与缺省数组", () => {
   assert.deepEqual(normalizeConfig({ agentProviders: "x", agents: 1, agentProfiles: null }), normalizeConfig({}));
 });
 
-test("createDraft/buildPayload 与源配置无损往返", () => {
+test("createDraft/buildPayload round-trip the source config losslessly", () => {
   const source = normalizeConfig(sampleConfig());
   const draft = createDraft(source);
   assert.deepEqual(draft, source);
-  // draft 是深拷贝，修改不影响源。
-  draft.agents[0].name = "改";
+  // The draft is a deep copy; mutating it does not affect the source.
+  draft.agents[0].name = "Changed";
   assert.equal(source.agents[0].name, "Main");
   const payload = buildPayload(createDraft(source));
   assert.deepEqual(payload, source);
   assert.deepEqual(normalizeConfig(payload), source);
 });
 
-test("isDirty 对等价差异不敏感、对真实修改敏感", () => {
+test("isDirty ignores equivalent differences and detects real changes", () => {
   const snapshot = createDraft(sampleConfig());
   const same = createDraft({
     ...sampleConfig(),
@@ -90,29 +90,30 @@ test("isDirty 对等价差异不敏感、对真实修改敏感", () => {
   assert.equal(isDirty(removed, snapshot), true);
 });
 
-test("normalizeAgentOptions 切换 provider 时清理不适用字段", () => {
-  // codex → kimi：sandbox/approval 被丢弃，model 保留，mode 回退默认（空则省略）。
+test("normalizeAgentOptions drops inapplicable fields on provider switch", () => {
+  // codex → kimi: sandbox/approval are dropped, model is kept, and mode falls
+  // back to the default (omitted when empty).
   assert.deepEqual(
     normalizeAgentOptions("kimi", { model: "gpt-5", sandbox: "read-only", approval: "never" }),
     { model: "gpt-5" },
   );
-  // kimi → codex：mode 被丢弃，枚举缺省回退 fallback。
+  // kimi → codex: mode is dropped and missing enums fall back to defaults.
   assert.deepEqual(
     normalizeAgentOptions("codex", { model: "k2", mode: "plan" }),
     { model: "k2", sandbox: "workspace-write", approval: "on-request" },
   );
-  // 非法枚举值回退默认；合法值保留。
+  // Invalid enum values fall back to the default; valid values are kept.
   assert.deepEqual(
     normalizeAgentOptions("codex", { sandbox: "bogus", approval: "never" }),
     { sandbox: "workspace-write", approval: "never" },
   );
-  // 空旧 options 也得到完整默认值。
+  // Empty old options still produce the full defaults.
   assert.deepEqual(normalizeAgentOptions("codex", {}), { sandbox: "workspace-write", approval: "on-request" });
-  // kimi 的 mode 默认值为空串则不写入。
+  // The kimi mode default is an empty string and therefore not written.
   assert.deepEqual(normalizeAgentOptions("kimi", {}), {});
 });
 
-test("agentReferences/providerReferences 反映直接与间接引用", () => {
+test("agentReferences/providerReferences reflect direct and indirect references", () => {
   const draft = createDraft(sampleConfig());
   assert.deepEqual(agentReferences(draft, "main"), { isDefault: true, profiles: ["fast"] });
   assert.deepEqual(agentReferences(draft, "backup"), { isDefault: false, profiles: ["slow"] });
@@ -121,18 +122,18 @@ test("agentReferences/providerReferences 反映直接与间接引用", () => {
   assert.deepEqual(providerReferences(draft, "missing"), { agents: [], isDefault: false, profiles: [] });
 });
 
-test("renameAgentId 同步 defaultChatAgentId 与 Profile 引用", () => {
+test("renameAgentId syncs defaultChatAgentId and profile references", () => {
   const draft = createDraft(sampleConfig());
   const renamed = renameAgentId(draft, "main", "primary");
   assert.equal(renamed.agents[0].id, "primary");
   assert.equal(renamed.defaultChatAgentId, "primary");
   assert.deepEqual(renamed.agentProfiles.map((item) => item.agentId), ["primary", "backup"]);
-  // 原 draft 不被修改。
+  // The original draft is not mutated.
   assert.equal(draft.agents[0].id, "main");
   assert.equal(draft.defaultChatAgentId, "main");
 });
 
-test("validateDraft 对合法配置返回空", () => {
+test("validateDraft returns no errors for a valid config", () => {
   const valid = createDraft({
     version: 1,
     defaultChatAgentId: "main",
@@ -144,7 +145,7 @@ test("validateDraft 对合法配置返回空", () => {
   assert.deepEqual(validateDraft(createDraft({})), []);
 });
 
-test("validateDraft 报告重复 id/key 与空必填", () => {
+test("validateDraft reports duplicate ids/keys and missing required fields", () => {
   const draft = createDraft({
     agentProviders: [
       { id: "p", name: "", type: "codex", enabled: true },
@@ -165,17 +166,17 @@ test("validateDraft 报告重复 id/key 与空必填", () => {
   const has = (section, index, field, part) => errors.some((item) => (
     item.section === section && item.index === index && item.field === field && item.message.includes(part)
   ));
-  assert.ok(has("providers", 1, "id", "重复"));
-  assert.ok(has("providers", 1, "type", "必选"));
-  assert.ok(has("agents", 1, "id", "重复"));
-  assert.ok(has("agents", 1, "providerId", "必须选择提供方"));
-  assert.ok(has("agents", 2, "id", "必填"));
-  assert.ok(has("profiles", 1, "key", "重复"));
-  assert.ok(has("profiles", 2, "key", "必填"));
-  assert.ok(has("profiles", 2, "agentId", "必须选择 Agent"));
+  assert.ok(has("providers", 1, "id", "already used"));
+  assert.ok(has("providers", 1, "type", "required"));
+  assert.ok(has("agents", 1, "id", "already used"));
+  assert.ok(has("agents", 1, "providerId", "Select a provider"));
+  assert.ok(has("agents", 2, "id", "required"));
+  assert.ok(has("profiles", 1, "key", "already used"));
+  assert.ok(has("profiles", 2, "key", "required"));
+  assert.ok(has("profiles", 2, "agentId", "Select an agent"));
 });
 
-test("validateDraft 报告悬空引用与禁用提供方导致的不可用引用", () => {
+test("validateDraft reports dangling references and references broken by a disabled provider", () => {
   const dangling = createDraft({
     agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
     agents: [{ id: "a", name: "", providerId: "ghost" }],
@@ -183,9 +184,9 @@ test("validateDraft 报告悬空引用与禁用提供方导致的不可用引用
     agentProfiles: [{ key: "x", agentId: "nobody" }],
   });
   const errors = validateDraft(dangling);
-  assert.ok(errors.some((item) => item.section === "agents" && item.field === "providerId" && item.message.includes("不存在")));
-  assert.ok(errors.some((item) => item.section === "general" && item.message.includes("不存在")));
-  assert.ok(errors.some((item) => item.section === "profiles" && item.field === "agentId" && item.message.includes("不存在")));
+  assert.ok(errors.some((item) => item.section === "agents" && item.field === "providerId" && item.message.includes("does not exist")));
+  assert.ok(errors.some((item) => item.section === "general" && item.message.includes("does not exist")));
+  assert.ok(errors.some((item) => item.section === "profiles" && item.field === "agentId" && item.message.includes("does not exist")));
 
   const disabled = createDraft({
     agentProviders: [{ id: "p", name: "P", type: "codex", enabled: false }],
@@ -194,16 +195,16 @@ test("validateDraft 报告悬空引用与禁用提供方导致的不可用引用
     agentProfiles: [{ key: "x", agentId: "a" }],
   });
   const disabledErrors = validateDraft(disabled);
-  assert.ok(disabledErrors.some((item) => item.section === "general" && item.message.includes("已被禁用")));
-  assert.ok(disabledErrors.some((item) => item.section === "profiles" && item.message.includes("已被禁用")));
+  assert.ok(disabledErrors.some((item) => item.section === "general" && item.message.includes("disabled")));
+  assert.ok(disabledErrors.some((item) => item.section === "profiles" && item.message.includes("disabled")));
 
   const unsupported = createDraft({
     agentProviders: [{ id: "p", name: "", type: "unknown", enabled: true }],
   });
-  assert.ok(validateDraft(unsupported).some((item) => item.section === "providers" && item.field === "type" && item.message.includes("不支持")));
+  assert.ok(validateDraft(unsupported).some((item) => item.section === "providers" && item.field === "type" && item.message.includes("Unsupported")));
 });
 
-test("uniqueId 冲突时追加序号", () => {
+test("uniqueId appends a sequence number on conflict", () => {
   assert.equal(uniqueId("agent", []), "agent");
   assert.equal(uniqueId("agent", ["other"]), "agent");
   assert.equal(uniqueId("agent", ["agent"]), "agent-2");

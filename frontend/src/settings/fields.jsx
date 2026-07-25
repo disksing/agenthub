@@ -1,4 +1,4 @@
-// 设置表单共享的小组件与错误查询 helper。
+// Small shared form components and an error lookup helper for the settings UI.
 
 export function fieldError(errors, section, index, field) {
   return errors.find((item) => item.section === section && item.index === index && item.field === field)?.message || "";

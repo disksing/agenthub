@@ -4,25 +4,25 @@ import { PROVIDER_TYPES, providerReferences, uniqueId } from "./configModel";
 import { Field, fieldError } from "./fields";
 
 function typeLabel(type) {
-  return PROVIDER_TYPES.find((item) => item.value === type)?.label || type || "未设置";
+  return PROVIDER_TYPES.find((item) => item.value === type)?.label || type || "Not set";
 }
 
 function probePill(provider, probe) {
-  if (!provider.enabled) return <span className="settings-pill pill-muted">未启用 · 不探测</span>;
-  if (!probe) return <span className="settings-pill pill-muted">未探测</span>;
+  if (!provider.enabled) return <span className="settings-pill pill-muted">Disabled · not probed</span>;
+  if (!probe) return <span className="settings-pill pill-muted">Not probed</span>;
   if (probe.available) {
-    return <span className="settings-pill pill-ok" title={probe.command || ""}>命令可用</span>;
+    return <span className="settings-pill pill-ok" title={probe.command || ""}>Command available</span>;
   }
-  return <span className="settings-pill pill-warn" title={probe.error || "命令不可发现"}>命令不可用</span>;
+  return <span className="settings-pill pill-warn" title={probe.error || "Command not found"}>Command unavailable</span>;
 }
 
 function describeProviderRefs(draft, providerId) {
   const refs = providerReferences(draft, providerId);
   const parts = [];
-  if (refs.agents.length) parts.push(`使用它的 Agent：${refs.agents.join("、")}`);
-  if (refs.isDefault) parts.push("其中包含默认聊天 Agent");
-  if (refs.profiles.length) parts.push(`Profile 间接引用：${refs.profiles.join("、")}`);
-  return parts.join("；");
+  if (refs.agents.length) parts.push(`agents using it: ${refs.agents.join(", ")}`);
+  if (refs.isDefault) parts.push("one of them is the default chat agent");
+  if (refs.profiles.length) parts.push(`profiles referencing it indirectly: ${refs.profiles.join(", ")}`);
+  return parts.join("; ");
 }
 
 export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
@@ -41,7 +41,7 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
     if (!enabled) {
       const refs = providerReferences(draft, provider.id);
       if (refs.isDefault || refs.profiles.length) {
-        setNotice(`无法禁用提供方“${provider.name || provider.id}”：${describeProviderRefs(draft, provider.id)}。请先在「Agent」「Profile 路由」或「常规」中调整引用。`);
+        setNotice(`Cannot disable provider "${provider.name || provider.id}": ${describeProviderRefs(draft, provider.id)}. Update the references in Agents, Profiles, or General first.`);
         return;
       }
     }
@@ -52,7 +52,7 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
     const provider = draft.agentProviders[index];
     const refs = providerReferences(draft, provider.id);
     if (refs.agents.length) {
-      setNotice(`无法删除提供方“${provider.name || provider.id}”：${describeProviderRefs(draft, provider.id)}。请先删除或调整相关 Agent。`);
+      setNotice(`Cannot delete provider "${provider.name || provider.id}": ${describeProviderRefs(draft, provider.id)}. Delete or reassign the affected agents first.`);
       return;
     }
     setNotice("");
@@ -70,10 +70,10 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
   };
 
   return (
-    <section aria-label="提供方设置">
-      <h3 className="settings-section-title">提供方</h3>
+    <section aria-label="Provider settings">
+      <h3 className="settings-section-title">Providers</h3>
       <p className="settings-section-desc">
-        提供方是本地 Agent CLI 的接入配置。「启用」表示允许 Agent 使用它；命令状态来自后台探测，留空命令路径时按类型自动发现。
+        Providers connect local agent CLIs to AgentHub. “Enabled” allows agents to use a provider. Command status comes from a background probe; when the command path is empty it is auto-discovered from the provider type.
       </p>
       {notice ? <div className="settings-notice" role="alert">{notice}</div> : null}
       {draft.agentProviders.map((provider, index) => {
@@ -83,21 +83,21 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
             <div className="settings-card-head">
               <span className="settings-card-icon"><Cube size={20} /></span>
               <div className="settings-card-title">
-                <strong>{provider.name || provider.id || "未命名提供方"}</strong>
-                <span className="settings-card-meta">{typeLabel(provider.type)} · {provider.enabled ? "已启用" : "已禁用"}</span>
+                <strong>{provider.name || provider.id || "Unnamed provider"}</strong>
+                <span className="settings-card-meta">{typeLabel(provider.type)} · {provider.enabled ? "Enabled" : "Disabled"}</span>
               </div>
               {probePill(provider, probeByProvider.get(provider.id))}
               <button
                 className="icon-button"
-                aria-label={`删除提供方 ${provider.name || provider.id}`}
-                title="删除提供方"
+                aria-label={`Delete provider ${provider.name || provider.id}`}
+                title="Delete provider"
                 onClick={() => removeProvider(index)}
               >
                 <Trash size={17} />
               </button>
             </div>
             <div className="settings-grid">
-              <Field label="名称" htmlFor={`${base}-name`}>
+              <Field label="Name" htmlFor={`${base}-name`}>
                 <input
                   id={`${base}-name`}
                   className="settings-input"
@@ -114,7 +114,7 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
                   onChange={(event) => updateProvider(index, { id: event.target.value.trim() })}
                 />
               </Field>
-              <Field label="类型" htmlFor={`${base}-type`} error={showErrors ? fieldError(errors, "providers", index, "type") : ""}>
+              <Field label="Type" htmlFor={`${base}-type`} error={showErrors ? fieldError(errors, "providers", index, "type") : ""}>
                 <select
                   id={`${base}-type`}
                   className="settings-select"
@@ -122,17 +122,17 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
                   onChange={(event) => updateProvider(index, { type: event.target.value })}
                 >
                   {!PROVIDER_TYPES.some((item) => item.value === provider.type) && provider.type ? (
-                    <option value={provider.type}>{provider.type}（不支持）</option>
+                    <option value={provider.type}>{provider.type} (unsupported)</option>
                   ) : null}
                   {PROVIDER_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                 </select>
               </Field>
-              <Field label="命令路径" htmlFor={`${base}-command`}>
+              <Field label="Command path" htmlFor={`${base}-command`}>
                 <input
                   id={`${base}-command`}
                   className="settings-input"
                   value={provider.command || ""}
-                  placeholder="留空则按类型自动发现"
+                  placeholder="Leave empty to auto-discover by type"
                   onChange={(event) => updateProvider(index, { command: event.target.value })}
                 />
               </Field>
@@ -143,14 +143,14 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
                   checked={provider.enabled}
                   onChange={(event) => toggleEnabled(index, event.target.checked)}
                 />
-                <span>启用该提供方</span>
+                <span>Enable this provider</span>
               </label>
             </div>
           </article>
         );
       })}
       <button className="settings-add-card" onClick={addProvider}>
-        <Plus size={18} />新增提供方
+        <Plus size={18} />Add provider
       </button>
     </section>
   );

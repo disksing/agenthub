@@ -8,9 +8,9 @@ import { Field, fieldError } from "./fields";
 
 function describeAgentRefs(refs) {
   const parts = [];
-  if (refs.isDefault) parts.push("它是默认聊天 Agent");
-  if (refs.profiles.length) parts.push(`被 Profile 引用：${refs.profiles.join("、")}`);
-  return parts.join("；");
+  if (refs.isDefault) parts.push("it is the default chat agent");
+  if (refs.profiles.length) parts.push(`referenced by profiles: ${refs.profiles.join(", ")}`);
+  return parts.join("; ");
 }
 
 export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
@@ -40,7 +40,7 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
     const refs = agentReferences(draft, oldId);
     replace(renameAgentId(draft, oldId, newId.trim()));
     if (newId.trim() && (refs.isDefault || refs.profiles.length)) {
-      setRenameNote(`已将默认聊天 Agent / Profile 中对“${oldId}”的引用同步为“${newId.trim()}”。`);
+      setRenameNote(`Default chat agent and profile references to "${oldId}" were updated to "${newId.trim()}".`);
     } else {
       setRenameNote("");
     }
@@ -73,7 +73,7 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
     const agent = draft.agents[index];
     const refs = agentReferences(draft, agent.id);
     if (refs.isDefault || refs.profiles.length) {
-      setNotice(`无法删除 Agent“${agent.name || agent.id}”：${describeAgentRefs(refs)}。请先在「Profile 路由」或「常规」中调整引用。`);
+      setNotice(`Cannot delete agent "${agent.name || agent.id}": ${describeAgentRefs(refs)}. Update the references in Profiles or General first.`);
       return;
     }
     setNotice("");
@@ -94,15 +94,15 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
   };
 
   return (
-    <section aria-label="Agent 设置">
-      <h3 className="settings-section-title">Agent</h3>
+    <section aria-label="Agent settings">
+      <h3 className="settings-section-title">Agents</h3>
       <p className="settings-section-desc">
-        Agent 是某个提供方下的具体配置。不同提供方支持不同的选项；切换提供方时会自动清理不适用的选项。
+        An agent is a concrete configuration on top of a provider. Different providers support different options; switching providers removes options that no longer apply.
       </p>
       {notice ? <div className="settings-notice" role="alert">{notice}</div> : null}
       {renameNote ? <div className="settings-note" role="status">{renameNote}</div> : null}
       {!draft.agentProviders.length ? (
-        <div className="settings-empty">请先在「提供方」中新增提供方，再配置 Agent。</div>
+        <div className="settings-empty">Add a provider in the Providers section before configuring agents.</div>
       ) : null}
       {draft.agents.map((agent, index) => {
         const provider = providerById.get(agent.providerId);
@@ -120,15 +120,15 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
               >
                 {open ? <CaretDown size={16} /> : <CaretRight size={16} />}
                 <span className="settings-card-icon"><Robot size={19} /></span>
-                <strong>{agent.name || agent.id || "未命名 Agent"}</strong>
+                <strong>{agent.name || agent.id || "Unnamed agent"}</strong>
                 <span className="settings-pill pill-muted">
-                  {provider ? provider.name || provider.id : "未知提供方"}{summary ? ` · ${summary}` : ""}
+                  {provider ? provider.name || provider.id : "Unknown provider"}{summary ? ` · ${summary}` : ""}
                 </span>
               </button>
               <button
                 className="icon-button"
-                aria-label={`删除 Agent ${agent.name || agent.id}`}
-                title="删除 Agent"
+                aria-label={`Delete agent ${agent.name || agent.id}`}
+                title="Delete agent"
                 onClick={() => removeAgent(index)}
               >
                 <Trash size={17} />
@@ -136,7 +136,7 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
             </div>
             {open ? (
               <div className="settings-grid" id={`${base}-body`}>
-                <Field label="名称" htmlFor={`${base}-name`}>
+                <Field label="Name" htmlFor={`${base}-name`}>
                   <input
                     id={`${base}-name`}
                     className="settings-input"
@@ -153,7 +153,7 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
                     onChange={(event) => changeId(index, event.target.value)}
                   />
                 </Field>
-                <Field label="提供方" htmlFor={`${base}-provider`} error={showErrors ? fieldError(errors, "agents", index, "providerId") : ""}>
+                <Field label="Provider" htmlFor={`${base}-provider`} error={showErrors ? fieldError(errors, "agents", index, "providerId") : ""}>
                   <select
                     id={`${base}-provider`}
                     className="settings-select"
@@ -161,9 +161,9 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
                     onChange={(event) => changeProvider(index, event.target.value)}
                   >
                     {!providerById.has(agent.providerId) && agent.providerId ? (
-                      <option value={agent.providerId}>{agent.providerId}（不存在）</option>
+                      <option value={agent.providerId}>{agent.providerId} (missing)</option>
                     ) : null}
-                    {!agent.providerId ? <option value="">请选择提供方</option> : null}
+                    {!agent.providerId ? <option value="">Select a provider</option> : null}
                     {draft.agentProviders.map((item) => (
                       <option key={item.id} value={item.id}>{item.name || item.id}</option>
                     ))}
@@ -199,8 +199,8 @@ export function AgentsPanel({ draft, errors, showErrors, mutate, replace }) {
         );
       })}
       <button className="settings-add-card" onClick={addAgent} disabled={!draft.agentProviders.length}
-        title={draft.agentProviders.length ? "" : "请先新增提供方"}>
-        <Plus size={18} />新增 Agent
+        title={draft.agentProviders.length ? "" : "Add a provider first"}>
+        <Plus size={18} />Add agent
       </button>
     </section>
   );
