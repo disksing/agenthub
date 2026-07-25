@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/disksing/project-incubator/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/config"
 )
 
 type writeCloser struct{ io.Writer }

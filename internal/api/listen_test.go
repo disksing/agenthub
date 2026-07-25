@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/disksing/project-incubator/agenthub/internal/session"
+	"github.com/disksing/agenthub/internal/session"
 )
 
 var (

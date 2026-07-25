@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/disksing/project-incubator/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/config"
 )
 
 type codexSession struct {

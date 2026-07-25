@@ -19,11 +19,13 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
 
 ## 构建与启动
 
-需要 Go 1.24+ 和 Node.js。Web UI 构建后由 daemon 同源提供：
+需要 Go 1.24+ 和 Node.js。Web UI 位于 `frontend/`，构建后由 daemon 同源提供：
 
 ```bash
+cd frontend
 npm install
 npm run build
+cd ..
 go build -o agenthub ./cmd/agenthub
 ./agenthub serve
 ```
@@ -52,7 +54,7 @@ agenthub serve --addr myhost.local:4646    # 解析到本机接口的主机名/�
 
 ```bash
 go run ./cmd/agenthub serve
-npm run dev
+cd frontend && npm run dev
 ```
 
 Vite 会把 `/v1` 代理到默认 daemon 端口。
@@ -165,6 +167,7 @@ sessions/<session-id>/
 ```bash
 go test -race ./...
 go vet ./...
+cd frontend
 npm run build
 npm run test:sites
 ```

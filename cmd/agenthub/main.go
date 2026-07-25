@@ -17,13 +17,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/disksing/project-incubator/agenthub/internal/api"
-	"github.com/disksing/project-incubator/agenthub/internal/client"
-	"github.com/disksing/project-incubator/agenthub/internal/config"
-	"github.com/disksing/project-incubator/agenthub/internal/daemon"
-	"github.com/disksing/project-incubator/agenthub/internal/paths"
-	"github.com/disksing/project-incubator/agenthub/internal/runtime"
-	"github.com/disksing/project-incubator/agenthub/internal/session"
+	"github.com/disksing/agenthub/internal/api"
+	"github.com/disksing/agenthub/internal/client"
+	"github.com/disksing/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/daemon"
+	"github.com/disksing/agenthub/internal/paths"
+	"github.com/disksing/agenthub/internal/runtime"
+	"github.com/disksing/agenthub/internal/session"
 )
 
 const version = "0.1.0-dev"
@@ -63,7 +63,7 @@ func run(args []string) error {
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	address := flags.String("addr", api.DefaultListenAddress, "listen address as host:port; default "+api.DefaultListenAddress+" (loopback only); IPv6 needs brackets, e.g. [::1]:4646")
-	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./dist when present)")
+	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./frontend/dist/client when present)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func runServe(args []string) error {
 	manager := runtime.New(store, cfg)
 	defer manager.Close()
 	if *webDir == "" {
-		if absolute, statErr := filepath.Abs(filepath.Join("dist", "client")); statErr == nil {
+		if absolute, statErr := filepath.Abs(filepath.Join("frontend", "dist", "client")); statErr == nil {
 			if info, statErr := os.Stat(absolute); statErr == nil && info.IsDir() {
 				*webDir = absolute
 			}
