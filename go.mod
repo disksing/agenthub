@@ -1,3 +1,3 @@
-module github.com/disksing/project-incubator/agenthub
+module github.com/disksing/agenthub
 
 go 1.26
