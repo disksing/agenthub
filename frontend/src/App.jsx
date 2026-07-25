@@ -1,74 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CaretRight, Check, Copy, Gear, List, PaperPlaneTilt, Plus,
-  SidebarSimple, Stop, TerminalWindow, User, X,
+  SidebarSimple, Stop, X,
 } from "@phosphor-icons/react";
 import { api } from "./api";
+import { buildTimeline, displayTime } from "./timeline.js";
+import { Timeline } from "./Timeline.jsx";
+import { NewSessionModal } from "./NewSessionModal.jsx";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
-
-const eventTypes = [
-  "session.created", "session.state", "session.provider", "message.user",
-  "message.user.steer", "message.assistant.delta", "message.reasoning.delta",
-  "tool.event", "approval.requested", "approval.resolved", "turn.started",
-  "turn.completed", "turn.failed", "turn.cancelled", "provider.error", "provider.stderr",
-];
-
-function displayTime(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "" : date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-}
-
-function messagesFromEvents(events) {
-  const messages = [];
-  for (const event of events) {
-    if (event.type === "message.user" || event.type === "message.user.steer") {
-      messages.push({ key: event.id, role: "user", text: event.data?.text || "", time: displayTime(event.time) });
-    } else if (event.type === "message.assistant.delta") {
-      const previous = messages.at(-1);
-      if (previous?.role === "agent" && previous.turnId === event.turnId) {
-        previous.text += event.data?.text || "";
-      } else {
-        messages.push({ key: event.id, role: "agent", turnId: event.turnId, text: event.data?.text || "", time: displayTime(event.time) });
-      }
-    } else if (event.type === "approval.requested") {
-      messages.push({ key: event.id, role: "approval", approvalId: event.data?.approvalId, text: event.data?.method || "Approval requested", time: displayTime(event.time) });
-    } else if (event.type === "provider.error") {
-      messages.push({ key: event.id, role: "error", text: event.data?.message || "The provider reported an error", time: displayTime(event.time) });
-    }
-  }
-  return messages;
-}
-
-function Message({ message, agent, onApproval }) {
-  if (message.role === "approval") {
-    return (
-      <article className="notice-card">
-        <strong>Approval required</strong><span>{message.text}</span>
-        <div>
-          <button onClick={() => onApproval(message.approvalId, "decline")}>Decline</button>
-          <button className="primary-small" onClick={() => onApproval(message.approvalId, "accept")}>Allow once</button>
-        </div>
-      </article>
-    );
-  }
-  const isUser = message.role === "user";
-  return (
-    <article className={`message ${isUser ? "message-user" : "message-agent"} ${message.role === "error" ? "message-error" : ""}`}>
-      <span className={`avatar ${isUser ? "avatar-user" : "avatar-agent"}`}>{isUser ? <User size={17} weight="bold" /> : <TerminalWindow size={19} weight="bold" />}</span>
-      <div className="message-body">
-        <div className="message-meta"><strong>{isUser ? "You" : agent}</strong><span>{message.time}</span></div>
-        <p>{message.text}</p>
-      </div>
-    </article>
-  );
-}
 
 export function App() {
   const [sessions, setSessions] = useState([]);
   const [agents, setAgents] = useState([]);
+  const [providers, setProviders] = useState([]);
+  const [defaultAgentId, setDefaultAgentId] = useState("");
   const [activeId, setActiveId] = useState("");
   const [events, setEvents] = useState([]);
-  const [selectedAgent, setSelectedAgent] = useState("");
   const [draft, setDraft] = useState("");
   // On narrow viewports the details panel is hidden entirely (see styles.css);
   // start with it closed there.
@@ -79,11 +26,17 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrow());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsTriggerRef = useRef(null);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const newSessionTriggerRef = useRef(null);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const conversationRef = useRef(null);
+  const nearBottomRef = useRef(true);
 
   const activeSession = useMemo(() => sessions.find((item) => item.id === activeId), [sessions, activeId]);
-  const messages = useMemo(() => messagesFromEvents(events), [events]);
+  const timeline = useMemo(() => buildTimeline(events), [events]);
 
   const refreshSessions = async () => {
     const body = await api("/v1/sessions");
@@ -91,12 +44,15 @@ export function App() {
     setActiveId((current) => current || body.sessions[0]?.id || "");
   };
 
+  const loadAgents = async () => {
+    const body = await api("/v1/agents");
+    setAgents(body.agents || []);
+    setProviders(body.providers || []);
+    setDefaultAgentId(body.defaultChatAgentId || body.agents?.[0]?.id || "");
+  };
+
   useEffect(() => {
-    Promise.all([refreshSessions(), api("/v1/agents")])
-      .then(([, body]) => {
-        setAgents(body.agents || []);
-        setSelectedAgent(body.defaultChatAgentId || body.agents?.[0]?.id || "");
-      })
+    Promise.all([refreshSessions(), loadAgents()])
       .catch((value) => setError(value.message));
   }, []);
 
@@ -110,27 +66,46 @@ export function App() {
         setEvents(body.events || []);
         const after = body.events?.at(-1)?.id || 0;
         source = new EventSource(`/v1/sessions/${activeId}/events?stream=true&after=${after}`);
-        const receive = (message) => {
+        // All events arrive on the default message channel (see the daemon's
+        // writeSSE), so unknown future event types are never dropped here.
+        source.onmessage = (message) => {
           const event = JSON.parse(message.data);
           setEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
           if (/^(session|turn|approval)\./.test(event.type)) refreshSessions().catch(() => {});
         };
-        eventTypes.forEach((type) => source.addEventListener(type, receive));
         source.onerror = () => {};
       })
       .catch((value) => setError(value.message));
     return () => { disposed = true; source?.close(); };
   }, [activeId]);
 
-  const startNewSession = async () => {
-    const cwd = window.prompt("Working directory", activeSession?.cwd || "");
-    if (!cwd) return;
-    setError("");
+  // Keep the conversation pinned to the bottom while the user is already
+  // near it; jumping between sessions always lands on the latest events.
+  useEffect(() => {
+    const node = conversationRef.current;
+    if (node && nearBottomRef.current) node.scrollTop = node.scrollHeight;
+  }, [timeline, activeId]);
+
+  const onConversationScroll = () => {
+    const node = conversationRef.current;
+    if (!node) return;
+    nearBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 48;
+  };
+
+  const createSession = async (payload) => {
+    if (creating) return;
+    setCreating(true);
+    setCreateError("");
     try {
-      const body = await api("/v1/sessions", { method: "POST", body: JSON.stringify({ cwd, title: "New Session", agentId: selectedAgent }) });
+      const body = await api("/v1/sessions", { method: "POST", body: JSON.stringify(payload) });
+      setNewSessionOpen(false);
       await refreshSessions();
       setActiveId(body.session.id);
-    } catch (value) { setError(value.message); }
+    } catch (value) {
+      setCreateError(value.message || "Failed to create the session");
+    } finally {
+      setCreating(false);
+    }
   };
 
   const sendMessage = async () => {
@@ -157,25 +132,18 @@ export function App() {
     } catch (value) { setError(value.message); }
   };
 
-  const refreshAgents = async () => {
-    try {
-      const body = await api("/v1/agents");
-      const list = body.agents || [];
-      setAgents(list);
-      setSelectedAgent((current) => (
-        list.some((agent) => agent.id === current)
-          ? current
-          : body.defaultChatAgentId || list[0]?.id || ""
-      ));
-    } catch (value) { setError(value.message); }
-  };
-
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} ${detailsOpen ? "" : "details-collapsed"}`}>
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">AgentHub</div>
-          <button className="new-session" onClick={startNewSession}><Plus size={20} />New Session</button>
+          <button
+            className="new-session"
+            ref={newSessionTriggerRef}
+            onClick={() => { setCreateError(""); setNewSessionOpen(true); }}
+          >
+            <Plus size={20} />New Session
+          </button>
           <div className="session-label">Recent Sessions</div>
           <nav className="session-list" aria-label="Recent sessions">
             {sessions.map((item) => (
@@ -192,7 +160,7 @@ export function App() {
         <header className="workspace-header">
           <div>
             <h1>{activeSession?.title || "AgentHub"}</h1>
-            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentId || selectedAgent || "No agent selected"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "No session yet"}</strong></div>
+            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentId || "No agent"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "No session yet"}</strong></div>
           </div>
           <div className="header-actions">
             <button className="icon-button mobile-sidebar-toggle" aria-label="Toggle session list" onClick={() => setSidebarOpen((value) => !value)}><List size={20} /></button>
@@ -201,9 +169,11 @@ export function App() {
           </div>
         </header>
 
-        <div className="conversation">
+        <div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>
           {error && <div className="error-banner">{error}<button aria-label="Dismiss error" onClick={() => setError("")}><X size={15} /></button></div>}
-          {messages.length ? messages.map((message) => <Message key={message.key} message={message} agent={activeSession?.agentId || "Agent"} onApproval={resolveApproval} />) : (
+          {timeline.length ? (
+            <Timeline items={timeline} agent={activeSession?.agentId || "Agent"} onApproval={resolveApproval} />
+          ) : (
             <div className="empty-state"><span className="empty-icon"><Plus size={24} /></span><h2>Start a new Session</h2><p>Pick a local agent, set a working directory, and start the conversation.</p></div>
           )}
         </div>
@@ -212,9 +182,7 @@ export function App() {
           <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopped"} onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder="Type a message…" />
           <div className="composer-footer">
-            <select className="agent-select" aria-label="Agent" value={selectedAgent} onChange={(event) => setSelectedAgent(event.target.value)} disabled={Boolean(activeSession)}>
-              {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>)}
-            </select>
+            <span className="composer-agent">{activeSession?.agentId || "Create a session to chat"}</span>
             <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession}><PaperPlaneTilt size={20} weight="fill" /></button>
           </div>
         </div>
@@ -235,7 +203,21 @@ export function App() {
         <SettingsModal
           triggerRef={settingsTriggerRef}
           onClose={() => setSettingsOpen(false)}
-          onSaved={refreshAgents}
+          onSaved={() => loadAgents().catch(() => {})}
+        />
+      )}
+
+      {newSessionOpen && (
+        <NewSessionModal
+          agents={agents}
+          providers={providers}
+          defaultAgentId={defaultAgentId}
+          defaultCwd={activeSession?.cwd || ""}
+          submitting={creating}
+          error={createError}
+          onSubmit={createSession}
+          onClose={() => { if (!creating) setNewSessionOpen(false); }}
+          triggerRef={newSessionTriggerRef}
         />
       )}
     </main>
