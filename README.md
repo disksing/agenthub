@@ -155,3 +155,7 @@ npm run test:sites
 ```
 
 实现还经过本机真实联调：Codex app-server、Kimi ACP、Pi/Kimi K3、Pi/Grok、Codex 原生 thread 重启恢复，以及 Kimi 创建并写入工作区文件。
+
+## 许可证
+
+本项目采用 [BSD 3-Clause License](LICENSE)（New BSD License / Revised BSD License）发布。

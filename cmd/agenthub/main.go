@@ -17,13 +17,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/disksing/project-incubator/agenthub/internal/api"
-	"github.com/disksing/project-incubator/agenthub/internal/client"
-	"github.com/disksing/project-incubator/agenthub/internal/config"
-	"github.com/disksing/project-incubator/agenthub/internal/daemon"
-	"github.com/disksing/project-incubator/agenthub/internal/paths"
-	"github.com/disksing/project-incubator/agenthub/internal/runtime"
-	"github.com/disksing/project-incubator/agenthub/internal/session"
+	"github.com/disksing/agenthub/internal/api"
+	"github.com/disksing/agenthub/internal/client"
+	"github.com/disksing/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/daemon"
+	"github.com/disksing/agenthub/internal/paths"
+	"github.com/disksing/agenthub/internal/runtime"
+	"github.com/disksing/agenthub/internal/session"
 )
 
 const version = "0.1.0-dev"

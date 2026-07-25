@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/disksing/project-incubator/agenthub/internal/config"
-	"github.com/disksing/project-incubator/agenthub/internal/runtime"
-	"github.com/disksing/project-incubator/agenthub/internal/session"
+	"github.com/disksing/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/runtime"
+	"github.com/disksing/agenthub/internal/session"
 )
 
 type Server struct {
