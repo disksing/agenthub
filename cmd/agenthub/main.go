@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -37,9 +38,16 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: agenthub <serve|status|agents|run|chat|session>")
+		fmt.Fprint(helpOutput, rootHelp)
+		return nil
+	}
+	if isHelpFlag(args[0]) {
+		fmt.Fprint(helpOutput, rootHelp)
+		return nil
 	}
 	switch args[0] {
+	case "help":
+		return runHelp(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "status":
@@ -56,19 +64,20 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("unknown command %q\nRun 'agenthub help' for usage.", args[0])
 	}
 }
 
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	address := flags.String("addr", api.DefaultListenAddress, "listen address as host:port; default "+api.DefaultListenAddress+" (loopback only); IPv6 needs brackets, e.g. [::1]:4646")
 	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./frontend/dist/client when present)")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return flagParseError(err, "serve")
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: agenthub serve [--addr 127.0.0.1:4646]")
+		return usageError("agenthub serve [--addr host:port] [--web-dir path]", "serve")
 	}
 	listenAddress, err := api.ResolveListenAddress(*address)
 	if err != nil {
@@ -161,8 +170,12 @@ func runServe(args []string) error {
 }
 
 func runStatus(args []string) error {
+	if hasHelpFlag(args) {
+		printTopic("status")
+		return nil
+	}
 	if len(args) != 0 {
-		return errors.New("usage: agenthub status")
+		return usageError("agenthub status", "status")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
@@ -176,8 +189,12 @@ func runStatus(args []string) error {
 }
 
 func runAgents(args []string) error {
+	if hasHelpFlag(args) {
+		printTopic("agents")
+		return nil
+	}
 	if len(args) != 0 {
-		return errors.New("usage: agenthub agents")
+		return usageError("agenthub agents", "agents")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
@@ -192,17 +209,18 @@ func runAgents(args []string) error {
 
 func runOneShot(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	var tags stringList
 	cwd := flags.String("cwd", ".", "working directory")
 	title := flags.String("title", "", "session title")
 	agentID := flags.String("agent", "", "explicit agent id")
 	flags.Var(&tags, "tag", "agent profile/tag (repeatable)")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return flagParseError(err, "run")
 	}
 	message := strings.TrimSpace(strings.Join(flags.Args(), " "))
 	if message == "" {
-		return errors.New("usage: agenthub run [--cwd .] [--agent id | --tag key] <message>")
+		return usageError("agenthub run [--cwd dir] [--agent id | --tag key...] <message>", "run")
 	}
 	if *agentID != "" && len(tags) > 0 {
 		return errors.New("--agent and --tag are mutually exclusive")
@@ -225,6 +243,7 @@ func runOneShot(args []string) error {
 
 func runChat(args []string) error {
 	flags := flag.NewFlagSet("chat", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	var tags stringList
 	cwd := flags.String("cwd", ".", "working directory")
 	title := flags.String("title", "", "session title")
@@ -232,10 +251,10 @@ func runChat(args []string) error {
 	sessionID := flags.String("session", "", "attach existing session")
 	flags.Var(&tags, "tag", "agent profile/tag (repeatable)")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return flagParseError(err, "chat")
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: agenthub chat [--session id | --cwd . --agent id]")
+		return usageError("agenthub chat [--session id | --cwd dir --agent id | --tag key...]", "chat")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
@@ -333,7 +352,21 @@ func printTurn(apiClient *client.Client, id string, cursor int64) (int64, error)
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: agenthub session <create|list|show|events|attach|resume|stop|interrupt|approve|archive>")
+		printTopic("session")
+		return nil
+	}
+	if args[0] == "help" {
+		if len(args) == 1 {
+			printTopic("session")
+			return nil
+		}
+		return runHelp(append([]string{"session"}, args[1:]...))
+	}
+	if len(args) == 2 && isHelpFlag(args[1]) {
+		if _, ok := helpTopics["session "+args[0]]; ok {
+			printTopic("session " + args[0])
+			return nil
+		}
 	}
 	switch args[0] {
 	case "create":
@@ -343,10 +376,13 @@ func runSession(args []string) error {
 	case "show":
 		return runSessionShow(args[1:])
 	case "attach":
-		return runChat(append([]string{"--session"}, args[1:]...))
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
+			return usageError("agenthub session attach <session-id>", "session attach")
+		}
+		return runChat([]string{"--session", args[1]})
 	case "events":
 		if len(args) != 2 {
-			return errors.New("usage: agenthub session events <session-id>")
+			return usageError("agenthub session events <session-id>", "session events")
 		}
 		apiClient, err := client.Discover()
 		if err != nil {
@@ -361,7 +397,7 @@ func runSession(args []string) error {
 		return runSessionApprove(args[1:])
 	case "archive":
 		if len(args) != 2 {
-			return errors.New("usage: agenthub session archive <session-id>")
+			return usageError("agenthub session archive <session-id>", "session archive")
 		}
 		apiClient, err := client.Discover()
 		if err != nil {
@@ -374,7 +410,7 @@ func runSession(args []string) error {
 		return printJSON(value)
 	case "resume", "stop", "interrupt":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: agenthub session %s <session-id>", args[0])
+			return usageError(fmt.Sprintf("agenthub session %s <session-id>", args[0]), "session "+args[0])
 		}
 		apiClient, err := client.Discover()
 		if err != nil {
@@ -386,18 +422,19 @@ func runSession(args []string) error {
 		}
 		return printJSON(value)
 	default:
-		return fmt.Errorf("unknown session command %q", args[0])
+		return fmt.Errorf("unknown session command %q\nRun 'agenthub help session' for usage.", args[0])
 	}
 }
 
 func runSessionApprove(args []string) error {
 	flags := flag.NewFlagSet("session approve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	decision := flags.String("decision", "accept", "accept, acceptForSession, decline, or cancel")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return flagParseError(err, "session approve")
 	}
 	if flags.NArg() != 2 {
-		return errors.New("usage: agenthub session approve [--decision accept] <session-id> <approval-id>")
+		return usageError("agenthub session approve [--decision decision] <session-id> <approval-id>", "session approve")
 	}
 	switch *decision {
 	case "accept", "acceptForSession", "decline", "cancel":
@@ -417,16 +454,17 @@ func runSessionApprove(args []string) error {
 
 func runSessionCreate(args []string) error {
 	flags := flag.NewFlagSet("session create", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	var tags stringList
 	title := flags.String("title", "", "session title")
 	cwd := flags.String("cwd", ".", "working directory")
 	agentID := flags.String("agent", "", "explicit agent id")
 	flags.Var(&tags, "tag", "agent routing tag (repeatable)")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return flagParseError(err, "session create")
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: agenthub session create [--cwd .] [--title title] [--agent id | --tag tag...]")
+		return usageError("agenthub session create [--cwd dir] [--title title] [--agent id | --tag key...]", "session create")
 	}
 	if *agentID != "" && len(tags) > 0 {
 		return errors.New("--agent and --tag are mutually exclusive")
@@ -448,13 +486,14 @@ func runSessionCreate(args []string) error {
 
 func runSessionList(args []string) error {
 	flags := flag.NewFlagSet("session list", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	includeArchived := flags.Bool("all", false, "include archived sessions")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return flagParseError(err, "session list")
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: agenthub session list [--all] [--json]")
+		return usageError("agenthub session list [--all] [--json]", "session list")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
@@ -483,7 +522,7 @@ func runSessionList(args []string) error {
 
 func runSessionShow(args []string) error {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
-		return errors.New("usage: agenthub session show <session-id>")
+		return usageError("agenthub session show <session-id>", "session show")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
