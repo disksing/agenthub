@@ -60,7 +60,14 @@ func run(args []string) error {
 		return runChat(args[1:])
 	case "session":
 		return runSession(args[1:])
-	case "version", "--version", "-version":
+	case "version":
+		if hasHelpFlag(args[1:]) {
+			printTopic("version")
+			return nil
+		}
+		fmt.Println(version)
+		return nil
+	case "--version", "-version":
 		fmt.Println(version)
 		return nil
 	default:
@@ -350,7 +357,7 @@ func printTurn(apiClient *client.Client, id string, cursor int64) (int64, error)
 }
 
 func runSession(args []string) error {
-	if len(args) == 0 {
+	if len(args) == 0 || isHelpFlag(args[0]) {
 		printTopic("session")
 		return nil
 	}

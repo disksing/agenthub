@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode"
@@ -224,17 +225,81 @@ func TestHelpTextIsEnglishOnly(t *testing.T) {
 	}
 }
 
-// The removed profile/tag routing must not resurface in any help text.
+// The removed profile/tag routing model must not resurface in any help
+// output. Matching is case-insensitive; the only tolerated mentions are the
+// explicit negations that document the removal.
 func TestHelpTextHasNoProfileRouting(t *testing.T) {
-	for _, term := range []string{"profile", "Profile", "--tag", "defaultChatAgentId"} {
-		if strings.Contains(rootHelp, term) {
-			t.Errorf("root help still mentions %q", term)
+	allowedNegations := []string{
+		"no implicit routing or fallback",
+		"there is no silent fallback",
+	}
+	banned := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bprofiles?\b`),
+		regexp.MustCompile(`(?i)\btags?\b`),
+		regexp.MustCompile(`(?i)\blabels?\b`),
+		regexp.MustCompile(`(?i)\bcandidates?\b`),
+		regexp.MustCompile(`(?i)\brouting\b`),
+		regexp.MustCompile(`(?i)\bfallback\b`),
+		regexp.MustCompile(`(?i)defaultchatagentid`),
+	}
+	assertClean := func(name, text string) {
+		t.Helper()
+		lowered := strings.ToLower(text)
+		for _, negation := range allowedNegations {
+			lowered = strings.ReplaceAll(lowered, negation, "")
 		}
-		for name, text := range helpTopics {
-			if strings.Contains(text, term) {
-				t.Errorf("help topic %q still mentions %q", name, term)
+		for _, pattern := range banned {
+			if match := pattern.FindString(lowered); match != "" {
+				t.Errorf("help text %q still mentions removed capability %q", name, match)
 			}
 		}
+	}
+	assertClean("root", rootHelp)
+	for name, text := range helpTopics {
+		assertClean(name, text)
+	}
+}
+
+// Every registered help topic must be reachable both through
+// "agenthub help <topic>" and through "agenthub <topic> --help".
+func TestAllHelpTopicsReachable(t *testing.T) {
+	for name, text := range helpTopics {
+		topicArgs := strings.Split(name, " ")
+		output, err := captureHelp(t, func() error { return run(append([]string{"help"}, topicArgs...)) })
+		if err != nil {
+			t.Errorf("help %s returned error: %v", name, err)
+		}
+		if output != text {
+			t.Errorf("help %s did not print the registered topic", name)
+		}
+		output, err = captureHelp(t, func() error { return run(append(topicArgs, "--help")) })
+		if err != nil {
+			t.Errorf("%s --help returned error: %v", name, err)
+		}
+		if output != text {
+			t.Errorf("%s --help did not print the registered topic", name)
+		}
+	}
+}
+
+// Session creation help must describe direct, explicit agent selection and
+// must not hint at profile-, tag- or route-based selection.
+func TestSessionCreateHelpRequiresExplicitAgent(t *testing.T) {
+	for _, topic := range []string{"session create", "run", "chat"} {
+		text := strings.ToLower(helpTopics[topic])
+		if !strings.Contains(text, "--agent") {
+			t.Errorf("help topic %q does not document --agent", topic)
+		}
+		if !strings.Contains(text, "required") {
+			t.Errorf("help topic %q does not mark --agent as required", topic)
+		}
+		if !strings.Contains(text, "explicit agent") {
+			t.Errorf("help topic %q does not state sessions run with an explicit agent", topic)
+		}
+	}
+	root := strings.ToLower(rootHelp)
+	if !strings.Contains(root, "explicitly selected agent") {
+		t.Error("root help does not state that a session selects an agent explicitly")
 	}
 }
 

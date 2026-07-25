@@ -227,7 +227,8 @@ Options:
   --session id   Attach an existing session
   --cwd dir      Working directory for a new session (default ".")
   --title title  Session title for a new session
-  --agent id     Agent id from the configuration (required for a new session)
+  --agent id     Agent id from the configuration (required for a new
+                 session; sessions always run with an explicit agent)
 
 Commands inside chat:
   /interrupt     Cancel the running turn
