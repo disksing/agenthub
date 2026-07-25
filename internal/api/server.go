@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,12 +26,16 @@ type Server struct {
 	runtime   *runtime.Manager
 	config    string
 	webDir    string
+	listen    *ListenAddress
 }
 
 type Dependencies struct {
 	Runtime    *runtime.Manager
 	ConfigPath string
 	WebDir     string
+	// Listen, when set, enables the Host header guard derived from the
+	// validated listen address.
+	Listen *ListenAddress
 }
 
 func New(store *session.Store, version string, startedAt time.Time, dependencies ...Dependencies) *Server {
@@ -41,6 +44,7 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 		server.runtime = dependencies[0].Runtime
 		server.config = dependencies[0].ConfigPath
 		server.webDir = dependencies[0].WebDir
+		server.listen = dependencies[0].Listen
 	}
 	return server
 }
@@ -58,22 +62,24 @@ func (s *Server) Handler() http.Handler {
 	if s.webDir != "" {
 		mux.Handle("/", spaHandler(s.webDir))
 	}
-	return requestMiddleware(mux)
+	var handler http.Handler = requestMiddleware(mux)
+	if s.listen != nil {
+		handler = hostGuardMiddleware(s.listen, handler)
+	}
+	return handler
 }
 
-func ValidateLoopbackAddress(address string) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("invalid address %q: %w", address, err)
-	}
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("address must use a loopback host, got %q", host)
-	}
-	return nil
+// hostGuardMiddleware rejects requests whose Host header does not name an
+// address of this daemon, blocking DNS-rebinding attacks against browsers on
+// the local network.
+func hostGuardMiddleware(listen *ListenAddress, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !listen.AllowsHost(r.Host) {
+			writeAPIError(w, http.StatusForbidden, "host_rejected", "request host does not match an address of this daemon", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

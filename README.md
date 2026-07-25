@@ -4,7 +4,7 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
 
 ## 能力
 
-- 仅监听 loopback；无账号、token 或 API 鉴权。
+- 默认仅监听 loopback，可显式配置局域网/通配/IPv6 地址；无账号、token 或 API 鉴权。
 - 独立的 provider、agent 和 agent profile 配置。
 - Agent Profile 显式选择或按 profile key/tag 自动路由。
 - 真实 Provider Adapter：
@@ -29,6 +29,24 @@ go build -o agenthub ./cmd/agenthub
 ```
 
 打开 <http://127.0.0.1:4646>。
+
+### 监听地址
+
+默认只监听 loopback，`agenthub serve` 等价于 `agenthub serve --addr 127.0.0.1:4646`。需要让局域网内其他设备访问时，可以用 `--addr host:port` 显式选择本机地址：
+
+```bash
+agenthub serve --addr 192.168.2.150:4646   # 具体局域网 IPv4
+agenthub serve --addr 0.0.0.0:4646         # 所有 IPv4 接口（通配）
+agenthub serve --addr '[::]:4646'          # 所有 IPv6 接口（通配）
+agenthub serve --addr '[::1]:4646'         # 仅 IPv6 loopback
+agenthub serve --addr myhost.local:4646    # 解析到本机接口的主机名/域名
+```
+
+主机名必须能解析到本机网络接口或 loopback。无法解析的主机名、非本机接口的地址、错误的格式和非法端口都会在启动时直接报错，不会静默回退到其他地址。IPv6 地址必须用方括号括起来。
+
+> **安全警告**：AgentHub 没有账号、token 或 API 鉴权。监听非 loopback 或通配地址时，任何能访问该地址的设备都可以完全控制 daemon（运行 Agent、修改 Session 和配置）。只在可信网络中使用，不要直接暴露到公网。启动日志会打印同样的警告。
+
+非 loopback 监听时，本机 CLI 仍通过 `server.json` 中的 loopback endpoint 自动发现 daemon。浏览器写请求仍要求 `Origin` 与请求 `Host` 一致，且 `Host` 必须是本机接口地址或本机主机名（防止 DNS rebinding），不接受任意 Origin。
 
 开发时可分别运行：
 
@@ -140,7 +158,7 @@ sessions/<session-id>/
 
 `events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。
 
-无鉴权模式只适用于本机：daemon 拒绝非 loopback 地址，不发送 CORS 许可，并拒绝跨 origin 的浏览器写请求。
+无鉴权模式只适合本机和可信网络：默认仅监听 loopback，不发送 CORS 许可，拒绝跨 origin 的浏览器写请求，并校验请求 Host 必须指向本机地址。
 
 ## 验证
 

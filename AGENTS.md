@@ -4,7 +4,7 @@ The Go daemon, filesystem Session Store, HTTP/SSE API, and CLI are the primary p
 
 - Keep the daemon as the only writer of Session data.
 - Keep `events.jsonl` as the Session source of truth; `session.json` must remain a rebuildable projection.
-- Do not add tokens, accounts, API authentication, or non-loopback listening in v1.
+- Do not add tokens, accounts, or API authentication. Non-loopback listening is allowed only through the explicit `serve --addr` flag, must print the startup security warning, and must keep the Host/Origin guards intact.
 - Do not add SQLite or separate Turn/Approval persistence files.
 - Keep Provider-specific fields behind adapters rather than exposing them as public Session fields.
 - Run `go test -race ./...` for backend changes.

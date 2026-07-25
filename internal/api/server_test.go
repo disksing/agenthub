@@ -17,16 +17,71 @@ import (
 	"github.com/disksing/project-incubator/agenthub/internal/session"
 )
 
-func TestValidateLoopbackAddress(t *testing.T) {
-	for _, address := range []string{"127.0.0.1:4646", "[::1]:4646", "localhost:4646"} {
-		if err := ValidateLoopbackAddress(address); err != nil {
-			t.Fatalf("%s should be allowed: %v", address, err)
+func newGuardedTestServer(t *testing.T) (*httptest.Server, *ListenAddress) {
+	t.Helper()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := resolveForTest(t, "192.168.1.10:4646", nil, testLANIPv4)
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Listen: listen}).Handler())
+	t.Cleanup(server.Close)
+	return server, listen
+}
+
+func TestHostGuardRejectsForeignHost(t *testing.T) {
+	server, _ := newGuardedTestServer(t)
+	for host, want := range map[string]int{
+		"192.168.1.10:4646": http.StatusOK,
+		"127.0.0.1:4646":    http.StatusOK,
+		"localhost:4646":    http.StatusOK,
+		"myhost:4646":       http.StatusOK,
+		"evil.example":      http.StatusForbidden,
+		"192.168.1.11:4646": http.StatusForbidden,
+	} {
+		request, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/health", nil)
+		request.Host = host
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("Host %q: status = %d, want %d", host, response.StatusCode, want)
 		}
 	}
-	for _, address := range []string{"0.0.0.0:4646", "192.168.1.2:4646"} {
-		if err := ValidateLoopbackAddress(address); err == nil {
-			t.Fatalf("%s should be rejected", address)
-		}
+}
+
+func TestMutationAcceptsSameOriginLANBrowser(t *testing.T) {
+	server, _ := newGuardedTestServer(t)
+	body, _ := json.Marshal(map[string]any{"title": "LAN", "cwd": t.TempDir()})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Host = "192.168.1.10:4646"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://192.168.1.10:4646")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+}
+
+func TestMutationRejectsCrossOriginOnLANListener(t *testing.T) {
+	server, _ := newGuardedTestServer(t)
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(`{}`))
+	request.Host = "192.168.1.10:4646"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://evil.example")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected status: %s", response.Status)
 	}
 }
 

@@ -62,7 +62,7 @@ func run(args []string) error {
 
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	address := flags.String("addr", "127.0.0.1:4646", "loopback address")
+	address := flags.String("addr", api.DefaultListenAddress, "listen address as host:port; default "+api.DefaultListenAddress+" (loopback only); IPv6 needs brackets, e.g. [::1]:4646")
 	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./dist when present)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -70,7 +70,8 @@ func runServe(args []string) error {
 	if flags.NArg() != 0 {
 		return errors.New("usage: agenthub serve [--addr 127.0.0.1:4646]")
 	}
-	if err := api.ValidateLoopbackAddress(*address); err != nil {
+	listenAddress, err := api.ResolveListenAddress(*address)
+	if err != nil {
 		return err
 	}
 	resolved, err := paths.Resolve()
@@ -103,14 +104,14 @@ func runServe(args []string) error {
 			}
 		}
 	}
-	listener, err := net.Listen("tcp", *address)
+	listener, err := net.Listen("tcp", listenAddress.BindAddress())
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot listen on %s: %w", listenAddress.BindAddress(), err)
 	}
 	defer listener.Close()
 
 	startedAt := time.Now().UTC()
-	endpoint := "http://" + listener.Addr().String()
+	endpoint := listenAddress.Endpoint()
 	if err := daemon.WriteState(resolved.ServerFile, daemon.State{
 		PID:       os.Getpid(),
 		Endpoint:  endpoint,
@@ -122,7 +123,7 @@ func runServe(args []string) error {
 
 	httpServer := &http.Server{
 		Handler: api.New(store, version, startedAt, api.Dependencies{
-			Runtime: manager, ConfigPath: resolved.ConfigFile, WebDir: *webDir,
+			Runtime: manager, ConfigPath: resolved.ConfigFile, WebDir: *webDir, Listen: listenAddress,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       75 * time.Second,
@@ -136,7 +137,11 @@ func runServe(args []string) error {
 		}
 		serverErrors <- nil
 	}()
-	fmt.Printf("AgentHub %s listening on %s\n", version, endpoint)
+	fmt.Printf("AgentHub %s listening on %s\n", version, listenAddress.BindAddress())
+	fmt.Printf("local endpoint: %s\n", endpoint)
+	if listenAddress.Exposed() {
+		printExposureWarning(os.Stderr, listenAddress)
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -489,6 +494,15 @@ func runSessionShow(args []string) error {
 		return err
 	}
 	return printJSON(value)
+}
+
+func printExposureWarning(w *os.File, listenAddress *api.ListenAddress) {
+	fmt.Fprintln(w, "")
+	fmt.Fprintf(w, "WARNING: AgentHub is listening on %s and is reachable from other machines.\n", listenAddress.BindAddress())
+	fmt.Fprintln(w, "AgentHub has NO authentication: anyone who can reach this address can run")
+	fmt.Fprintln(w, "agents, modify sessions and change the configuration. Only use this on")
+	fmt.Fprintln(w, "trusted networks. Do NOT expose the daemon to the public internet.")
+	fmt.Fprintln(w, "")
 }
 
 func printJSON(value any) error {
