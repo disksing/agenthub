@@ -27,18 +27,18 @@ type Agent struct {
 	Options    map[string]string `json:"options,omitempty"`
 }
 
-type Profile struct {
-	Key         string `json:"key"`
-	Description string `json:"description,omitempty"`
-	AgentID     string `json:"agentId"`
+type Config struct {
+	Version        int        `json:"version"`
+	AgentProviders []Provider `json:"agentProviders"`
+	Agents         []Agent    `json:"agents"`
 }
 
-type Config struct {
-	Version            int        `json:"version"`
-	DefaultChatAgentID string     `json:"defaultChatAgentId,omitempty"`
-	AgentProviders     []Provider `json:"agentProviders"`
-	Agents             []Agent    `json:"agents"`
-	AgentProfiles      []Profile  `json:"agentProfiles,omitempty"`
+// legacyFields mirrors the config keys removed with the Agent Profile and tag
+// routing model. They are tolerated on read and dropped for good on the next
+// save; Load rewrites the file once to complete the migration.
+type legacyFields struct {
+	DefaultChatAgentID string          `json:"defaultChatAgentId"`
+	AgentProfiles      json.RawMessage `json:"agentProfiles"`
 }
 
 type Probe struct {
@@ -68,7 +68,19 @@ func Load(path string) (Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
+	var legacy legacyFields
+	if err := json.Unmarshal(data, &legacy); err == nil && legacy.hasLegacy() {
+		// One-time migration: rewrite the file without the removed profile
+		// routing fields. Providers and agents are kept untouched.
+		if err := Save(path, cfg); err != nil {
+			return Config{}, fmt.Errorf("migrate legacy profile fields: %w", err)
+		}
+	}
 	return cfg, nil
+}
+
+func (l legacyFields) hasLegacy() bool {
+	return l.DefaultChatAgentID != "" || len(l.AgentProfiles) > 0
 }
 
 func Save(path string, cfg Config) error {
@@ -143,32 +155,12 @@ func (c Config) Validate() error {
 		}
 		agents[value.ID] = value
 	}
-	if c.DefaultChatAgentID != "" {
-		if _, ok := agents[c.DefaultChatAgentID]; !ok {
-			return fmt.Errorf("defaultChatAgentId references unavailable agent %q", c.DefaultChatAgentID)
-		}
-	}
-	keys := make(map[string]bool)
-	for _, value := range c.AgentProfiles {
-		key := strings.ToLower(strings.TrimSpace(value.Key))
-		if key == "" || value.AgentID == "" {
-			return errors.New("profile key and agentId are required")
-		}
-		if keys[key] {
-			return fmt.Errorf("duplicate profile %q", value.Key)
-		}
-		keys[key] = true
-		if _, ok := agents[value.AgentID]; !ok {
-			return fmt.Errorf("profile %q references unavailable agent %q", value.Key, value.AgentID)
-		}
-	}
 	return nil
 }
 
 func Defaults() Config {
 	return Config{
-		Version:            1,
-		DefaultChatAgentID: "codex-default",
+		Version: 1,
 		AgentProviders: []Provider{
 			{ID: "codex", Name: "Codex app-server", Type: "codex", Enabled: true},
 			{ID: "opencode", Name: "OpenCode", Type: "opencode", Enabled: true},
@@ -192,26 +184,6 @@ func (c Config) Agent(id string) (Agent, Provider, error) {
 		return Agent{}, Provider{}, fmt.Errorf("provider for agent %q is disabled", id)
 	}
 	return Agent{}, Provider{}, fmt.Errorf("unknown agent %q", id)
-}
-
-func (c Config) Route(explicit string, tags []string) (Agent, Provider, string, error) {
-	if explicit != "" {
-		agent, provider, err := c.Agent(explicit)
-		return agent, provider, "explicit agent " + explicit, err
-	}
-	for _, requested := range tags {
-		for _, profile := range c.AgentProfiles {
-			if strings.EqualFold(strings.TrimSpace(requested), strings.TrimSpace(profile.Key)) {
-				agent, provider, err := c.Agent(profile.AgentID)
-				return agent, provider, "matched profile " + profile.Key, err
-			}
-		}
-	}
-	if c.DefaultChatAgentID == "" {
-		return Agent{}, Provider{}, "", errors.New("no matching profile and defaultChatAgentId is empty")
-	}
-	agent, provider, err := c.Agent(c.DefaultChatAgentID)
-	return agent, provider, "defaultChatAgentId", err
 }
 
 func (c Config) Probes() []Probe {

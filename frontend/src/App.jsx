@@ -95,7 +95,7 @@ export function App() {
     Promise.all([refreshSessions(), api("/v1/agents")])
       .then(([, body]) => {
         setAgents(body.agents || []);
-        setSelectedAgent(body.defaultChatAgentId || body.agents?.[0]?.id || "");
+        setSelectedAgent(body.agents?.[0]?.id || "");
       })
       .catch((value) => setError(value.message));
   }, []);
@@ -165,7 +165,7 @@ export function App() {
       setSelectedAgent((current) => (
         list.some((agent) => agent.id === current)
           ? current
-          : body.defaultChatAgentId || list[0]?.id || ""
+          : list[0]?.id || ""
       ));
     } catch (value) { setError(value.message); }
   };

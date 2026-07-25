@@ -7,15 +7,15 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
 ## 能力
 
 - 默认仅监听 loopback，可显式配置局域网/通配/IPv6 地址；无账号、token 或 API 鉴权。
-- 独立的 provider、agent 和 agent profile 配置。
-- Agent Profile 显式选择或按 profile key/tag 自动路由。
+- 独立的 provider 和 agent 配置。
+- 创建 Session 时始终显式选择一个 Agent，没有隐式路由或回退。
 - 真实 Provider Adapter：
   - Codex app-server
   - Kimi / OpenCode ACP v1
   - Pi JSONL RPC，包括 Kimi K3 与 Grok 等模型
 - Session 创建、聊天、steer、interrupt、stop、resume、archive 和 approval。
 - daemon 重启后按需恢复 provider 原生 session/thread。
-- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及用于管理 provider、agent 和 profile 的结构化设置界面。
+- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及用于管理 provider 和 agent 的结构化设置界面。
 - CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
 - 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
 
@@ -67,8 +67,8 @@ Vite 会把 `/v1` 代理到默认 daemon 端口。
 agenthub status
 agenthub agents
 
-agenthub run --tag fast --cwd . "检查测试失败原因"
-agenthub run --agent pi-kimi --cwd . "实现这个功能并运行测试"
+agenthub run --agent pi-kimi --cwd . "检查测试失败原因"
+agenthub run --agent codex-default --cwd . "实现这个功能并运行测试"
 
 agenthub chat --agent gpt-5-6-sol --cwd .
 agenthub session attach <session-id>
@@ -97,7 +97,6 @@ $HOME/.agenthub/config.json
 ```json
 {
   "version": 1,
-  "defaultChatAgentId": "pi-kimi",
   "agentProviders": [
     { "id": "codex", "name": "Codex app-server", "type": "codex", "enabled": true },
     { "id": "kimi", "name": "Kimi Code", "type": "kimi", "enabled": true },
@@ -110,14 +109,17 @@ $HOME/.agenthub/config.json
       "providerId": "pi",
       "options": { "mode": "build", "model": "kimi-coding/k3" }
     }
-  ],
-  "agentProfiles": [
-    { "key": "kimi", "description": "kimi k3", "agentId": "pi-kimi" }
   ]
 }
 ```
 
-推荐使用 Web UI 的 **Settings** 界面编辑配置：它为 provider、agent、agent profile 和默认聊天 Agent 提供结构化、带校验的表单，并展示 provider 命令可用性探测结果。所有修改都通过 daemon API（`PUT /v1/config`）提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
+Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provider 并保存具体启动参数。每个 Session 都用显式 Agent ID 创建（`POST /v1/sessions` 要求 `agentId`，CLI 要求 `--agent`）；未知、缺失或 Provider 被禁用的 Agent 会直接返回明确错误，不会被路由到其他 Agent。
+
+推荐使用 Web UI 的 **Settings** 界面编辑配置：它为 provider 和 agent 提供结构化、带校验的表单，并展示 provider 命令可用性探测结果。所有修改都通过 daemon API（`PUT /v1/config`）提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
+
+### 旧配置迁移
+
+早期版本支持 agent profile、基于 tag 的路由和 `defaultChatAgentId` 回退，这些能力已移除：Session 现在始终显式指定 Agent。仍含有遗留 `agentProfiles` 或 `defaultChatAgentId` 键的配置文件可以继续使用——这些键在读取时被忽略，daemon 启动时会把配置文件一次性重写为不含这些键的形式。Provider 和 Agent 数据原样保留。在此变更之前记录的 Session 只要已确定 Agent 就仍可查看和恢复；从未启动过（因而没有 Agent）的旧 Session 会返回明确错误，而不会猜测到某个已配置的 Agent 上。
 
 命令发现顺序为：provider 的 `command`、`AGENTHUB_*_CLI`、`PATH`。支持：
 

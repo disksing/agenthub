@@ -192,20 +192,18 @@ func runAgents(args []string) error {
 
 func runOneShot(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	var tags stringList
 	cwd := flags.String("cwd", ".", "working directory")
 	title := flags.String("title", "", "session title")
-	agentID := flags.String("agent", "", "explicit agent id")
-	flags.Var(&tags, "tag", "agent profile/tag (repeatable)")
+	agentID := flags.String("agent", "", "agent id from the configuration (required)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	message := strings.TrimSpace(strings.Join(flags.Args(), " "))
 	if message == "" {
-		return errors.New("usage: agenthub run [--cwd .] [--agent id | --tag key] <message>")
+		return errors.New("usage: agenthub run [--cwd .] --agent <id> <message>")
 	}
-	if *agentID != "" && len(tags) > 0 {
-		return errors.New("--agent and --tag are mutually exclusive")
+	if strings.TrimSpace(*agentID) == "" {
+		return errors.New("--agent is required: sessions always run with an explicit agent")
 	}
 	absolute, err := filepath.Abs(*cwd)
 	if err != nil {
@@ -215,7 +213,7 @@ func runOneShot(args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := apiClient.CreateSessionWithMessage(*title, absolute, *agentID, tags, message)
+	value, err := apiClient.CreateSessionWithMessage(*title, absolute, *agentID, message)
 	if err != nil {
 		return err
 	}
@@ -225,12 +223,10 @@ func runOneShot(args []string) error {
 
 func runChat(args []string) error {
 	flags := flag.NewFlagSet("chat", flag.ContinueOnError)
-	var tags stringList
 	cwd := flags.String("cwd", ".", "working directory")
 	title := flags.String("title", "", "session title")
-	agentID := flags.String("agent", "", "explicit agent id")
+	agentID := flags.String("agent", "", "agent id from the configuration (required when creating a session)")
 	sessionID := flags.String("session", "", "attach existing session")
-	flags.Var(&tags, "tag", "agent profile/tag (repeatable)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -243,11 +239,14 @@ func runChat(args []string) error {
 	}
 	id := *sessionID
 	if id == "" {
+		if strings.TrimSpace(*agentID) == "" {
+			return errors.New("--agent is required when creating a session")
+		}
 		absolute, err := filepath.Abs(*cwd)
 		if err != nil {
 			return err
 		}
-		value, err := apiClient.CreateSession(*title, absolute, *agentID, tags)
+		value, err := apiClient.CreateSession(*title, absolute, *agentID)
 		if err != nil {
 			return err
 		}
@@ -417,19 +416,17 @@ func runSessionApprove(args []string) error {
 
 func runSessionCreate(args []string) error {
 	flags := flag.NewFlagSet("session create", flag.ContinueOnError)
-	var tags stringList
 	title := flags.String("title", "", "session title")
 	cwd := flags.String("cwd", ".", "working directory")
-	agentID := flags.String("agent", "", "explicit agent id")
-	flags.Var(&tags, "tag", "agent routing tag (repeatable)")
+	agentID := flags.String("agent", "", "agent id from the configuration (required)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: agenthub session create [--cwd .] [--title title] [--agent id | --tag tag...]")
+		return errors.New("usage: agenthub session create [--cwd .] [--title title] --agent <id>")
 	}
-	if *agentID != "" && len(tags) > 0 {
-		return errors.New("--agent and --tag are mutually exclusive")
+	if strings.TrimSpace(*agentID) == "" {
+		return errors.New("--agent is required: sessions always run with an explicit agent")
 	}
 	absoluteCwd, err := filepath.Abs(*cwd)
 	if err != nil {
@@ -439,7 +436,7 @@ func runSessionCreate(args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := apiClient.CreateSession(*title, absoluteCwd, *agentID, tags)
+	value, err := apiClient.CreateSession(*title, absoluteCwd, *agentID)
 	if err != nil {
 		return err
 	}
@@ -509,19 +506,4 @@ func printJSON(value any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
-}
-
-type stringList []string
-
-func (s *stringList) String() string {
-	return strings.Join(*s, ",")
-}
-
-func (s *stringList) Set(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return errors.New("tag cannot be empty")
-	}
-	*s = append(*s, value)
-	return nil
 }

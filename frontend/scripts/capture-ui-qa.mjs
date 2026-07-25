@@ -68,37 +68,29 @@ await desktop.getByRole("button", { name: "Agents" }).click();
 await desktop.getByRole("button", { name: /Codex Main Codex/ }).click();
 await shot(desktop, "04-settings-agents");
 
-await desktop.getByRole("button", { name: "Profiles" }).click();
-await desktop.getByLabel("Profile 1 key").waitFor();
-await shot(desktop, "05-settings-profiles");
-
-await desktop.getByRole("button", { name: "General" }).click();
-await desktop.getByText("Default chat agent").waitFor();
-await shot(desktop, "06-settings-general");
-
-// Validation error surfaced by Save all (duplicate profile key).
-await desktop.getByRole("button", { name: "Profiles" }).click();
-const keyInput = desktop.getByLabel("Profile 1 key");
-await keyInput.fill("REVIEW ");
+// Validation error surfaced by Save all (empty agent ID).
+const idInput = desktop.locator("#settings-agent-0-id");
+const originalId = await idInput.inputValue();
+await idInput.fill("");
 await desktop.getByRole("button", { name: "Save all" }).click();
-await desktop.getByText(/Profile key "review" is already used/).waitFor();
-await shot(desktop, "07-settings-validation-error");
+await desktop.getByText("Agent ID is required").waitFor();
+await shot(desktop, "05-settings-validation-error");
 
-// Fix the key, make a real change, save, and confirm the Saved state.
-await keyInput.fill("fast");
-await desktop.getByLabel("Profile 1 description").fill(`Fast everyday tasks (QA run ${Date.now() % 100000})`);
+// Restore the ID, make a real change, save, and confirm the Saved state.
+await idInput.fill(originalId);
+await desktop.locator("#settings-agent-0-name").fill(`Codex Main (QA run ${Date.now() % 100000})`);
 await desktop.getByRole("button", { name: "Save all" }).click();
 await desktop.getByText("Saved", { exact: true }).waitFor();
-await shot(desktop, "08-settings-saved");
+await shot(desktop, "06-settings-saved");
 
 // Unsaved-close confirmation (native dialog text is recorded, not shown).
-await desktop.getByLabel("Profile 1 description").fill("Unsaved edit");
+await desktop.locator("#settings-agent-0-name").fill("Unsaved edit");
 await desktop.keyboard.press("Escape");
 await desktop.waitForTimeout(300);
 
 // Back to the main UI after closing settings.
 await desktop.getByRole("button", { name: "Close settings" }).click();
-await shot(desktop, "09-desktop-after-settings");
+await shot(desktop, "07-desktop-after-settings");
 await desktop.close();
 
 // Narrow viewport: the sidebar starts hidden and overlays the workspace when
@@ -118,9 +110,9 @@ await narrow.getByRole("dialog").waitFor();
 await narrow.getByRole("button", { name: "Providers" }).waitFor();
 await shot(narrow, "12-narrow-settings-providers");
 
-await narrow.getByRole("button", { name: "Profiles" }).click();
-await narrow.getByLabel("Profile 1 key").waitFor();
-await shot(narrow, "13-narrow-settings-profiles");
+await narrow.getByRole("button", { name: "Agents" }).click();
+await narrow.locator(".settings-card-toggle").first().waitFor();
+await shot(narrow, "13-narrow-settings-agents");
 await narrow.close();
 
 await browser.close();

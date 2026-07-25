@@ -410,17 +410,6 @@ select {
   line-height: 1.55;
 }
 
-.settings-note {
-  margin-bottom: 14px;
-  padding: 11px 13px;
-  border: 1px solid #bcd8d5;
-  border-radius: 7px;
-  color: #0b5a54;
-  background: #f2f9f8;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
 .settings-empty {
   margin-bottom: 14px;
   padding: 18px;
@@ -516,11 +505,6 @@ select {
   margin-top: 14px;
 }
 
-.settings-grid-single {
-  grid-template-columns: minmax(0, 1fr);
-  max-width: 440px;
-}
-
 .settings-field {
   display: flex;
   flex-direction: column;
@@ -602,53 +586,6 @@ select {
 .settings-add-card:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.settings-table {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.settings-table-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) 34px;
-  align-items: start;
-  gap: 10px;
-}
-
-.settings-table-head {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.settings-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 26px;
-  margin: 18px 0 0;
-  padding: 13px 16px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-}
-
-.settings-meta div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.settings-meta dt {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.settings-meta dd {
-  margin: 0;
-  font-size: 13px;
 }
 
 .settings-savebar {
@@ -783,14 +720,6 @@ select {
 
   .settings-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .settings-table-head {
-    display: none;
-  }
-
-  .settings-panel {
-    padding: 16px;
   }
 
   .settings-savebar {

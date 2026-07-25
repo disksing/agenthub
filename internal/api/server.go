@@ -141,11 +141,9 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 	}
 	cfg := s.runtime.Config()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"defaultChatAgentId": cfg.DefaultChatAgentID,
-		"providers":          cfg.AgentProviders,
-		"agents":             cfg.Agents,
-		"profiles":           cfg.AgentProfiles,
-		"probes":             cfg.Probes(),
+		"providers": cfg.AgentProviders,
+		"agents":    cfg.Agents,
+		"probes":    cfg.Probes(),
 	})
 }
 
@@ -170,12 +168,9 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title    string `json:"title"`
-		Cwd      string `json:"cwd"`
-		AgentID  string `json:"agentId"`
-		Selector struct {
-			Tags []string `json:"tags"`
-		} `json:"selector"`
+		Title          string `json:"title"`
+		Cwd            string `json:"cwd"`
+		AgentID        string `json:"agentId"`
 		InitialMessage *struct {
 			Text string `json:"text"`
 		} `json:"initialMessage"`
@@ -184,23 +179,26 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
+	agentID := strings.TrimSpace(body.AgentID)
+	if agentID == "" {
+		writeAPIError(w, http.StatusUnprocessableEntity, "agent_required", "agentId is required: sessions are always created with an explicit agent", nil)
+		return
+	}
+	if s.runtime != nil {
+		if _, _, err := s.runtime.Config().Agent(agentID); err != nil {
+			writeAPIError(w, http.StatusUnprocessableEntity, "invalid_agent", err.Error(), nil)
+			return
+		}
+	}
 	cwd, err := canonicalDirectory(body.Cwd)
 	if err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_cwd", err.Error(), nil)
 		return
 	}
-	mode := "auto"
-	if strings.TrimSpace(body.AgentID) != "" {
-		mode = "explicit"
-	}
 	value, err := s.store.Create(session.CreateInput{
 		Title:   strings.TrimSpace(body.Title),
 		Cwd:     cwd,
-		AgentID: strings.TrimSpace(body.AgentID),
-		Selection: session.Selection{
-			Mode:          mode,
-			RequestedTags: cleanStrings(body.Selector.Tags),
-		},
+		AgentID: agentID,
 	})
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "session_create_failed", err.Error(), nil)
@@ -555,20 +553,6 @@ func sameOrigin(origin, host string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "http") && strings.EqualFold(parsed.Host, host)
-}
-
-func cleanStrings(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]bool)
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		result = append(result, value)
-	}
-	return result
 }
 
 func spaHandler(root string) http.Handler {

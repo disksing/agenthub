@@ -4,14 +4,10 @@ import { api } from "../api";
 import { buildPayload, createDraft, isDirty, normalizeConfig, validateDraft } from "./configModel";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { AgentsPanel } from "./AgentsPanel";
-import { ProfilesPanel } from "./ProfilesPanel";
-import { GeneralPanel } from "./GeneralPanel";
 
 const SECTIONS = [
   { id: "providers", label: "Providers" },
   { id: "agents", label: "Agents" },
-  { id: "profiles", label: "Profiles" },
-  { id: "general", label: "General" },
 ];
 
 // The draft only contains JSON-safe data (all of it produced by
@@ -94,12 +90,6 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     });
   }, []);
 
-  const replace = useCallback((nextDraft) => {
-    setSaveError("");
-    setSavedOk(false);
-    setDraft(nextDraft);
-  }, []);
-
   const save = async (force = false) => {
     if (saving || !draft) return;
     if (errors.length) {
@@ -157,7 +147,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
         <header className="settings-dialog-header">
           <div>
             <h2 id="settings-dialog-title">Settings</h2>
-            <p>Configure providers, agents, profile routing, and default behavior. Changes take effect when saved.</p>
+            <p>Configure providers and agents. Changes take effect when saved.</p>
           </div>
           <button className="icon-button" aria-label="Close settings" onClick={requestClose}>
             <X size={19} />
@@ -193,16 +183,10 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
             <div className="settings-content">
               <div className="settings-panel">
                 {section === "providers" ? (
-                  <ProvidersPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} replace={replace} />
+                  <ProvidersPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} />
                 ) : null}
                 {section === "agents" ? (
-                  <AgentsPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} replace={replace} />
-                ) : null}
-                {section === "profiles" ? (
-                  <ProfilesPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} replace={replace} />
-                ) : null}
-                {section === "general" ? (
-                  <GeneralPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} replace={replace} />
+                  <AgentsPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} />
                 ) : null}
               </div>
               <footer className="settings-savebar">

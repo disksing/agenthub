@@ -197,11 +197,11 @@ func (m *Manager) ensure(id string) (*active, error) {
 		return nil, err
 	}
 	cfg := cloneConfig(m.cfg)
-	explicitAgent := ""
-	if value.Selection.Mode == "explicit" {
-		explicitAgent = value.AgentID
+	if value.AgentID == "" {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("session %s has no agent: it was created before explicit agent selection and cannot be started; create a new session with an explicit agent", id)
 	}
-	agent, providerConfig, reason, err := cfg.Route(explicitAgent, value.Selection.RequestedTags)
+	agent, providerConfig, err := cfg.Agent(value.AgentID)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
@@ -211,14 +211,8 @@ func (m *Manager) ensure(id string) (*active, error) {
 		ID: id, Cwd: value.Cwd, Title: value.Title, Agent: agent, Provider: providerConfig,
 		Hooks: provider.Hooks{
 			NativeID: func(nativeID string) {
-				current, getErr := m.store.Get(id)
-				if getErr != nil {
-					return
-				}
-				selection := current.Selection
-				selection.Reason = reason
 				_, _ = m.store.Append(id, "session.provider", "", marshal(session.ProviderEventData{
-					AgentID: agent.ID, Provider: providerConfig.Type, ProviderSessionID: nativeID, Selection: selection,
+					AgentID: agent.ID, Provider: providerConfig.Type, ProviderSessionID: nativeID,
 				}))
 			},
 			Event: func(event provider.Event) { m.providerEvent(id, run, event) },

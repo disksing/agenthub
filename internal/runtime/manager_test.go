@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -34,25 +35,31 @@ func (f *fakeSession) Interrupt() error          { return nil }
 func (f *fakeSession) Approve(_, _ string) error { return nil }
 func (f *fakeSession) Close() error              { return nil }
 
-func TestManagerRoutesRunsPersistsAndResumes(t *testing.T) {
+func testConfig() config.Config {
+	return config.Config{
+		Version:        1,
+		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true}},
+		Agents:         []config.Agent{{ID: "slow", ProviderID: "provider"}, {ID: "fast-agent", ProviderID: "provider"}},
+	}
+}
+
+func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	root := t.TempDir()
 	store, err := session.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{
-		Version: 1, DefaultChatAgentID: "slow",
-		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true}},
-		Agents:         []config.Agent{{ID: "slow", ProviderID: "provider"}, {ID: "fast-agent", ProviderID: "provider"}},
-		AgentProfiles:  []config.Profile{{Key: "fast", AgentID: "fast-agent"}},
-	}
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), Selection: session.Selection{Mode: "auto", RequestedTags: []string{"fast"}}})
+	cfg := testConfig()
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentID: "fast-agent"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := New(store, cfg)
 	var created []*fakeSession
 	manager.factory = func(options provider.Options) (provider.Session, error) {
+		if options.Agent.ID != "fast-agent" || options.Provider.ID != "provider" {
+			t.Errorf("factory received wrong agent/provider: %+v %+v", options.Agent, options.Provider)
+		}
 		value := &fakeSession{hooks: options.Hooks}
 		created = append(created, value)
 		return value, nil
@@ -93,6 +100,45 @@ func TestManagerRoutesRunsPersistsAndResumes(t *testing.T) {
 	}
 	if second.resumeID != "native-session" {
 		t.Fatalf("resume id = %q", second.resumeID)
+	}
+}
+
+func TestManagerRejectsUnknownAgent(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentID: "ghost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "unknown agent") {
+		t.Fatalf("expected an unknown agent error, got %v", err)
+	}
+}
+
+// Sessions created before explicit agent selection (auto routing) and never
+// started have no determinable agent. They must fail clearly instead of being
+// guessed onto some configured agent.
+func TestManagerRejectsLegacySessionWithoutAgent(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "no agent") {
+		t.Fatalf("expected a clear missing-agent error, got %v", err)
 	}
 }
 

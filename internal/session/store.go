@@ -71,20 +71,12 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 	if input.Title == "" {
 		input.Title = "New Session"
 	}
-	if input.Selection.Mode == "" {
-		if input.AgentID != "" {
-			input.Selection.Mode = "explicit"
-		} else {
-			input.Selection.Mode = "auto"
-		}
-	}
 	value := Session{
 		ID:        id,
 		Title:     input.Title,
 		Cwd:       input.Cwd,
 		AgentID:   input.AgentID,
 		State:     StateReady,
-		Selection: input.Selection,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -279,7 +271,6 @@ func applyEvent(projected *Session, event Event) error {
 		projected.AgentID = data.AgentID
 		projected.Provider = data.Provider
 		projected.ProviderSessionID = data.ProviderSessionID
-		projected.Selection = data.Selection
 	case "session.archived":
 		projected.State = StateArchived
 	case "turn.started":
@@ -470,7 +461,6 @@ func (s *Store) eventsPath(id string) string {
 }
 
 func cloneSession(value Session) Session {
-	value.Selection.RequestedTags = append([]string(nil), value.Selection.RequestedTags...)
 	value.PendingApprovalIDs = append([]string(nil), value.PendingApprovalIDs...)
 	return value
 }

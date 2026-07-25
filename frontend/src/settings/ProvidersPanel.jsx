@@ -18,11 +18,7 @@ function probePill(provider, probe) {
 
 function describeProviderRefs(draft, providerId) {
   const refs = providerReferences(draft, providerId);
-  const parts = [];
-  if (refs.agents.length) parts.push(`agents using it: ${refs.agents.join(", ")}`);
-  if (refs.isDefault) parts.push("one of them is the default chat agent");
-  if (refs.profiles.length) parts.push(`profiles referencing it indirectly: ${refs.profiles.join(", ")}`);
-  return parts.join("; ");
+  return `agents using it: ${refs.agents.join(", ")}`;
 }
 
 export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
@@ -34,18 +30,6 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
     mutate((next) => {
       Object.assign(next.agentProviders[index], patch);
     });
-  };
-
-  const toggleEnabled = (index, enabled) => {
-    const provider = draft.agentProviders[index];
-    if (!enabled) {
-      const refs = providerReferences(draft, provider.id);
-      if (refs.isDefault || refs.profiles.length) {
-        setNotice(`Cannot disable provider "${provider.name || provider.id}": ${describeProviderRefs(draft, provider.id)}. Update the references in Agents, Profiles, or General first.`);
-        return;
-      }
-    }
-    updateProvider(index, { enabled });
   };
 
   const removeProvider = (index) => {
@@ -141,7 +125,7 @@ export function ProvidersPanel({ draft, probes, errors, showErrors, mutate }) {
                   id={`${base}-enabled`}
                   type="checkbox"
                   checked={provider.enabled}
-                  onChange={(event) => toggleEnabled(index, event.target.checked)}
+                  onChange={(event) => updateProvider(index, { enabled: event.target.checked })}
                 />
                 <span>Enable this provider</span>
               </label>

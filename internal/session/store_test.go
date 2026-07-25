@@ -2,9 +2,11 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStorePersistsOneContinuousEventLog(t *testing.T) {
@@ -17,9 +19,6 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 		Title:   "Fix login",
 		Cwd:     t.TempDir(),
 		AgentID: "codex-build",
-		Selection: Selection{
-			Mode: "explicit",
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,13 +178,12 @@ func TestProviderMappingIsProjectedAndRebuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := store.Create(CreateInput{Title: "Mapped", Cwd: t.TempDir(), Selection: Selection{Mode: "auto", RequestedTags: []string{"fast"}}})
+	created, err := store.Create(CreateInput{Title: "Mapped", Cwd: t.TempDir(), AgentID: "codex-fast"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	data := ProviderEventData{
 		AgentID: "codex-fast", Provider: "codex", ProviderSessionID: "native-1",
-		Selection: Selection{Mode: "auto", RequestedTags: []string{"fast"}, Reason: "matched profile fast"},
 	}
 	if _, err := store.Append(created.ID, "session.provider", "", mustJSON(t, data)); err != nil {
 		t.Fatal(err)
@@ -198,8 +196,54 @@ func TestProviderMappingIsProjectedAndRebuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.AgentID != "codex-fast" || value.ProviderSessionID != "native-1" || value.Selection.Reason != "matched profile fast" {
+	if value.AgentID != "codex-fast" || value.ProviderSessionID != "native-1" {
 		t.Fatalf("unexpected projection: %+v", value)
+	}
+}
+
+// Events written by the profile-routing era carry selection objects inside
+// session.created and session.provider payloads. Replaying them must keep
+// working: unknown fields are ignored and the agent mapping recorded by the
+// session.provider event is preserved, so the session stays resumable.
+func TestLegacySelectionEventsStillReplay(t *testing.T) {
+	root := t.TempDir()
+	id := "ses_legacy"
+	dir := filepath.Join(root, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	created, err := json.Marshal(map[string]any{
+		"id": id, "title": "Legacy", "cwd": t.TempDir(), "state": StateReady,
+		"selection":   map[string]any{"mode": "auto", "requestedTags": []string{"fast"}},
+		"lastEventId": 1, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := json.Marshal(map[string]any{
+		"agentId": "codex-fast", "provider": "codex", "providerSessionId": "native-9",
+		"selection": map[string]any{"mode": "auto", "requestedTags": []string{"fast"}, "reason": "matched profile fast"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := ""
+	log += fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 1, Time: time.Now().UTC(), Type: "session.created", SessionID: id, Data: created}))
+	log += fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 2, Time: time.Now().UTC(), Type: "session.provider", SessionID: id, Data: provider}))
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.AgentID != "codex-fast" || value.Provider != "codex" || value.ProviderSessionID != "native-9" {
+		t.Fatalf("legacy agent mapping was not preserved: %+v", value)
 	}
 }
 

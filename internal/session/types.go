@@ -15,12 +15,6 @@ const (
 	StateArchived        = "archived"
 )
 
-type Selection struct {
-	Mode          string   `json:"mode"`
-	RequestedTags []string `json:"requestedTags,omitempty"`
-	Reason        string   `json:"reason,omitempty"`
-}
-
 type Session struct {
 	ID                 string    `json:"id"`
 	Title              string    `json:"title"`
@@ -29,7 +23,6 @@ type Session struct {
 	Provider           string    `json:"provider,omitempty"`
 	ProviderSessionID  string    `json:"providerSessionId,omitempty"`
 	State              string    `json:"state"`
-	Selection          Selection `json:"selection"`
 	CurrentTurnID      string    `json:"currentTurnId,omitempty"`
 	PendingApprovalIDs []string  `json:"pendingApprovalIds,omitempty"`
 	LastEventID        int64     `json:"lastEventId"`
@@ -47,10 +40,9 @@ type Event struct {
 }
 
 type CreateInput struct {
-	Title     string
-	Cwd       string
-	AgentID   string
-	Selection Selection
+	Title   string
+	Cwd     string
+	AgentID string
 }
 
 type StateEventData struct {
@@ -62,8 +54,7 @@ type ApprovalEventData struct {
 }
 
 type ProviderEventData struct {
-	AgentID           string    `json:"agentId"`
-	Provider          string    `json:"provider"`
-	ProviderSessionID string    `json:"providerSessionId,omitempty"`
-	Selection         Selection `json:"selection"`
+	AgentID           string `json:"agentId"`
+	Provider          string `json:"provider"`
+	ProviderSessionID string `json:"providerSessionId,omitempty"`
 }

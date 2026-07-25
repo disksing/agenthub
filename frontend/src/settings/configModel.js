@@ -63,7 +63,8 @@ function cleanOptions(options) {
 
 // normalizeConfig deep-copies config from any source and normalizes it into a
 // fixed shape: missing arrays become empty, values become strings, blank
-// option keys and empty optional fields are dropped.
+// option keys and empty optional fields are dropped. Removed legacy fields
+// (agentProfiles, defaultChatAgentId) are tolerated in the input and dropped.
 export function normalizeConfig(config = {}) {
   const providers = (Array.isArray(config.agentProviders) ? config.agentProviders : []).map((provider) => {
     const result = {
@@ -86,24 +87,11 @@ export function normalizeConfig(config = {}) {
     if (Object.keys(options).length) result.options = options;
     return result;
   });
-  const profiles = (Array.isArray(config.agentProfiles) ? config.agentProfiles : []).map((profile) => {
-    const result = {
-      key: String(profile?.key ?? ""),
-      agentId: String(profile?.agentId ?? ""),
-    };
-    const description = String(profile?.description ?? "").trim();
-    if (description) result.description = description;
-    return result;
-  });
-  const result = {
+  return {
     version: Number(config.version) || 1,
     agentProviders: providers,
     agents,
-    agentProfiles: profiles,
   };
-  const defaultId = String(config.defaultChatAgentId ?? "").trim();
-  if (defaultId) result.defaultChatAgentId = defaultId;
-  return result;
 }
 
 // createDraft builds an editing draft (deep copy + normalization) from the
@@ -147,54 +135,14 @@ function providerMap(draft) {
   return new Map((draft.agentProviders || []).map((provider) => [provider.id, provider]));
 }
 
-function agentProviderEnabled(providers, agent) {
-  const provider = providers.get(agent.providerId);
-  return Boolean(provider && provider.enabled);
-}
-
-// agentReferences reports how an agent is referenced by the default chat agent
-// and by profiles.
-export function agentReferences(draft, agentId) {
-  const profiles = (draft.agentProfiles || []).filter((profile) => profile.agentId === agentId).map((profile) => profile.key);
-  return { isDefault: (draft.defaultChatAgentId || "") === agentId, profiles };
-}
-
-// providerReferences reports how a provider is referenced: the agents that use
-// it directly, plus the default-agent and profile references that go through
-// those agents.
+// providerReferences reports which agents use a provider directly.
 export function providerReferences(draft, providerId) {
-  const agents = (draft.agents || []).filter((agent) => agent.providerId === providerId).map((agent) => agent.id);
-  const profiles = [];
-  let isDefault = false;
-  for (const agentId of agents) {
-    const refs = agentReferences(draft, agentId);
-    if (refs.isDefault) isDefault = true;
-    profiles.push(...refs.profiles);
-  }
-  return { agents, isDefault, profiles: [...new Set(profiles)] };
-}
-
-// renameAgentId atomically renames an agent id and syncs the
-// defaultChatAgentId and profile references.
-export function renameAgentId(draft, oldId, newId) {
-  const next = normalizeConfig(draft);
-  for (const agent of next.agents) {
-    if (agent.id === oldId) agent.id = newId;
-  }
-  if (next.defaultChatAgentId === oldId) next.defaultChatAgentId = newId;
-  for (const profile of next.agentProfiles) {
-    if (profile.agentId === oldId) profile.agentId = newId;
-  }
-  return next;
-}
-
-export function normalizeProfileKey(key) {
-  return String(key ?? "").trim().toLowerCase();
+  return { agents: (draft.agents || []).filter((agent) => agent.providerId === providerId).map((agent) => agent.id) };
 }
 
 // validateDraft performs full client-side validation and returns structured
 // errors: { section, index, field, message },
-// section ∈ providers/agents/profiles/general.
+// section ∈ providers/agents.
 export function validateDraft(draft) {
   const errors = [];
   const push = (section, index, field, message) => errors.push({ section, index, field, message });
@@ -221,38 +169,6 @@ export function validateDraft(draft) {
     if (!agent.providerId.trim()) push("agents", index, "providerId", "Select a provider");
     else if (!providerById.has(agent.providerId)) {
       push("agents", index, "providerId", `Referenced provider "${agent.providerId}" does not exist`);
-    }
-  });
-
-  // An agent is usable when its provider exists and is enabled; indirect
-  // references broken by disabling or deleting a provider surface here.
-  const availableAgents = new Set(
-    agents.filter((agent) => agentProviderEnabled(providerById, agent)).map((agent) => agent.id),
-  );
-  const explainUnavailable = (agentId) => {
-    const agent = agents.find((item) => item.id === agentId);
-    if (!agent) return `agent "${agentId}" does not exist`;
-    const provider = providerById.get(agent.providerId);
-    if (!provider) return `the provider "${agent.providerId}" of agent "${agentId}" has been deleted`;
-    return `the provider "${provider.name || provider.id}" of agent "${agentId}" is disabled`;
-  };
-
-  if ((draft.defaultChatAgentId || "").trim()) {
-    if (!availableAgents.has(draft.defaultChatAgentId)) {
-      push("general", null, "defaultChatAgentId", `Default chat agent is unavailable: ${explainUnavailable(draft.defaultChatAgentId)}`);
-    }
-  }
-
-  const profiles = draft.agentProfiles || [];
-  const keys = new Set();
-  profiles.forEach((profile, index) => {
-    const key = normalizeProfileKey(profile.key);
-    if (!key) push("profiles", index, "key", "Profile key is required");
-    else if (keys.has(key)) push("profiles", index, "key", `Profile key "${key}" is already used (case and surrounding whitespace are ignored)`);
-    keys.add(key);
-    if (!String(profile.agentId ?? "").trim()) push("profiles", index, "agentId", "Select an agent");
-    else if (!availableAgents.has(profile.agentId)) {
-      push("profiles", index, "agentId", `Profile route is unavailable: ${explainUnavailable(profile.agentId)}`);
     }
   });
 

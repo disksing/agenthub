@@ -51,18 +51,15 @@ func (c *Client) Status() (map[string]any, error) {
 	return result, nil
 }
 
-func (c *Client) CreateSession(title, cwd, agentID string, tags []string) (session.Session, error) {
-	return c.CreateSessionWithMessage(title, cwd, agentID, tags, "")
+func (c *Client) CreateSession(title, cwd, agentID string) (session.Session, error) {
+	return c.CreateSessionWithMessage(title, cwd, agentID, "")
 }
 
-func (c *Client) CreateSessionWithMessage(title, cwd, agentID string, tags []string, message string) (session.Session, error) {
+func (c *Client) CreateSessionWithMessage(title, cwd, agentID, message string) (session.Session, error) {
 	body := map[string]any{
 		"title":   title,
 		"cwd":     cwd,
 		"agentId": agentID,
-		"selector": map[string]any{
-			"tags": tags,
-		},
 	}
 	if strings.TrimSpace(message) != "" {
 		body["initialMessage"] = map[string]any{"text": message}

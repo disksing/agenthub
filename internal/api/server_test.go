@@ -54,7 +54,7 @@ func TestHostGuardRejectsForeignHost(t *testing.T) {
 
 func TestMutationAcceptsSameOriginLANBrowser(t *testing.T) {
 	server, _ := newGuardedTestServer(t)
-	body, _ := json.Marshal(map[string]any{"title": "LAN", "cwd": t.TempDir()})
+	body, _ := json.Marshal(map[string]any{"title": "LAN", "cwd": t.TempDir(), "agentId": "agent"})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Host = "192.168.1.10:4646"
 	request.Header.Set("Content-Type", "application/json")
@@ -94,11 +94,9 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	defer server.Close()
 
 	body, _ := json.Marshal(map[string]any{
-		"title": "API session",
-		"cwd":   t.TempDir(),
-		"selector": map[string]any{
-			"tags": []string{"code", "build"},
-		},
+		"title":   "API session",
+		"cwd":     t.TempDir(),
+		"agentId": "agent",
 	})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -161,10 +159,9 @@ func newConfigTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	cfg := config.Config{
-		Version: 1, DefaultChatAgentID: "agent",
+		Version:        1,
 		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true, Command: "missing-test-command"}},
 		Agents:         []config.Agent{{ID: "agent", ProviderID: "provider"}},
-		AgentProfiles:  []config.Profile{{Key: "fast", AgentID: "agent"}},
 	}
 	manager := runtime.New(store, cfg)
 	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager, ConfigPath: filepath.Join(root, "config.json")}).Handler())
@@ -183,14 +180,58 @@ func TestAgentsAndConfigAPI(t *testing.T) {
 		t.Fatalf("unexpected status: %s", response.Status)
 	}
 	var body struct {
-		Profiles []config.Profile `json:"profiles"`
-		Probes   []config.Probe   `json:"probes"`
+		Agents []config.Agent `json:"agents"`
+		Probes []config.Probe `json:"probes"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Profiles) != 1 || len(body.Probes) != 1 || body.Probes[0].Available {
+	if len(body.Agents) != 1 || len(body.Probes) != 1 || body.Probes[0].Available {
 		t.Fatalf("unexpected response: %+v", body)
+	}
+}
+
+func TestCreateSessionRequiresExplicitAgent(t *testing.T) {
+	server := newConfigTestServer(t)
+	post := func(body string) (int, string) {
+		t.Helper()
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var parsed struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+			t.Fatal(err)
+		}
+		return response.StatusCode, parsed.Error.Code
+	}
+	cwd := t.TempDir()
+	cases := []struct {
+		name string
+		body string
+		want int
+		code string
+	}{
+		{"missing agentId", `{"cwd":"` + cwd + `"}`, http.StatusUnprocessableEntity, "agent_required"},
+		{"blank agentId", `{"cwd":"` + cwd + `","agentId":"  "}`, http.StatusUnprocessableEntity, "agent_required"},
+		{"unknown agent", `{"cwd":"` + cwd + `","agentId":"ghost"}`, http.StatusUnprocessableEntity, "invalid_agent"},
+		{"legacy selector field", `{"cwd":"` + cwd + `","agentId":"agent","selector":{"tags":["fast"]}}`, http.StatusBadRequest, "invalid_request"},
+	}
+	for _, item := range cases {
+		status, code := post(item.body)
+		if status != item.want || code != item.code {
+			t.Errorf("%s: status = %d, code = %q, want %d %s", item.name, status, code, item.want, item.code)
+		}
 	}
 }
 
@@ -221,7 +262,6 @@ func TestPutConfigRoundTrip(t *testing.T) {
 	server := newConfigTestServer(t)
 	updated := `{"config":{
 		"version": 1,
-		"defaultChatAgentId": "agent-b",
 		"agentProviders": [
 			{"id": "provider", "name": "Pi", "type": "pi", "enabled": true, "command": "missing-test-command"},
 			{"id": "second", "name": "Kimi", "type": "kimi", "enabled": false}
@@ -229,8 +269,7 @@ func TestPutConfigRoundTrip(t *testing.T) {
 		"agents": [
 			{"id": "agent", "name": "Pi Agent", "providerId": "provider"},
 			{"id": "agent-b", "name": "Pi Agent B", "providerId": "provider", "options": {"model": "m"}}
-		],
-		"agentProfiles": [{"key": "fast", "agentId": "agent-b", "description": "fast lane"}]
+		]
 	}}`
 	status, code := putConfig(t, server, updated)
 	if status != http.StatusOK || code != "" {
@@ -249,10 +288,10 @@ func TestPutConfigRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := configBody.Config
-	if cfg.DefaultChatAgentID != "agent-b" || len(cfg.AgentProviders) != 2 || len(cfg.Agents) != 2 || len(cfg.AgentProfiles) != 1 {
+	if len(cfg.AgentProviders) != 2 || len(cfg.Agents) != 2 {
 		t.Fatalf("unexpected config after save: %+v", cfg)
 	}
-	if cfg.Agents[1].Options["model"] != "m" || cfg.AgentProfiles[0].Description != "fast lane" {
+	if cfg.Agents[1].Options["model"] != "m" {
 		t.Fatalf("saved fields lost: %+v", cfg)
 	}
 
@@ -262,23 +301,36 @@ func TestPutConfigRoundTrip(t *testing.T) {
 	}
 	defer response.Body.Close()
 	var agentsBody struct {
-		DefaultChatAgentID string           `json:"defaultChatAgentId"`
-		Agents             []config.Agent   `json:"agents"`
-		Probes             []config.Probe   `json:"probes"`
-		Profiles           []config.Profile `json:"profiles"`
+		Agents []config.Agent `json:"agents"`
+		Probes []config.Probe `json:"probes"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&agentsBody); err != nil {
 		t.Fatal(err)
 	}
-	if agentsBody.DefaultChatAgentID != "agent-b" || len(agentsBody.Agents) != 2 {
+	if len(agentsBody.Agents) != 2 {
 		t.Fatalf("GET /v1/agents does not reflect saved config: %+v", agentsBody)
 	}
 	// Only enabled providers are probed; the disabled second one is absent.
 	if len(agentsBody.Probes) != 1 || agentsBody.Probes[0].ProviderID != "provider" {
 		t.Fatalf("unexpected probes after save: %+v", agentsBody.Probes)
 	}
-	if len(agentsBody.Profiles) != 1 || agentsBody.Profiles[0].AgentID != "agent-b" {
-		t.Fatalf("unexpected profiles after save: %+v", agentsBody.Profiles)
+}
+
+// Removed profile-routing fields are rejected by the strict config decoder,
+// so new writes can never reintroduce them through the API.
+func TestPutConfigRejectsRemovedProfileFields(t *testing.T) {
+	server := newConfigTestServer(t)
+	cases := map[string]string{
+		"agentProfiles": `{"config":{"agentProviders":[{"id":"p","type":"pi","enabled":true}],
+			"agentProfiles":[{"key":"fast","agentId":"a"}]}}`,
+		"defaultChatAgentId": `{"config":{"agentProviders":[{"id":"p","type":"pi","enabled":true}],
+			"defaultChatAgentId":"a"}}`,
+	}
+	for name, body := range cases {
+		status, code := putConfig(t, server, body)
+		if status != http.StatusBadRequest || code != "invalid_request" {
+			t.Errorf("%s: status = %d, code = %q, want 400 invalid_request", name, status, code)
+		}
 	}
 }
 
@@ -312,7 +364,7 @@ func TestPutConfigRejectsInvalidConfig(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&configBody); err != nil {
 		t.Fatal(err)
 	}
-	if configBody.Config.DefaultChatAgentID != "agent" || len(configBody.Config.Agents) != 1 {
+	if len(configBody.Config.Agents) != 1 {
 		t.Fatalf("config changed after rejected saves: %+v", configBody.Config)
 	}
 }
