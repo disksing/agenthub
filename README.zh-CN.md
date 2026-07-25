@@ -157,7 +157,7 @@ POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
 ```
 
-事件端点在普通请求下返回 JSON；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并支持 `Last-Event-ID`。
+事件端点在普通请求下返回 JSON；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并支持 `Last-Event-ID`。SSE 帧使用默认 message 通道（不带按类型命名的 `event:` 字段）；事件类型由 JSON 负载中的 `type` 字段承载，因此消费方能收到所有事件，包括它们尚不认识的新类型。
 
 ## 数据与安全
 
