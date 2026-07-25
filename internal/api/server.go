@@ -516,12 +516,17 @@ func parseEventCursor(r *http.Request) int64 {
 	return cursor
 }
 
+// writeSSE frames an event using the default SSE message channel instead of
+// a per-type `event:` field. The payload already carries the type, and a
+// single channel guarantees that consumers receive every event — including
+// event types they do not know about yet — instead of silently dropping
+// events their subscription list does not name.
 func writeSSE(w http.ResponseWriter, event session.Event) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.ID, event.Type, data)
+	_, err = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.ID, data)
 	return err
 }
 

@@ -420,6 +420,90 @@ func TestSSEReplaysFromCursor(t *testing.T) {
 	cancel()
 }
 
+// Every event — including types a consumer has never heard of — must arrive
+// on the default SSE message channel, so no event is silently dropped just
+// because the client did not subscribe to its type name.
+func TestSSEStreamsUnknownEventTypes(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Title: "SSE", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "provider.some.future.event", "", mustMarshal(t, map[string]any{"novel": true})); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/sessions/"+created.ID+"/events?stream=true", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	reader := bufio.NewReader(response.Body)
+	var frames []string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\n" {
+			if len(frames) > 0 {
+				break
+			}
+			continue
+		}
+		frames = append(frames, strings.TrimSuffix(line, "\n"))
+		if strings.HasPrefix(frames[len(frames)-1], "data: ") {
+			// The data line is the last line of a frame.
+			if _, err := reader.ReadString('\n'); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if len(frames) != 2 || frames[0] != "id: 1" || !strings.HasPrefix(frames[1], "data: ") {
+		t.Fatalf("unexpected SSE frame: %q", frames)
+	}
+	var event session.Event
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(frames[1], "data: ")), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "session.created" {
+		t.Fatalf("first replayed event type = %q, want session.created", event.Type)
+	}
+
+	// The custom event must also be framed without an `event:` name field.
+	frames = frames[:0]
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\n" {
+			break
+		}
+		frames = append(frames, strings.TrimSuffix(line, "\n"))
+	}
+	if len(frames) != 2 || frames[0] != "id: 2" || !strings.HasPrefix(frames[1], "data: ") {
+		t.Fatalf("unknown event frame must use the default message channel: %q", frames)
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(frames[1], "data: ")), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "provider.some.future.event" {
+		t.Fatalf("second event type = %q, want provider.some.future.event", event.Type)
+	}
+	cancel()
+}
+
 func mustMarshal(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)

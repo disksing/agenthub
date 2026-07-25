@@ -160,7 +160,7 @@ POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
 ```
 
-The events endpoint returns JSON for plain requests; with `Accept: text/event-stream` or `?stream=true` it returns SSE and supports `Last-Event-ID`.
+The events endpoint returns JSON for plain requests; with `Accept: text/event-stream` or `?stream=true` it returns SSE and supports `Last-Event-ID`. SSE frames use the default message channel (no per-type `event:` field); the JSON payload's `type` field carries the event type, so consumers receive every event — including types they do not know about yet.
 
 ## Data and Security
 
