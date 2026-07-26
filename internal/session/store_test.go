@@ -81,6 +81,77 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 	}
 }
 
+func TestStorePersistsLaunchEnvironmentThroughReplayWithPrivateFiles(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]string{"FORGE_SESSION_ID": "forge-session-one", "EMPTY": ""}
+	created, err := store.Create(CreateInput{
+		Title:             "Environment",
+		Cwd:               t.TempDir(),
+		AgentName:         "Codex",
+		LaunchEnvironment: input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The store owns a deep copy: callers cannot change persisted session
+	// state by retaining and mutating their request map.
+	input["FORGE_SESSION_ID"] = "mutated"
+	if created.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+		t.Fatalf("created environment was aliased: %+v", created.LaunchEnvironment)
+	}
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+		t.Fatalf("launch environment did not survive event replay: %+v", replayed)
+	}
+	replayed.LaunchEnvironment["FORGE_SESSION_ID"] = "caller-mutation"
+	unchanged, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+		t.Fatalf("Get returned an aliased launch environment: %+v", unchanged)
+	}
+
+	for _, name := range []string{"events.jsonl", "session.json"} {
+		info, err := os.Stat(filepath.Join(root, created.ID, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s permissions = %o, want 600", name, info.Mode().Perm())
+		}
+	}
+}
+
+func TestStoreRejectsInvalidLaunchEnvironment(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, environment := range []map[string]string{
+		{"": "value"},
+		{"BAD=NAME": "value"},
+		{"BAD\x00NAME": "value"},
+		{"NAME": "bad\x00value"},
+	} {
+		if _, err := store.Create(CreateInput{Cwd: t.TempDir(), LaunchEnvironment: environment}); err == nil {
+			t.Fatalf("accepted invalid environment: %#v", environment)
+		}
+	}
+}
+
 func TestStoreRepairsPartialTailAndRebuildsSnapshot(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)

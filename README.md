@@ -127,6 +127,12 @@ Renaming an agent is safe: when a config save replaces a name with exactly one o
 
 Codex agents accept the options `model`, `sandbox`, `approval`, and `reasoning_effort`. `reasoning_effort` controls the Codex reasoning ("thinking") effort: it is sent as the `model_reasoning_effort` config override on `thread/start` and `thread/resume`, and the daemon validates the value against the efforts the selected model advertises via `model/list` (for example `low`, `medium`, `high`, `xhigh`; some models add `max` and `ultra`). An unsupported value fails session creation with the list of valid values; an empty value inherits the Codex default.
 
+### Per-session launch environment
+
+`POST /v1/sessions` accepts an optional string map named `launchEnvironment`. It is merged over the daemon environment for that session's Provider process, so a session value wins when both define the same variable. Codex receives the merged process environment and each session entry as `shell_environment_policy.set.<KEY>` on both `thread/start` and `thread/resume`; ACP and Pi receive the merged process environment. The value is part of the durable `session.created` event, so it survives event replay, daemon restarts, and Provider resume without leaking into another concurrent session. Older sessions without the field continue to inherit the daemon environment unchanged.
+
+The map is deliberately persisted in the Session's `events.jsonl` and rebuildable `session.json`, and is returned by Session API responses. Do not put credentials or any other value in `launchEnvironment` that you do not want stored on disk. Session files remain private (`0600`), but that is not a substitute for secret storage.
+
 ### Model Enumeration
 
 Each built-in provider can report the models currently usable on this machine through its official interface — no provider session is created and nothing is written to provider configuration:

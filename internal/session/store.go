@@ -49,9 +49,9 @@ func validSessionID(id string) bool {
 }
 
 type sessionState struct {
-	mu       sync.Mutex
-	session  Session
-	events   []Event
+	mu      sync.Mutex
+	session Session
+	events  []Event
 	// archived reports whether the session directory lives under Archive/.
 	// It is the in-memory record of the physical location, which is the
 	// authoritative archive signal.
@@ -146,6 +146,9 @@ func (s *Store) archiveRoot() string {
 }
 
 func (s *Store) Create(input CreateInput) (Session, error) {
+	if err := ValidateLaunchEnvironment(input.LaunchEnvironment); err != nil {
+		return Session{}, err
+	}
 	now := time.Now().UTC()
 	id, err := NewID("ses")
 	if err != nil {
@@ -155,13 +158,14 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 		input.Title = "New Session"
 	}
 	value := Session{
-		ID:        id,
-		Title:     input.Title,
-		Cwd:       input.Cwd,
-		AgentName: input.AgentName,
-		State:     StateReady,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                id,
+		Title:             input.Title,
+		Cwd:               input.Cwd,
+		AgentName:         input.AgentName,
+		LaunchEnvironment: cloneEnvironment(input.LaunchEnvironment),
+		State:             StateReady,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	state := &sessionState{session: value}
 	dir := s.sessionDir(id)
@@ -653,7 +657,19 @@ func (s *Store) eventsPath(id string) string {
 
 func cloneSession(value Session) Session {
 	value.PendingApprovalIDs = append([]string(nil), value.PendingApprovalIDs...)
+	value.LaunchEnvironment = cloneEnvironment(value.LaunchEnvironment)
 	return value
+}
+
+func cloneEnvironment(value map[string]string) map[string]string {
+	if value == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(value))
+	for key, entry := range value {
+		cloned[key] = entry
+	}
+	return cloned
 }
 
 func cloneEvent(value Event) Event {

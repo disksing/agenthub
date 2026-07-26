@@ -61,7 +61,11 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := testConfig()
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	value, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Fast Agent",
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-session-resume"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +74,9 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	manager.factory = func(options provider.Options) (provider.Session, error) {
 		if options.Agent.Name != "Fast Agent" || options.Provider.ID != "provider" {
 			t.Errorf("factory received wrong agent/provider: %+v %+v", options.Agent, options.Provider)
+		}
+		if options.Environment["FORGE_SESSION_ID"] != "forge-session-resume" {
+			t.Errorf("factory environment = %+v", options.Environment)
 		}
 		value := &fakeSession{hooks: options.Hooks}
 		created = append(created, value)
@@ -103,6 +110,9 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	resumed := New(reopened, cfg)
 	var second *fakeSession
 	resumed.factory = func(options provider.Options) (provider.Session, error) {
+		if options.Environment["FORGE_SESSION_ID"] != "forge-session-resume" {
+			t.Errorf("resumed factory environment = %+v", options.Environment)
+		}
 		second = &fakeSession{hooks: options.Hooks}
 		return second, nil
 	}
@@ -111,6 +121,59 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	}
 	if second.resumeID != "native-session" {
 		t.Fatalf("resume id = %q", second.resumeID)
+	}
+}
+
+func TestManagerKeepsParallelSessionEnvironmentsIndependent(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Fast Agent",
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-one"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Fast Agent",
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-two"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	observed := make(map[string]string)
+	var observedMu sync.Mutex
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		observedMu.Lock()
+		observed[options.ID] = options.Environment["FORGE_SESSION_ID"]
+		observedMu.Unlock()
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+
+	var wait sync.WaitGroup
+	errorsByID := make(chan error, 2)
+	for _, id := range []string{first.ID, second.ID} {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := manager.Start(id)
+			errorsByID <- err
+		}()
+	}
+	wait.Wait()
+	close(errorsByID)
+	for err := range errorsByID {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if observed[first.ID] != "forge-one" || observed[second.ID] != "forge-two" {
+		t.Fatalf("parallel environments crossed: %+v", observed)
 	}
 }
 

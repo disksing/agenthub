@@ -29,11 +29,12 @@ func TestHelperProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	switch mode {
-	case "codex":
+	case "codex", "codex-session-environment":
 		for scanner.Scan() {
 			var request struct {
 				ID     json.RawMessage `json:"id"`
 				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
 			}
 			if json.Unmarshal(scanner.Bytes(), &request) != nil || request.Method == "" || len(request.ID) == 0 {
 				continue
@@ -42,9 +43,22 @@ func TestHelperProcess(t *testing.T) {
 			if request.Method == "model/list" {
 				result = json.RawMessage(`{"data":[{"id":"gpt-a","displayName":"GPT A","hidden":false,"isDefault":true},{"id":"gpt-b","displayName":"GPT B","hidden":false,"isDefault":false},{"id":"gpt-hidden","displayName":"GPT Hidden","hidden":true,"isDefault":false},{"id":"gpt-a","displayName":"GPT A dup","hidden":false,"isDefault":false}]}`)
 			}
+			if mode == "codex-session-environment" && (request.Method == "thread/start" || request.Method == "thread/resume") {
+				expected := os.Getenv("AGENTHUB_EXPECTED_LAUNCH_ENV")
+				var params struct {
+					Config map[string]any `json:"config"`
+				}
+				_ = json.Unmarshal(request.Params, &params)
+				if os.Getenv("AGENTHUB_PROCESS_ENV") != expected ||
+					params.Config["shell_environment_policy.set.AGENTHUB_PROCESS_ENV"] != expected {
+					fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"launch environment missing"}}`+"\n", request.ID)
+					continue
+				}
+				result, _ = json.Marshal(map[string]any{"thread": map[string]any{"id": expected}})
+			}
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", request.ID, result)
 		}
-	case "pi":
+	case "pi", "pi-session-environment":
 		for scanner.Scan() {
 			var request struct {
 				ID   json.RawMessage `json:"id"`
@@ -56,7 +70,14 @@ func TestHelperProcess(t *testing.T) {
 			var data json.RawMessage
 			switch request.Type {
 			case "get_state":
-				data = json.RawMessage(`{"model":{"provider":"xai","id":"grok-9"},"sessionId":"s1"}`)
+				sessionID := "s1"
+				if mode == "pi-session-environment" {
+					sessionID = os.Getenv("AGENTHUB_PROCESS_ENV")
+				}
+				data, _ = json.Marshal(map[string]any{
+					"model":     map[string]any{"provider": "xai", "id": "grok-9"},
+					"sessionId": sessionID,
+				})
 			case "get_available_models":
 				data = json.RawMessage(`{"models":[{"provider":"xai","id":"grok-9","name":"Grok 9"},{"provider":"kimi-coding","id":"k3","name":"Kimi K3"},{"provider":"xai","id":"grok-9","name":"Grok 9 dup"}]}`)
 			default:
@@ -64,7 +85,7 @@ func TestHelperProcess(t *testing.T) {
 			}
 			fmt.Printf(`{"id":%s,"type":"response","command":%q,"success":true,"data":%s}`+"\n", request.ID, request.Type, data)
 		}
-	case "acp", "acp-hang-session-new", "acp-init-error":
+	case "acp", "acp-session-environment", "acp-hang-session-new", "acp-init-error":
 		for scanner.Scan() {
 			var request struct {
 				ID     json.RawMessage `json:"id"`
@@ -87,7 +108,17 @@ func TestHelperProcess(t *testing.T) {
 			case "initialize":
 				result = json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{}}}`)
 			case "session/new":
-				result = json.RawMessage(`{"sessionId":"session-test","configOptions":[{"id":"model","category":"model","currentValue":"kimi-code/k3","options":[{"value":"kimi-code/k3"}]},{"id":"mode","category":"mode","currentValue":"yolo","options":[{"value":"yolo"}]}]}`)
+				sessionID := "session-test"
+				if mode == "acp-session-environment" {
+					sessionID = os.Getenv("AGENTHUB_PROCESS_ENV")
+				}
+				result, _ = json.Marshal(map[string]any{
+					"sessionId": sessionID,
+					"configOptions": []any{
+						map[string]any{"id": "model", "category": "model", "currentValue": "kimi-code/k3", "options": []any{map[string]any{"value": "kimi-code/k3"}}},
+						map[string]any{"id": "mode", "category": "mode", "currentValue": "yolo", "options": []any{map[string]any{"value": "yolo"}}},
+					},
+				})
 			default:
 				result = json.RawMessage(`{}`)
 			}

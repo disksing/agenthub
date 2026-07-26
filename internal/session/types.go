@@ -2,6 +2,9 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -16,18 +19,19 @@ const (
 )
 
 type Session struct {
-	ID                 string    `json:"id"`
-	Title              string    `json:"title"`
-	Cwd                string    `json:"cwd"`
-	AgentName          string    `json:"agentName,omitempty"`
-	Provider           string    `json:"provider,omitempty"`
-	ProviderSessionID  string    `json:"providerSessionId,omitempty"`
-	State              string    `json:"state"`
-	CurrentTurnID      string    `json:"currentTurnId,omitempty"`
-	PendingApprovalIDs []string  `json:"pendingApprovalIds,omitempty"`
-	LastEventID        int64     `json:"lastEventId"`
-	CreatedAt          time.Time `json:"createdAt"`
-	UpdatedAt          time.Time `json:"updatedAt"`
+	ID                 string            `json:"id"`
+	Title              string            `json:"title"`
+	Cwd                string            `json:"cwd"`
+	AgentName          string            `json:"agentName,omitempty"`
+	LaunchEnvironment  map[string]string `json:"launchEnvironment,omitempty"`
+	Provider           string            `json:"provider,omitempty"`
+	ProviderSessionID  string            `json:"providerSessionId,omitempty"`
+	State              string            `json:"state"`
+	CurrentTurnID      string            `json:"currentTurnId,omitempty"`
+	PendingApprovalIDs []string          `json:"pendingApprovalIds,omitempty"`
+	LastEventID        int64             `json:"lastEventId"`
+	CreatedAt          time.Time         `json:"createdAt"`
+	UpdatedAt          time.Time         `json:"updatedAt"`
 }
 
 type Event struct {
@@ -40,9 +44,28 @@ type Event struct {
 }
 
 type CreateInput struct {
-	Title     string
-	Cwd       string
-	AgentName string
+	Title             string
+	Cwd               string
+	AgentName         string
+	LaunchEnvironment map[string]string
+}
+
+// ValidateLaunchEnvironment checks values before they are persisted and
+// passed to an operating-system process. Environment variable names cannot
+// be empty or contain '=' or NUL, and values cannot contain NUL.
+func ValidateLaunchEnvironment(environment map[string]string) error {
+	for key, value := range environment {
+		if key == "" {
+			return errors.New("environment variable name cannot be empty")
+		}
+		if strings.ContainsAny(key, "=\x00") {
+			return fmt.Errorf("invalid environment variable name %q", key)
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("environment variable %q contains NUL", key)
+		}
+	}
+	return nil
 }
 
 type StateEventData struct {

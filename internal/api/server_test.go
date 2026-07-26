@@ -96,9 +96,10 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	defer server.Close()
 
 	body, _ := json.Marshal(map[string]any{
-		"title":     "API session",
-		"cwd":       t.TempDir(),
-		"agentName": "Agent",
+		"title":             "API session",
+		"cwd":               t.TempDir(),
+		"agentName":         "Agent",
+		"launchEnvironment": map[string]string{"FORGE_SESSION_ID": "forge-api"},
 	})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -119,6 +120,9 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	if created.Session.State != session.StateReady || created.Session.LastEventID != 1 {
 		t.Fatalf("unexpected session: %+v", created.Session)
 	}
+	if created.Session.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-api" {
+		t.Fatalf("launch environment was not persisted: %+v", created.Session)
+	}
 
 	response, err = http.Get(server.URL + "/v1/sessions/" + created.Session.ID + "/events")
 	if err != nil {
@@ -133,6 +137,41 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	}
 	if len(history.Events) != 1 || history.Events[0].Type != "session.created" {
 		t.Fatalf("unexpected history: %+v", history.Events)
+	}
+	if !bytes.Contains(history.Events[0].Data, []byte(`"launchEnvironment":{"FORGE_SESSION_ID":"forge-api"}`)) {
+		t.Fatalf("session.created did not persist launchEnvironment: %s", history.Events[0].Data)
+	}
+}
+
+func TestCreateSessionRejectsInvalidLaunchEnvironment(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+	body, _ := json.Marshal(map[string]any{
+		"cwd":               t.TempDir(),
+		"agentName":         "Agent",
+		"launchEnvironment": map[string]string{"BAD=NAME": "value"},
+	})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var parsed struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusUnprocessableEntity || parsed.Error.Code != "invalid_launch_environment" {
+		t.Fatalf("status = %d, code = %q", response.StatusCode, parsed.Error.Code)
 	}
 }
 

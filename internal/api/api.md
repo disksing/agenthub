@@ -82,6 +82,7 @@ A session object looks like:
   "title": "Fix the flaky test",
   "cwd": "/path/to/project",
   "agentName": "Codex",
+  "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
   "provider": "codex",
   "providerSessionId": "thread_abc123",
   "state": "ready",
@@ -95,8 +96,10 @@ A session object looks like:
 
 `state` is one of `starting`, `ready`, `busy`, `waiting_approval`,
 `stopped`, `failed` or `archived`. Optional fields (`agentName`, `provider`,
-`providerSessionId`, `currentTurnId`, `pendingApprovalIds`) are omitted when
-empty. `lastEventId` is the id of the newest event in the session log and
+`launchEnvironment`, `providerSessionId`, `currentTurnId`,
+`pendingApprovalIds`) are omitted when empty. `launchEnvironment` is durable
+session data and may be visible to any client that can read the session or
+its events. `lastEventId` is the id of the newest event in the session log and
 doubles as the resume cursor for the events endpoint.
 
 ### Agents and providers
@@ -351,6 +354,7 @@ turn before the response returns.
   "title": "Fix the flaky test",
   "cwd": "/path/to/project",
   "agentName": "Codex",
+  "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
   "initialMessage": {"text": "Reproduce the failure first."}
 }
 ```
@@ -362,6 +366,15 @@ turn before the response returns.
   - `cwd` (required) — working directory for the agent; must exist and be a
     directory (symlinks are resolved).
   - `title` (optional) — display title.
+  - `launchEnvironment` (optional) — string-to-string environment overrides
+    for this session's provider process. Session values override daemon
+    variables with the same name. Codex also receives every entry as a
+    `shell_environment_policy.set.<KEY>` config override on both
+    `thread/start` and `thread/resume`; ACP and Pi receive the merged process
+    environment. The map is stored in the durable `session.created` event and
+    remains in effect after event replay, daemon restart and provider resume.
+    **It is persisted in `events.jsonl` and `session.json` and returned by the
+    Session API, so never put a secret here unless you intend it to be stored.**
   - `initialMessage.text` (optional) — first user message; when non-empty
     the first turn starts immediately.
   - `agentId` (deprecated, do not use) — agent ids were removed in favor of
@@ -375,6 +388,8 @@ turn before the response returns.
   and `agentId`), `415 json_required`, `422 agent_required`,
   `422 invalid_agent` (unknown agent or disabled provider),
   `422 agent_id_removed` (unresolvable legacy id), `422 invalid_cwd`,
+  `422 invalid_launch_environment` (an environment name is empty or contains
+  `=`/NUL, or a value contains NUL),
   `500 session_create_failed`,
   `502 provider_start_failed` (the provider handshake failed; the response
   `details.sessionId` names the session kept for diagnostics in the `failed`
@@ -388,6 +403,7 @@ curl -s -X POST "$BASE/v1/sessions" \
     "title": "Fix the flaky test",
     "cwd": "/path/to/project",
     "agentName": "Codex",
+    "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
     "initialMessage": {"text": "Reproduce the failure first."}
   }'
 ```

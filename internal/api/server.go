@@ -448,8 +448,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		// compatibility window: the daemon resolves it through the id → name
 		// mapping recorded when the legacy configuration was migrated, and
 		// rejects ids it cannot map. New clients must use agentName.
-		AgentID        string `json:"agentId"`
-		InitialMessage *struct {
+		AgentID           string            `json:"agentId"`
+		LaunchEnvironment map[string]string `json:"launchEnvironment"`
+		InitialMessage    *struct {
 			Text string `json:"text"`
 		} `json:"initialMessage"`
 	}
@@ -492,6 +493,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_cwd", err.Error(), nil)
 		return
 	}
+	if err := session.ValidateLaunchEnvironment(body.LaunchEnvironment); err != nil {
+		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_launch_environment", err.Error(), nil)
+		return
+	}
 	// Persist the canonical configured name, not the spelling the client
 	// sent, so the session always records the user's display form.
 	canonicalName := agentName
@@ -499,9 +504,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		canonicalName = agent.Name
 	}
 	value, err := s.store.Create(session.CreateInput{
-		Title:     strings.TrimSpace(body.Title),
-		Cwd:       cwd,
-		AgentName: canonicalName,
+		Title:             strings.TrimSpace(body.Title),
+		Cwd:               cwd,
+		AgentName:         canonicalName,
+		LaunchEnvironment: body.LaunchEnvironment,
 	})
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "session_create_failed", err.Error(), nil)

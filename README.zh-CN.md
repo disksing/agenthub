@@ -129,6 +129,12 @@ Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provid
 
 Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` 中 `available: false` 并附原因），不会出现在新建 Session 的选择中；即使绕过 Web UI 直接调用 API，daemon 也会拒绝用这些 Agent 创建或恢复 Session。停用不会中断已经在运行的 Session，既有 Session 历史仍可查看。
 
+### Per-session 启动环境
+
+`POST /v1/sessions` 接受可选的字符串映射 `launchEnvironment`。它会覆盖 daemon 环境中的同名变量，并只传给该 Session 的 Provider 进程；Codex 还会在 `thread/start` 和 `thread/resume` 时把每项映射为 `shell_environment_policy.set.<KEY>`，ACP 和 Pi 使用合并后的进程环境。该字段存放在持久化的 `session.created` 事件中，因此 event replay、daemon 重启和 Provider resume 后仍然有效，并发 Session 之间不会串值；没有该字段的旧 Session 继续直接继承 daemon 环境。
+
+`launchEnvironment` 会明确写入 Session 的 `events.jsonl` 和可重建的 `session.json`，也会由 Session API 返回。不要放入任何不希望持久化的凭据或其他 secret。Session 文件继续使用 `0600` 权限，但文件权限不能替代专门的 secret 存储。
+
 ### 模型枚举
 
 每个内置 Provider 都可以通过各自的官方接口报告本机当前可用的模型——不创建 Provider Session，也不写入 Provider 配置：

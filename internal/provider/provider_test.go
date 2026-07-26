@@ -132,3 +132,67 @@ func TestPiTranslatesDeltaAndSettled(t *testing.T) {
 		t.Fatalf("unexpected events: %+v", events)
 	}
 }
+
+func TestCodexLaunchEnvironmentReachesProcessAndStartOrResumeConfig(t *testing.T) {
+	t.Setenv("AGENTHUB_PROCESS_ENV", "daemon-value")
+	t.Setenv("AGENTHUB_EXPECTED_LAUNCH_ENV", "session-value")
+	for _, resumeID := range []string{"", "thread-existing"} {
+		t.Run(map[bool]string{true: "resume", false: "start"}[resumeID != ""], func(t *testing.T) {
+			var nativeID string
+			value := newCodex(helperCLI(t, "codex-session-environment"), Options{
+				Cwd:         t.TempDir(),
+				Environment: map[string]string{"AGENTHUB_PROCESS_ENV": "session-value"},
+				Hooks: Hooks{
+					NativeID: func(id string) { nativeID = id },
+				},
+			})
+			if err := value.Start(resumeID); err != nil {
+				t.Fatalf("Start(%q): %v", resumeID, err)
+			}
+			if nativeID != "session-value" {
+				t.Fatalf("native id = %q, launch environment did not reach fake Codex", nativeID)
+			}
+			if err := value.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestACPLaunchEnvironmentOverridesDaemonEnvironment(t *testing.T) {
+	t.Setenv("AGENTHUB_PROCESS_ENV", "daemon-value")
+	var nativeID string
+	options := acpTestOptions(t, &nativeID)
+	options.Environment = map[string]string{"AGENTHUB_PROCESS_ENV": "acp-session-value"}
+	value := newACP(helperCLI(t, "acp-session-environment"), options)
+	if err := value.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	if nativeID != "acp-session-value" {
+		t.Fatalf("native id = %q, launch environment did not reach fake ACP", nativeID)
+	}
+	if err := value.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPiLaunchEnvironmentOverridesDaemonEnvironment(t *testing.T) {
+	t.Setenv("AGENTHUB_PROCESS_ENV", "daemon-value")
+	var nativeID string
+	value := newPi(helperCLI(t, "pi-session-environment"), Options{
+		Cwd:         t.TempDir(),
+		Environment: map[string]string{"AGENTHUB_PROCESS_ENV": "pi-session-value"},
+		Hooks: Hooks{
+			NativeID: func(id string) { nativeID = id },
+		},
+	})
+	if err := value.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	if nativeID != "pi-session-value" {
+		t.Fatalf("native id = %q, launch environment did not reach fake Pi", nativeID)
+	}
+	if err := value.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
