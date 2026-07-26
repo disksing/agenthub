@@ -92,6 +92,7 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
         const open = expanded.has(index);
         const summary = summarizeOptions(agent.options).join(" · ");
         const base = `settings-agent-${index}`;
+        const pillText = `${provider ? provider.name || provider.id : "Unknown provider"}${summary ? ` · ${summary}` : ""}`;
         return (
           <article className="settings-card" key={rowKeys.current[index]}>
             <div className="settings-card-head">
@@ -104,8 +105,8 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
                 {open ? <CaretDown size={16} /> : <CaretRight size={16} />}
                 <span className="settings-card-icon"><Robot size={19} /></span>
                 <strong>{agent.name || "Unnamed agent"}</strong>
-                <span className="settings-pill pill-muted">
-                  {provider ? provider.name || provider.id : "Unknown provider"}{summary ? ` · ${summary}` : ""}
+                <span className="settings-pill pill-muted" title={pillText}>
+                  <span className="settings-pill-text">{pillText}</span>
                 </span>
               </button>
               <button
