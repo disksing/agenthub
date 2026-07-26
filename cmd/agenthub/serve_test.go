@@ -17,12 +17,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/disksing/agenthub/internal/migrate"
+	hubpaths "github.com/disksing/agenthub/internal/paths"
 )
 
 // freePort reserves a loopback port that is very likely still free when the
@@ -101,19 +103,21 @@ func writeLegacySessionEvents(t *testing.T, dir, id string, provider bool) {
 func legacyHome(t *testing.T, active, archived []string) string {
 	t.Helper()
 	home := t.TempDir()
-	dataDir := filepath.Join(home, "Library", "Application Support", "agenthub")
+	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
+	dataDir := legacy.DataDir
 	for i, id := range active {
 		writeLegacySessionEvents(t, filepath.Join(dataDir, "sessions", id), id, i == 0)
 	}
 	for _, id := range archived {
 		writeLegacySession(t, filepath.Join(dataDir, "sessions", "Archive", id), id)
 	}
-	logsDir := filepath.Join(home, "Library", "Logs", "AgentHub")
-	if err := os.MkdirAll(logsDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logsDir, "stdout.log"), []byte("old log\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if legacy.LogsDir != "" {
+		if err := os.MkdirAll(legacy.LogsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(legacy.LogsDir, "stdout.log"), []byte("old log\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return home
 }
@@ -261,11 +265,14 @@ func TestServeMigratesLegacyLayoutIntoDotAgentHub(t *testing.T) {
 
 	// The legacy store is gone, the service log moved, and the journal
 	// recorded completion.
-	if _, err := os.Stat(filepath.Join(home, "Library", "Application Support", "agenthub")); !os.IsNotExist(err) {
+	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
+	if _, err := os.Stat(legacy.DataDir); !os.IsNotExist(err) {
 		t.Error("legacy data directory still exists")
 	}
-	if data, err := os.ReadFile(filepath.Join(root, "logs", "stdout.log")); err != nil || string(data) != "old log\n" {
-		t.Errorf("migrated log = %q, %v", data, err)
+	if legacy.LogsDir != "" {
+		if data, err := os.ReadFile(filepath.Join(root, "logs", "stdout.log")); err != nil || string(data) != "old log\n" {
+			t.Errorf("migrated log = %q, %v", data, err)
+		}
 	}
 	journal, err := os.ReadFile(filepath.Join(root, "migration.json"))
 	if err != nil {
@@ -305,8 +312,9 @@ func TestServeRefusesToStartOnMigrationConflict(t *testing.T) {
 		}
 	}
 	// Both sides are untouched.
+	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
 	for _, path := range []string{
-		filepath.Join(home, "Library", "Application Support", "agenthub", "sessions", "ses_old111"),
+		filepath.Join(legacy.DataDir, "sessions", "ses_old111"),
 		filepath.Join(home, ".agenthub", "sessions", "ses_new222"),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -405,7 +413,8 @@ func TestServeSkipsMigrationUnderAgentHubHome(t *testing.T) {
 		t.Fatalf("isolated sessions path = %v", paths["sessions"])
 	}
 	// The legacy layout under HOME is untouched.
-	if _, err := os.Stat(filepath.Join(home, "Library", "Application Support", "agenthub", "sessions", "ses_old111")); err != nil {
+	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
+	if _, err := os.Stat(filepath.Join(legacy.DataDir, "sessions", "ses_old111")); err != nil {
 		t.Error("legacy session moved despite AGENTHUB_HOME isolation")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".agenthub", "migration.json")); !os.IsNotExist(err) {
