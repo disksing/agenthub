@@ -1,16 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  CaretRight, Check, Copy, Gear, List, PaperPlaneTilt, Plus,
+  Archive, CaretRight, Check, ClockCounterClockwise, Copy, Gear, List, PaperPlaneTilt, Plus,
   SidebarSimple, Stop, X,
 } from "@phosphor-icons/react";
 import { api } from "./api";
+import { archiveDisabledReason, isArchived, isArchivable, sessionsQuery } from "./archive.js";
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
+import { ArchiveConfirmModal } from "./ArchiveConfirmModal.jsx";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
 
 export function App() {
   const [sessions, setSessions] = useState([]);
+  const [archivedSessions, setArchivedSessions] = useState([]);
+  const [archivedView, setArchivedView] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
+  const archiveTriggerRef = useRef(null);
   const [agents, setAgents] = useState([]);
   const [providers, setProviders] = useState([]);
   const [defaultAgentId, setDefaultAgentId] = useState("");
@@ -35,13 +43,30 @@ export function App() {
   const conversationRef = useRef(null);
   const nearBottomRef = useRef(true);
 
-  const activeSession = useMemo(() => sessions.find((item) => item.id === activeId), [sessions, activeId]);
+  // The active session may live in either list: archiving the session being
+  // viewed must not make it vanish from the workspace.
+  const activeSession = useMemo(
+    () => sessions.find((item) => item.id === activeId) || archivedSessions.find((item) => item.id === activeId),
+    [sessions, archivedSessions, activeId],
+  );
   const timeline = useMemo(() => buildTimeline(events), [events]);
 
   const refreshSessions = async () => {
-    const body = await api("/v1/sessions");
+    const body = await api(sessionsQuery(false));
     setSessions(body.sessions);
     setActiveId((current) => current || body.sessions[0]?.id || "");
+  };
+
+  const refreshArchivedSessions = async () => {
+    const body = await api(sessionsQuery(true));
+    setArchivedSessions(body.sessions || []);
+  };
+
+  const toggleArchivedView = () => {
+    setArchivedView((current) => {
+      if (!current) refreshArchivedSessions().catch((value) => setError(value.message));
+      return !current;
+    });
   };
 
   const loadAgents = async () => {
@@ -71,7 +96,12 @@ export function App() {
         source.onmessage = (message) => {
           const event = JSON.parse(message.data);
           setEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
-          if (/^(session|turn|approval)\./.test(event.type)) refreshSessions().catch(() => {});
+          if (/^(session|turn|approval)\./.test(event.type)) {
+            // Refreshing the default list drops freshly archived sessions, so
+            // realtime clients never keep ghost entries.
+            refreshSessions().catch(() => {});
+            if (event.type === "session.archived") refreshArchivedSessions().catch(() => {});
+          }
         };
         source.onerror = () => {};
       })
@@ -118,12 +148,35 @@ export function App() {
   };
 
   const stopSession = async () => {
-    if (!activeSession) return;
+    if (!activeSession || isArchived(activeSession)) return;
     try {
       const action = activeSession.currentTurnId ? "interrupt" : "stop";
       await api(`/v1/sessions/${activeSession.id}/${action}`, { method: "POST", body: "{}" });
       await refreshSessions();
     } catch (value) { setError(value.message); }
+  };
+
+  const openArchiveConfirm = () => {
+    if (!activeSession || !isArchivable(activeSession)) return;
+    setArchiveError("");
+    setArchiveTarget(activeSession);
+  };
+
+  const confirmArchive = async () => {
+    if (!archiveTarget || archiving) return;
+    setArchiving(true);
+    setArchiveError("");
+    try {
+      await api(`/v1/sessions/${archiveTarget.id}`, { method: "DELETE", body: "{}" });
+      setArchiveTarget(null);
+      // Refresh both lists: the session leaves the default list and appears
+      // in the archived view.
+      await Promise.all([refreshSessions(), refreshArchivedSessions()]);
+    } catch (value) {
+      setArchiveError(value.message || "Failed to archive the session");
+    } finally {
+      setArchiving(false);
+    }
   };
 
   const resolveApproval = async (approvalId, decision) => {
@@ -144,14 +197,25 @@ export function App() {
           >
             <Plus size={20} />New Session
           </button>
-          <div className="session-label">Recent Sessions</div>
-          <nav className="session-list" aria-label="Recent sessions">
-            {sessions.map((item) => (
+          <div className="session-label">{archivedView ? "Archived Sessions" : "Recent Sessions"}</div>
+          <nav className="session-list" aria-label={archivedView ? "Archived sessions" : "Recent sessions"}>
+            {(archivedView ? archivedSessions : sessions).map((item) => (
               <button key={item.id} className={`session-row ${item.id === activeId ? "active" : ""}`} onClick={() => { setActiveId(item.id); if (isNarrow()) setSidebarOpen(false); }}>
                 <span>{item.title}</span><time>{displayTime(item.updatedAt)}</time>
               </button>
             ))}
+            {archivedView && !archivedSessions.length && (
+              <p className="session-list-empty" role="status">No archived sessions yet.</p>
+            )}
           </nav>
+          <button
+            className="archive-view-link"
+            aria-pressed={archivedView}
+            onClick={toggleArchivedView}
+          >
+            {archivedView ? <ClockCounterClockwise size={19} /> : <Archive size={19} />}
+            {archivedView ? "Back to Recent Sessions" : "Archived Sessions"}
+          </button>
         </div>
         <button className="settings-link" ref={settingsTriggerRef} onClick={() => setSettingsOpen(true)}><Gear size={20} />Settings</button>
       </aside>
@@ -164,7 +228,7 @@ export function App() {
           </div>
           <div className="header-actions">
             <button className="icon-button mobile-sidebar-toggle" aria-label="Toggle session list" onClick={() => setSidebarOpen((value) => !value)}><List size={20} /></button>
-            {activeSession && <button className="icon-button" aria-label="Stop or interrupt session" title="Stop or interrupt" onClick={stopSession}><Stop size={19} /></button>}
+            {activeSession && !isArchived(activeSession) && <button className="icon-button" aria-label="Stop or interrupt session" title="Stop or interrupt" onClick={stopSession}><Stop size={19} /></button>}
             <button className="icon-button details-toggle" aria-label="Toggle details panel" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? <CaretRight size={18} /> : <SidebarSimple size={18} />}</button>
           </div>
         </header>
@@ -179,8 +243,8 @@ export function App() {
         </div>
 
         <div className="composer">
-          <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopped"} onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder="Type a message…" />
+          <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopped" || isArchived(activeSession)} onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder={isArchived(activeSession) ? "Archived sessions are read-only" : "Type a message…"} />
           <div className="composer-footer">
             <span className="composer-agent">{activeSession?.agentId || "Create a session to chat"}</span>
             <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession}><PaperPlaneTilt size={20} weight="fill" /></button>
@@ -197,6 +261,32 @@ export function App() {
           <button className="icon-button" aria-label="Copy session ID" title="Copy session ID" onClick={async () => { await navigator.clipboard?.writeText(activeSession?.id || ""); setCopied(true); setTimeout(() => setCopied(false), 1000); }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button>
         </div>
         <div className="detail-row"><div><span className="detail-label">Provider session ID</span><code>{activeSession?.providerSessionId || "—"}</code></div></div>
+        {activeSession && (
+          <div className="detail-row archive-row">
+            {isArchived(activeSession) ? (
+              <p className="archived-note">
+                <Archive size={16} />This session is archived and read-only. Its files live in{" "}
+                <code>sessions/Archive/{activeSession.id}/</code>.
+              </p>
+            ) : (
+              <>
+                <button
+                  className="settings-button archive-button"
+                  ref={archiveTriggerRef}
+                  onClick={openArchiveConfirm}
+                  disabled={!isArchivable(activeSession)}
+                  title={archiveDisabledReason(activeSession) || "Move this session to the archive"}
+                  aria-disabled={!isArchivable(activeSession)}
+                >
+                  <Archive size={17} />Archive Session
+                </button>
+                {!isArchivable(activeSession) && (
+                  <span className="archive-hint">{archiveDisabledReason(activeSession)}</span>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </aside>
 
       {settingsOpen && (
@@ -204,6 +294,17 @@ export function App() {
           triggerRef={settingsTriggerRef}
           onClose={() => setSettingsOpen(false)}
           onSaved={() => loadAgents().catch(() => {})}
+        />
+      )}
+
+      {archiveTarget && (
+        <ArchiveConfirmModal
+          session={archiveTarget}
+          submitting={archiving}
+          error={archiveError}
+          onConfirm={confirmArchive}
+          onClose={() => { if (!archiving) setArchiveTarget(null); }}
+          triggerRef={archiveTriggerRef}
         />
       )}
 

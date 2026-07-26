@@ -329,3 +329,34 @@ func TestAgentFlagIsRequired(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveHelpDocumentsFileMoveAndHiddenDefault(t *testing.T) {
+	output, err := captureHelp(t, func() error { return run([]string{"session", "archive", "--help"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"sessions/Archive/<session-id>", "hidden", "stopped", "idempotent"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("session archive help missing %q:\n%s", want, output)
+		}
+	}
+	output, err = captureHelp(t, func() error { return run([]string{"session", "list", "--help"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--archived", "--all", "hidden"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("session list help missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestSessionListRejectsAllAndArchived(t *testing.T) {
+	err := run([]string{"session", "list", "--all", "--archived"})
+	if err == nil {
+		t.Fatal("expected error combining --all and --archived")
+	}
+	if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

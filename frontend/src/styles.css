@@ -1638,3 +1638,99 @@ details[open] > summary > .note-chevron {
     margin-left: 0;
   }
 }
+
+/* Session archive */
+.archive-view-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 8px 4px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #555d5e;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.archive-view-link:hover {
+  background: #f1f4f3;
+}
+
+.archive-view-link[aria-pressed="true"] {
+  color: var(--teal);
+  font-weight: 600;
+}
+
+.session-list-empty {
+  margin: 6px 14px;
+  color: #7b8586;
+  font-size: 13px;
+}
+
+.confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 96vw);
+  max-height: min(720px, 92vh);
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 20px 70px rgb(0 0 0 / 20%);
+  outline: none;
+}
+
+.confirm-dialog :focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+
+.confirm-dialog-body {
+  padding: 14px 22px;
+  display: grid;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.confirm-dialog-body p {
+  margin: 0;
+}
+
+.confirm-dialog-body code,
+.archived-note code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #f1f4f3;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.archive-row {
+  display: grid;
+  gap: 8px;
+}
+
+.archive-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+}
+
+.archive-hint {
+  color: #7b8586;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.archived-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: #555d5e;
+  font-size: 13px;
+  line-height: 1.5;
+}

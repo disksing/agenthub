@@ -99,6 +99,9 @@ func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
 	if err != nil {
 		return session.Session{}, err
 	}
+	if value.State == session.StateArchived {
+		return session.Session{}, session.ErrArchived
+	}
 	current := value.CurrentTurnID
 	if current != "" && !steer {
 		return session.Session{}, errors.New("session already has an active turn; set steer=true or wait")
@@ -154,8 +157,24 @@ func (m *Manager) Stop(id string) error {
 	if run != nil {
 		_ = run.adapter.Close()
 	}
-	_, err := m.store.Append(id, "session.state", "", marshal(session.StateEventData{State: session.StateStopped}))
+	value, err := m.store.Get(id)
+	if err != nil {
+		return err
+	}
+	if value.State == session.StateArchived {
+		// Archived sessions are read-only; stopping is a no-op.
+		return nil
+	}
+	_, err = m.store.Append(id, "session.state", "", marshal(session.StateEventData{State: session.StateStopped}))
 	return err
+}
+
+// IsRunning reports whether the provider process for a session is
+// currently running under this daemon.
+func (m *Manager) IsRunning(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running[id] != nil
 }
 
 func (m *Manager) Approve(id, approvalID, decision string) error {
@@ -195,6 +214,10 @@ func (m *Manager) ensure(id string) (*active, error) {
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
+	}
+	if value.State == session.StateArchived {
+		m.mu.Unlock()
+		return nil, session.ErrArchived
 	}
 	cfg := cloneConfig(m.cfg)
 	if value.AgentID == "" {

@@ -93,6 +93,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		"uptimeSeconds": int64(time.Since(s.startedAt).Seconds()),
 		"sessionStore": map[string]any{
 			"path":         s.store.Root(),
+			"archivePath":  s.store.ArchiveRoot(),
 			"sessionCount": len(s.store.List(true)),
 		},
 		"runtime": s.runtimeStatus(),
@@ -148,8 +149,18 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
-	includeArchived := r.URL.Query().Get("includeArchived") == "true"
+	archivedOnly := r.URL.Query().Get("archived") == "true"
+	includeArchived := archivedOnly || r.URL.Query().Get("includeArchived") == "true"
 	values := s.store.List(includeArchived)
+	if archivedOnly {
+		filtered := values[:0]
+		for _, value := range values {
+			if value.State == session.StateArchived {
+				filtered = append(filtered, value)
+			}
+		}
+		values = filtered
+	}
 	if stateFilter := strings.TrimSpace(r.URL.Query().Get("state")); stateFilter != "" {
 		allowed := make(map[string]bool)
 		for _, state := range strings.Split(stateFilter, ",") {
@@ -268,6 +279,9 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) {
+	if s.rejectArchivedSession(w, id) {
+		return
+	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
@@ -289,6 +303,9 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 }
 
 func (s *Server) resumeSession(w http.ResponseWriter, id string) {
+	if s.rejectArchivedSession(w, id) {
+		return
+	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
@@ -302,6 +319,9 @@ func (s *Server) resumeSession(w http.ResponseWriter, id string) {
 }
 
 func (s *Server) interruptSession(w http.ResponseWriter, id string) {
+	if s.rejectArchivedSession(w, id) {
+		return
+	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
@@ -315,6 +335,9 @@ func (s *Server) interruptSession(w http.ResponseWriter, id string) {
 }
 
 func (s *Server) stopSession(w http.ResponseWriter, id string) {
+	if s.rejectArchivedSession(w, id) {
+		return
+	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
@@ -328,6 +351,9 @@ func (s *Server) stopSession(w http.ResponseWriter, id string) {
 }
 
 func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, id, approvalID string) {
+	if s.rejectArchivedSession(w, id) {
+		return
+	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
@@ -352,6 +378,10 @@ func (s *Server) writeRuntimeError(w http.ResponseWriter, err error) {
 		s.writeStoreError(w, err)
 		return
 	}
+	if errors.Is(err, session.ErrArchived) {
+		writeAPIError(w, http.StatusConflict, "session_archived", "session is archived and read-only", nil)
+		return
+	}
 	writeAPIError(w, http.StatusConflict, "runtime_operation_failed", err.Error(), nil)
 }
 
@@ -369,16 +399,43 @@ func (s *Server) archiveSession(w http.ResponseWriter, id string) {
 		s.writeStoreError(w, err)
 		return
 	}
-	if s.runtime != nil {
-		_ = s.runtime.Stop(id)
-	}
-	event, err := s.store.Append(id, "session.archived", "", nil)
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "session_archive_failed", err.Error(), nil)
+	if s.runtime != nil && s.runtime.IsRunning(id) {
+		writeAPIError(w, http.StatusConflict, "session_active", "the session provider is still running; stop the session before archiving it", nil)
 		return
 	}
-	value, _ := s.store.Get(id)
-	writeJSON(w, http.StatusOK, map[string]any{"session": value, "event": event})
+	value, err := s.store.Archive(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, session.ErrNotFound):
+			s.writeStoreError(w, err)
+		case errors.Is(err, session.ErrInvalidID):
+			writeAPIError(w, http.StatusBadRequest, "invalid_session_id", err.Error(), nil)
+		case errors.Is(err, session.ErrSessionActive):
+			writeAPIError(w, http.StatusConflict, "session_active", err.Error(), nil)
+		case errors.Is(err, session.ErrArchiveConflict):
+			writeAPIError(w, http.StatusConflict, "session_archive_conflict", err.Error(), nil)
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "session_archive_failed", err.Error(), nil)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": value})
+}
+
+// rejectArchivedSession writes 409 and reports true when the session is
+// archived. Archived sessions are read-only: turns, steer, resume,
+// interrupt and approval writes are rejected before reaching the runtime.
+func (s *Server) rejectArchivedSession(w http.ResponseWriter, id string) bool {
+	value, err := s.store.Get(id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return true
+	}
+	if value.State == session.StateArchived {
+		writeAPIError(w, http.StatusConflict, "session_archived", "session is archived and read-only", nil)
+		return true
+	}
+	return false
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {

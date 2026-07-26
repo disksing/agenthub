@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -145,4 +146,53 @@ func TestManagerRejectsLegacySessionWithoutAgent(t *testing.T) {
 func mustJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
+}
+
+func TestManagerTreatsArchivedSessionAsReadOnly(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentID: "fast-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+	if _, err := store.Archive(value.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if manager.IsRunning(value.ID) {
+		t.Fatal("archived session must not be running")
+	}
+	if _, err := manager.Send(value.ID, "hello", false); !errors.Is(err, session.ErrArchived) {
+		t.Fatalf("Send error = %v, want ErrArchived", err)
+	}
+	if _, err := manager.Start(value.ID); !errors.Is(err, session.ErrArchived) {
+		t.Fatalf("Start error = %v, want ErrArchived", err)
+	}
+	if err := manager.Interrupt(value.ID); err == nil {
+		t.Fatal("Interrupt on archived session must fail")
+	}
+	if err := manager.Approve(value.ID, "apr_1", "accept"); err == nil {
+		t.Fatal("Approve on archived session must fail")
+	}
+	// Stop stays a safe no-op and appends nothing.
+	before, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(value.ID); err != nil {
+		t.Fatalf("Stop on archived session = %v", err)
+	}
+	after, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LastEventID != before.LastEventID || after.State != session.StateArchived {
+		t.Fatalf("Stop mutated archived session: %+v", after)
+	}
 }

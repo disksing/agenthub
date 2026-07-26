@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -511,4 +512,212 @@ func mustMarshal(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func createTestSession(t *testing.T, server *httptest.Server) session.Session {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"title": "archive api", "cwd": t.TempDir(), "agentId": "agent"})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create status: %s", response.Status)
+	}
+	var created struct {
+		Session session.Session `json:"session"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	return created.Session
+}
+
+func listIDs(t *testing.T, server *httptest.Server, query string) map[string]string {
+	t.Helper()
+	response, err := http.Get(server.URL + "/v1/sessions" + query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var listed struct {
+		Sessions []session.Session `json:"sessions"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	result := make(map[string]string)
+	for _, value := range listed.Sessions {
+		result[value.ID] = value.State
+	}
+	return result
+}
+
+func deleteSession(t *testing.T, server *httptest.Server, id string) *http.Response {
+	t.Helper()
+	request, _ := http.NewRequest(http.MethodDelete, server.URL+"/v1/sessions/"+id, bytes.NewReader([]byte("{}")))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func TestArchiveEndpointMovesAndHidesSession(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+	created := createTestSession(t, server)
+
+	response := deleteSession(t, server, created.ID)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("archive status: %s", response.Status)
+	}
+	var archived struct {
+		Session session.Session `json:"session"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if archived.Session.State != session.StateArchived {
+		t.Fatalf("state = %q, want archived", archived.Session.State)
+	}
+
+	// The directory physically moved into Archive/.
+	if _, err := os.Stat(filepath.Join(root, created.ID)); !os.IsNotExist(err) {
+		t.Fatalf("active directory still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, session.ArchiveDirName, created.ID, "events.jsonl")); err != nil {
+		t.Fatalf("archived events missing: %v", err)
+	}
+
+	// Hidden by default, visible through the explicit archived view and the
+	// includeArchived flag.
+	if _, ok := listIDs(t, server, "")[created.ID]; ok {
+		t.Fatal("archived session appears in the default list")
+	}
+	if state := listIDs(t, server, "?archived=true")[created.ID]; state != session.StateArchived {
+		t.Fatalf("archived view state = %q", state)
+	}
+	if state := listIDs(t, server, "?includeArchived=true")[created.ID]; state != session.StateArchived {
+		t.Fatalf("includeArchived state = %q", state)
+	}
+
+	// Metadata and history stay readable.
+	response, err = http.Get(server.URL + "/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("get archived status: %s", response.Status)
+	}
+	response, err = http.Get(server.URL + "/v1/sessions/" + created.ID + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var history struct {
+		Events []session.Event `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	if history.Events[len(history.Events)-1].Type != "session.archived" {
+		t.Fatalf("last event = %q, want session.archived", history.Events[len(history.Events)-1].Type)
+	}
+
+	// Repeating the archive is idempotent.
+	response = deleteSession(t, server, created.ID)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("repeat archive status: %s", response.Status)
+	}
+}
+
+func TestArchiveEndpointErrors(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+
+	response := deleteSession(t, server, "ses_missing")
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing archive status: %s", response.Status)
+	}
+
+	// A busy session conflicts and keeps its directory.
+	created := createTestSession(t, server)
+	if _, err := store.Append(created.ID, "turn.started", "turn_open", nil); err != nil {
+		t.Fatal(err)
+	}
+	response = deleteSession(t, server, created.ID)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("active archive status: %s", response.Status)
+	}
+	var failure struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Error.Code != "session_active" {
+		t.Fatalf("error code = %q, want session_active", failure.Error.Code)
+	}
+	value, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != session.StateBusy {
+		t.Fatalf("state changed to %q after conflict", value.State)
+	}
+}
+
+func TestArchivedSessionRejectsWrites(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+	created := createTestSession(t, server)
+	response := deleteSession(t, server, created.ID)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("archive status: %s", response.Status)
+	}
+
+	for _, path := range []string{"messages", "resume", "interrupt", "stop", "approvals/apr_1"} {
+		request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions/"+created.ID+"/"+path, bytes.NewReader([]byte("{}")))
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failure struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(response.Body).Decode(&failure)
+		response.Body.Close()
+		if response.StatusCode != http.StatusConflict || failure.Error.Code != "session_archived" {
+			t.Fatalf("POST %s: status = %s code = %q, want 409 session_archived", path, response.Status, failure.Error.Code)
+		}
+	}
 }

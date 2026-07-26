@@ -80,6 +80,7 @@ agenthub chat --agent gpt-5-6-sol --cwd .
 agenthub session create --agent pi-kimi --title "bug hunt"
 agenthub session attach <session-id>
 agenthub session list
+agenthub session list --archived
 agenthub session show <session-id>
 agenthub session events <session-id>
 agenthub session resume <session-id>
@@ -161,6 +162,17 @@ GET    /v1/sessions/{id}/events
 
 事件端点在普通请求下返回 JSON；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并支持 `Last-Event-ID`。SSE 帧使用默认 message 通道（不带按类型命名的 `event:` 字段）；事件类型由 JSON 负载中的 `type` 字段承载，因此消费方能收到所有事件，包括它们尚不认识的新类型。
 
+### 归档 Session
+
+`DELETE /v1/sessions/{id}` 归档一个 Session：daemon 先追加一条持久化的 `session.archived` 事件，再把整个 Session 目录移动到 Session Store 的 `Archive/` 子目录（`sessions/Archive/<session-id>/`）。不删除任何数据——`session.json`、`events.jsonl` 和其他文件一起移动。
+
+- 只有非活动 Session 可以归档：没有正在启动/运行的 provider、没有未完成的 Turn、没有待处理的审批。端点不会强制停止 Session；请先调用 `POST /v1/sessions/{id}/stop`。
+- 状态码语义：`200` 归档成功（重复归档幂等成功）；`404` Session 不存在；`409 session_active` Session 仍有活动工作；`409 session_archive_conflict` 归档目标被占用；`500 session_archive_failed` 文件系统错误（数据保持完整，重试或 daemon 重启会补完移动）。
+- `GET /v1/sessions` 默认不返回归档 Session；用 `?includeArchived=true` 包含它们，或用 `?archived=true` 只列出归档 Session。归档后 `GET /v1/sessions/{id}` 和事件端点仍然可读。
+- 归档 Session 只读：`messages`、`resume`、`interrupt`、`stop` 和审批写入都返回 `409 session_archived`。不支持取消归档。
+
+CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --all` 和 `agenthub session list --archived`；Web UI 提供带应用内确认框的 Archive 操作和“Archived Sessions”视图。
+
 ## 数据与安全
 
 配置默认位于 `$HOME/.agenthub/config.json`；Session 数据与运行状态仍遵循操作系统用户数据目录。每个 Session：
@@ -169,9 +181,10 @@ GET    /v1/sessions/{id}/events
 sessions/<session-id>/
   session.json
   events.jsonl
+sessions/Archive/<session-id>/   （归档 Session，文件相同）
 ```
 
-`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。
+`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。
 
 无鉴权模式只适合本机和可信网络：默认仅监听 loopback，不发送 CORS 许可，拒绝跨 origin 的浏览器写请求，并校验请求 Host 必须指向本机地址。
 

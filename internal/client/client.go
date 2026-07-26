@@ -137,6 +137,17 @@ func (c *Client) ListSessions(includeArchived bool) ([]session.Session, error) {
 	return result.Sessions, nil
 }
 
+// ListArchivedSessions returns only archived sessions.
+func (c *Client) ListArchivedSessions() ([]session.Session, error) {
+	var result struct {
+		Sessions []session.Session `json:"sessions"`
+	}
+	if err := c.request(http.MethodGet, "/v1/sessions?archived=true", nil, &result); err != nil {
+		return nil, err
+	}
+	return result.Sessions, nil
+}
+
 func (c *Client) GetSession(id string) (session.Session, error) {
 	var result struct {
 		Session session.Session `json:"session"`

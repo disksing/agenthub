@@ -120,6 +120,7 @@ Core concepts:
 Files:
   Config     ~/.agenthub/config.json (providers, agents)
   Sessions   <data dir>/agenthub/sessions/<id>/session.json + events.jsonl
+  Archive    <data dir>/agenthub/sessions/Archive/<id>/ (archived sessions)
   State      <state dir>/agenthub/server.json (daemon endpoint discovery)
 
 Environment:
@@ -297,17 +298,25 @@ See also: agenthub help run, agenthub help session attach
 	"session list": `List sessions.
 
 Usage:
-  agenthub session list [--all] [--json]
+  agenthub session list [--all] [--archived] [--json]
+
+By default only active sessions are listed; archived sessions stay hidden.
+Use --all to include them in the list, or --archived to list only archived
+sessions. Archived sessions keep their full event log under
+<data dir>/agenthub/sessions/Archive/<session-id>/ and can be inspected with
+"agenthub session show" and "agenthub session events".
 
 Options:
-  --all    Include archived sessions
-  --json   Print JSON instead of a table
+  --all       Include archived sessions
+  --archived  List only archived sessions
+  --json      Print JSON instead of a table
 
 Examples:
   agenthub session list
   agenthub session list --all --json
+  agenthub session list --archived
 
-See also: agenthub help session show
+See also: agenthub help session show, agenthub help session archive
 `,
 
 	"session show": `Show one session as JSON.
@@ -405,9 +414,19 @@ See also: agenthub help session events
 Usage:
   agenthub session archive <session-id>
 
-The provider is stopped and the session is hidden from "agenthub session
-list" unless --all is given. The session files are kept on disk.
+Archiving moves the whole session directory from the active store to
+<data dir>/agenthub/sessions/Archive/<session-id>/. Nothing is deleted:
+session.json, events.jsonl and every other persisted file move along and
+stay readable with "agenthub session show" and "agenthub session events".
 
-See also: agenthub help session list
+Only inactive sessions can be archived: the provider must be stopped (see
+"agenthub session stop") and no turn or approval may be open; otherwise the
+command fails with a conflict and the session is left untouched. Archiving
+is idempotent, so repeating it is safe. An archived session is hidden from
+"agenthub session list" unless --all or --archived is given, and no longer
+accepts messages, steer, resume, interrupt or approvals. Unarchiving is not
+supported.
+
+See also: agenthub help session list, agenthub help session stop
 `,
 }

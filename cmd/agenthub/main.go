@@ -492,18 +492,27 @@ func runSessionList(args []string) error {
 	flags := flag.NewFlagSet("session list", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	includeArchived := flags.Bool("all", false, "include archived sessions")
+	archivedOnly := flags.Bool("archived", false, "list only archived sessions")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	if err := flags.Parse(args); err != nil {
 		return flagParseError(err, "session list")
 	}
 	if flags.NArg() != 0 {
-		return usageError("agenthub session list [--all] [--json]", "session list")
+		return usageError("agenthub session list [--all] [--archived] [--json]", "session list")
+	}
+	if *includeArchived && *archivedOnly {
+		return fmt.Errorf("--all and --archived cannot be combined\nRun 'agenthub help session list' for usage.")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
 		return err
 	}
-	values, err := apiClient.ListSessions(*includeArchived)
+	var values []session.Session
+	if *archivedOnly {
+		values, err = apiClient.ListArchivedSessions()
+	} else {
+		values, err = apiClient.ListSessions(*includeArchived)
+	}
 	if err != nil {
 		return err
 	}

@@ -80,6 +80,7 @@ agenthub chat --agent gpt-5-6-sol --cwd .
 agenthub session create --agent pi-kimi --title "bug hunt"
 agenthub session attach <session-id>
 agenthub session list
+agenthub session list --archived
 agenthub session show <session-id>
 agenthub session events <session-id>
 agenthub session resume <session-id>
@@ -162,6 +163,17 @@ GET    /v1/sessions/{id}/events
 
 The events endpoint returns JSON for plain requests; with `Accept: text/event-stream` or `?stream=true` it returns SSE and supports `Last-Event-ID`. SSE frames use the default message channel (no per-type `event:` field); the JSON payload's `type` field carries the event type, so consumers receive every event — including types they do not know about yet.
 
+### Archiving Sessions
+
+`DELETE /v1/sessions/{id}` archives a session: the daemon appends a durable `session.archived` event and then moves the whole session directory into the store's `Archive/` subdirectory (`sessions/Archive/<session-id>/`). Nothing is deleted — `session.json`, `events.jsonl` and all other files move along.
+
+- Only inactive sessions can be archived: no starting/running provider, no open turn, no pending approval. The endpoint never force-stops a session; stop it first with `POST /v1/sessions/{id}/stop`.
+- Status codes: `200` archived (repeating an archive is idempotent), `404` unknown session, `409 session_active` the session still has active work, `409 session_archive_conflict` the archive target is occupied, `500 session_archive_failed` a filesystem error (the session's data stays intact and a retry or a daemon restart completes the move).
+- `GET /v1/sessions` hides archived sessions by default; use `?includeArchived=true` to include them or `?archived=true` to list only archived sessions. `GET /v1/sessions/{id}` and the events endpoint keep working for archived sessions.
+- Archived sessions are read-only: `messages`, `resume`, `interrupt`, `stop` and approval writes return `409 session_archived`. Unarchiving is not supported.
+
+The CLI equivalents are `agenthub session archive <id>`, `agenthub session list --all` and `agenthub session list --archived`; the Web UI offers an Archive action with an in-app confirmation and an "Archived Sessions" view.
+
 ## Data and Security
 
 The config lives at `$HOME/.agenthub/config.json` by default; session data and runtime state follow the operating system's user data directory. For each session:
@@ -170,9 +182,10 @@ The config lives at `$HOME/.agenthub/config.json` by default; session data and r
 sessions/<session-id>/
   session.json
   events.jsonl
+sessions/Archive/<session-id>/   (archived sessions, same files)
 ```
 
-`events.jsonl` is the single source of truth, and `session.json` is a rebuildable projection. Writes use append + fsync; snapshots use a temporary file + fsync + rename. Truncated trailing log lines are repaired at startup.
+`events.jsonl` is the single source of truth, and `session.json` is a rebuildable projection. Writes use append + fsync; snapshots use a temporary file + fsync + rename. Truncated trailing log lines are repaired at startup. The archive is a plain directory move inside the same store: if the daemon stops between the archived event and the move, startup completes the move, so the physical location always matches the event log.
 
 The no-authentication mode is only suitable for the local machine and trusted networks: it listens on loopback only by default, sends no permissive CORS headers, rejects cross-origin browser write requests, and verifies that the request Host points to a local address.
 

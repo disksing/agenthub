@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -254,4 +255,337 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func archiveTestSession(t *testing.T, store *Store) Session {
+	t.Helper()
+	created, err := store.Create(CreateInput{Title: "Archive me", Cwd: t.TempDir(), AgentID: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func TestArchiveMovesWholeSessionDirectory(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	activeDir := filepath.Join(root, created.ID)
+	before, err := os.ReadDir(activeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	archived, err := store.Archive(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.State != StateArchived {
+		t.Fatalf("state = %q, want archived", archived.State)
+	}
+	if _, err := os.Stat(activeDir); !os.IsNotExist(err) {
+		t.Fatalf("active directory still exists: %v", err)
+	}
+	archiveDir := filepath.Join(root, ArchiveDirName, created.ID)
+	after, err := os.ReadDir(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("archived files = %d, want %d", len(after), len(before))
+	}
+	for _, name := range []string{"session.json", "events.jsonl"} {
+		data, err := os.ReadFile(filepath.Join(archiveDir, name))
+		if err != nil {
+			t.Fatalf("missing archived %s: %v", name, err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("archived %s is empty", name)
+		}
+		info, err := os.Stat(filepath.Join(archiveDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("archived %s permissions = %o, want 600", name, info.Mode().Perm())
+		}
+	}
+
+	// Hidden by default, visible with includeArchived, readable by ID.
+	for _, value := range store.List(false) {
+		if value.ID == created.ID {
+			t.Fatal("archived session appears in the default list")
+		}
+	}
+	found := false
+	for _, value := range store.List(true) {
+		if value.ID == created.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("archived session missing from the includeArchived list")
+	}
+	events, err := store.EventsAfter(created.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[len(events)-1].Type != "session.archived" {
+		t.Fatalf("last event = %q, want session.archived", events[len(events)-1].Type)
+	}
+}
+
+func TestArchiveRejectsActiveSessions(t *testing.T) {
+	for _, state := range []string{StateStarting, StateBusy, StateWaitingApproval} {
+		t.Run(state, func(t *testing.T) {
+			root := t.TempDir()
+			store, err := Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created := archiveTestSession(t, store)
+			if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, StateEventData{State: state})); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Archive(created.ID); !errors.Is(err, ErrSessionActive) {
+				t.Fatalf("Archive error = %v, want ErrSessionActive", err)
+			}
+			if _, err := os.Stat(filepath.Join(root, created.ID)); err != nil {
+				t.Fatalf("session directory lost after rejected archive: %v", err)
+			}
+			value, err := store.Get(created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value.State != state {
+				t.Fatalf("state changed to %q after rejected archive", value.State)
+			}
+		})
+	}
+
+	// An open turn blocks archiving even in an otherwise quiet state.
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	if _, err := store.Append(created.ID, "turn.started", "turn_open", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(created.ID); !errors.Is(err, ErrSessionActive) {
+		t.Fatalf("Archive error = %v, want ErrSessionActive", err)
+	}
+}
+
+func TestArchiveUnknownAndInvalidIDs(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive("ses_missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Archive error = %v, want ErrNotFound", err)
+	}
+	for _, id := range []string{"", "../etc", "ses_..", "foo", "ses_a/b", "ses_a%2f.."} {
+		if _, err := store.Archive(id); !errors.Is(err, ErrInvalidID) {
+			t.Fatalf("Archive(%q) error = %v, want ErrInvalidID", id, err)
+		}
+	}
+}
+
+func TestArchiveIsIdempotentAndBlocksWrites(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	first, err := store.Archive(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Archive(created.ID)
+	if err != nil {
+		t.Fatalf("repeat archive failed: %v", err)
+	}
+	if second.LastEventID != first.LastEventID {
+		t.Fatalf("repeat archive appended events: %d -> %d", first.LastEventID, second.LastEventID)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, StateEventData{State: StateReady})); !errors.Is(err, ErrArchived) {
+		t.Fatalf("Append on archived session = %v, want ErrArchived", err)
+	}
+}
+
+func TestArchiveTargetConflictKeepsDataAndRetries(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	// Force the rename to fail: a file occupies the archive target path.
+	conflict := filepath.Join(root, ArchiveDirName, created.ID)
+	if err := os.WriteFile(conflict, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(created.ID); !errors.Is(err, ErrArchiveConflict) {
+		t.Fatalf("Archive error = %v, want ErrArchiveConflict", err)
+	}
+	// No data was lost: the session directory is still in the active area.
+	activeDir := filepath.Join(root, created.ID)
+	if _, err := os.Stat(filepath.Join(activeDir, "events.jsonl")); err != nil {
+		t.Fatalf("session data lost after failed archive: %v", err)
+	}
+	// Removing the conflict lets a retry finish the move.
+	if err := os.Remove(conflict); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(created.ID); err != nil {
+		t.Fatalf("archive retry failed: %v", err)
+	}
+	if _, err := os.Stat(activeDir); !os.IsNotExist(err) {
+		t.Fatalf("active directory still exists after retry: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ArchiveDirName, created.ID, "events.jsonl")); err != nil {
+		t.Fatalf("archived events missing after retry: %v", err)
+	}
+}
+
+func TestOpenCompletesInterruptedArchive(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	// Simulate a crash between the archived event and the directory move.
+	if _, err := store.Append(created.ID, "session.archived", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	store = nil
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, created.ID)); !os.IsNotExist(err) {
+		t.Fatalf("interrupted archive was not completed: %v", err)
+	}
+	value, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != StateArchived {
+		t.Fatalf("state = %q, want archived", value.State)
+	}
+	if _, err := os.Stat(filepath.Join(root, ArchiveDirName, created.ID, "events.jsonl")); err != nil {
+		t.Fatalf("archived events missing after recovery: %v", err)
+	}
+	for _, item := range reopened.List(false) {
+		if item.ID == created.ID {
+			t.Fatal("recovered archived session appears in the default list")
+		}
+	}
+}
+
+func TestOpenLoadsArchivedSessionsAndIgnoresArchiveDir(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	if _, err := store.Archive(created.ID); err != nil {
+		t.Fatal(err)
+	}
+	store = nil
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != StateArchived || value.Title != "Archive me" {
+		t.Fatalf("unexpected archived session: %+v", value)
+	}
+	events, err := reopened.EventsAfter(created.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[len(events)-1].Type != "session.archived" {
+		t.Fatalf("last event = %q, want session.archived", events[len(events)-1].Type)
+	}
+	if len(reopened.List(false)) != 0 {
+		t.Fatalf("default list is not empty: %+v", reopened.List(false))
+	}
+	// A session whose event log predates the archived event is archived by
+	// location alone.
+	legacy := "ses_legacyarchived"
+	legacyDir := filepath.Join(root, ArchiveDirName, legacy)
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	createdData := mustJSON(t, Session{ID: legacy, Title: "Legacy", Cwd: t.TempDir(), State: StateReady, LastEventID: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	log := fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 1, Time: time.Now().UTC(), Type: "session.created", SessionID: legacy, Data: createdData}))
+	if err := os.WriteFile(filepath.Join(legacyDir, "events.jsonl"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err = reopened.Get(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != StateArchived {
+		t.Fatalf("legacy archived session state = %q, want archived", value.State)
+	}
+}
+
+func TestOpenRejectsSessionDuplicatedInArchive(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := archiveTestSession(t, store)
+	if _, err := store.Archive(created.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Copy the archived directory back into the active area.
+	copyDir(t, filepath.Join(root, ArchiveDirName, created.ID), filepath.Join(root, created.ID))
+	store = nil
+	if _, err := Open(root); err == nil {
+		t.Fatal("expected Open to reject a session present in both areas")
+	}
+}
+
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(src, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, entry.Name()), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
