@@ -4,9 +4,10 @@ import {
   buildPayload,
   createDraft,
   isDirty,
+  normalizeAgentName,
   normalizeAgentOptions,
   normalizeConfig,
-  uniqueId,
+  uniqueAgentName,
   validateDraft,
 } from "../src/settings/configModel.js";
 
@@ -18,8 +19,8 @@ function sampleConfig() {
       { id: "kimi", name: "Kimi", type: "kimi", enabled: false, command: " /usr/local/bin/kimi " },
     ],
     agents: [
-      { id: "main", name: "Main", providerId: "codex", options: { model: " gpt-5 ", sandbox: "workspace-write", empty: "  " } },
-      { id: "backup", name: "", providerId: "kimi" },
+      { name: "Main", providerId: "codex", options: { model: " gpt-5 ", sandbox: "workspace-write", empty: "  " } },
+      { name: "Backup", providerId: "kimi" },
     ],
   };
 }
@@ -33,10 +34,19 @@ test("normalizeConfig normalizes the structure and drops blank fields", () => {
       { id: "kimi", name: "Kimi", type: "kimi", enabled: false, command: "/usr/local/bin/kimi" },
     ],
     agents: [
-      { id: "main", name: "Main", providerId: "codex", options: { model: "gpt-5", sandbox: "workspace-write" } },
-      { id: "backup", name: "", providerId: "kimi" },
+      { name: "Main", providerId: "codex", options: { model: "gpt-5", sandbox: "workspace-write" } },
+      { name: "Backup", providerId: "kimi" },
     ],
   });
+});
+
+test("normalizeConfig drops removed agent ids", () => {
+  const normalized = normalizeConfig({
+    agentProviders: [{ id: "codex", name: "Codex", type: "codex", enabled: true }],
+    agents: [{ id: "main", name: "Main", providerId: "codex" }],
+  });
+  assert.equal("id" in normalized.agents[0], false);
+  assert.equal(normalized.agents[0].name, "Main");
 });
 
 test("normalizeConfig tolerates empty config and missing arrays", () => {
@@ -75,8 +85,8 @@ test("isDirty ignores equivalent differences and detects real changes", () => {
   const snapshot = createDraft(sampleConfig());
   const same = createDraft({
     ...sampleConfig(),
-    agents: [{ id: "main", name: "Main", providerId: "codex", options: { model: "gpt-5 ", sandbox: "workspace-write" } },
-      { id: "backup", name: "", providerId: "kimi" }],
+    agents: [{ name: "Main", providerId: "codex", options: { model: "gpt-5 ", sandbox: "workspace-write" } },
+      { name: "Backup", providerId: "kimi" }],
   });
   assert.equal(isDirty(same, snapshot), false);
   const changed = createDraft(sampleConfig());
@@ -114,22 +124,21 @@ test("validateDraft returns no errors for a valid config", () => {
   const valid = createDraft({
     version: 1,
     agentProviders: [{ id: "codex", name: "Codex", type: "codex", enabled: true }],
-    agents: [{ id: "main", name: "Main", providerId: "codex" }],
+    agents: [{ name: "Main", providerId: "codex" }],
   });
   assert.deepEqual(validateDraft(valid), []);
   assert.deepEqual(validateDraft(createDraft({})), []);
 });
 
-test("validateDraft reports duplicate ids and missing required fields", () => {
+test("validateDraft reports duplicate provider ids and missing required fields", () => {
   const draft = createDraft({
     agentProviders: [
       { id: "p", name: "", type: "codex", enabled: true },
       { id: "p", name: "", type: "", enabled: true },
     ],
     agents: [
-      { id: "a", name: "", providerId: "p" },
-      { id: "a", name: "", providerId: "" },
-      { id: "", name: "", providerId: "p" },
+      { name: "", providerId: "p" },
+      { name: "", providerId: "" },
     ],
   });
   const errors = validateDraft(draft);
@@ -138,15 +147,44 @@ test("validateDraft reports duplicate ids and missing required fields", () => {
   ));
   assert.ok(has("providers", 1, "id", "already used"));
   assert.ok(has("providers", 1, "type", "required"));
-  assert.ok(has("agents", 1, "id", "already used"));
+  assert.ok(has("agents", 0, "name", "required"));
+  assert.ok(has("agents", 1, "name", "required"));
   assert.ok(has("agents", 1, "providerId", "Select a provider"));
-  assert.ok(has("agents", 2, "id", "required"));
+});
+
+test("validateDraft rejects duplicate agent names case-insensitively", () => {
+  const draft = createDraft({
+    agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
+    agents: [
+      { name: "Codex", providerId: "p" },
+      { name: " codex ", providerId: "p" },
+    ],
+  });
+  const errors = validateDraft(draft);
+  const duplicate = errors.find((item) => item.section === "agents" && item.field === "name");
+  assert.ok(duplicate);
+  assert.equal(duplicate.index, 1);
+  assert.match(duplicate.message, /already used/);
+  assert.match(duplicate.message, /codex/);
+});
+
+test("validateDraft enforces the agent name length limit", () => {
+  const draft = createDraft({
+    agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
+    agents: [{ name: "x".repeat(81), providerId: "p" }],
+  });
+  assert.ok(validateDraft(draft).some((item) => item.field === "name" && item.message.includes("80 characters")));
+  const ok = createDraft({
+    agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
+    agents: [{ name: "x".repeat(80), providerId: "p" }],
+  });
+  assert.deepEqual(validateDraft(ok), []);
 });
 
 test("validateDraft reports dangling provider references and unsupported types", () => {
   const dangling = createDraft({
     agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
-    agents: [{ id: "a", name: "", providerId: "ghost" }],
+    agents: [{ name: "A", providerId: "ghost" }],
   });
   const errors = validateDraft(dangling);
   assert.ok(errors.some((item) => item.section === "agents" && item.field === "providerId" && item.message.includes("does not exist")));
@@ -157,9 +195,17 @@ test("validateDraft reports dangling provider references and unsupported types",
   assert.ok(validateDraft(unsupported).some((item) => item.section === "providers" && item.field === "type" && item.message.includes("Unsupported")));
 });
 
-test("uniqueId appends a sequence number on conflict", () => {
-  assert.equal(uniqueId("agent", []), "agent");
-  assert.equal(uniqueId("agent", ["other"]), "agent");
-  assert.equal(uniqueId("agent", ["agent"]), "agent-2");
-  assert.equal(uniqueId("agent", ["agent", "agent-2", "agent-3"]), "agent-4");
+test("uniqueAgentName appends a sequence number on conflict", () => {
+  assert.equal(uniqueAgentName("Agent", []), "Agent");
+  assert.equal(uniqueAgentName("Agent", ["other"]), "Agent");
+  assert.equal(uniqueAgentName("Agent", ["Agent"]), "Agent 2");
+  // Conflicts compare case-insensitively and ignore surrounding whitespace.
+  assert.equal(uniqueAgentName("Agent", [" agent "]), "Agent 2");
+  assert.equal(uniqueAgentName("Agent", ["Agent", "AGENT 2", "Agent 3"]), "Agent 4");
+});
+
+test("normalizeAgentName trims and lower-cases", () => {
+  assert.equal(normalizeAgentName("  Kimi K3 "), "kimi k3");
+  assert.equal(normalizeAgentName(""), "");
+  assert.equal(normalizeAgentName(undefined), "");
 });

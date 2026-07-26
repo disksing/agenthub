@@ -40,7 +40,7 @@ func testConfig() config.Config {
 	return config.Config{
 		Version:        1,
 		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true}},
-		Agents:         []config.Agent{{ID: "slow", ProviderID: "provider"}, {ID: "fast-agent", ProviderID: "provider"}},
+		Agents:         []config.Agent{{Name: "Slow", ProviderID: "provider"}, {Name: "Fast Agent", ProviderID: "provider"}},
 	}
 }
 
@@ -51,14 +51,14 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := testConfig()
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentID: "fast-agent"})
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := New(store, cfg)
 	var created []*fakeSession
 	manager.factory = func(options provider.Options) (provider.Session, error) {
-		if options.Agent.ID != "fast-agent" || options.Provider.ID != "provider" {
+		if options.Agent.Name != "Fast Agent" || options.Provider.ID != "provider" {
 			t.Errorf("factory received wrong agent/provider: %+v %+v", options.Agent, options.Provider)
 		}
 		value := &fakeSession{hooks: options.Hooks}
@@ -69,7 +69,7 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.AgentID != "fast-agent" || result.ProviderSessionID != "native-session" || result.State != session.StateReady {
+	if result.AgentName != "Fast Agent" || result.ProviderSessionID != "native-session" || result.State != session.StateReady {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	events, err := store.EventsAfter(value.ID, 0, 100)
@@ -109,7 +109,7 @@ func TestManagerRejectsUnknownAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentID: "ghost"})
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "ghost"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestManagerTreatsArchivedSessionAsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentID: "fast-agent"})
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,5 +194,62 @@ func TestManagerTreatsArchivedSessionAsReadOnly(t *testing.T) {
 	}
 	if after.LastEventID != before.LastEventID || after.State != session.StateArchived {
 		t.Fatalf("Stop mutated archived session: %+v", after)
+	}
+}
+
+// Sessions recorded with a legacy agent id start again through the id → name
+// mapping captured during config migration; the provider receives the
+// canonical agent and the session.provider event records the name.
+func TestManagerResolvesLegacyAgentIDThroughMapping(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "fast-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig(), map[string]string{"fast-agent": "Fast Agent"})
+	var created *fakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		if options.Agent.Name != "Fast Agent" {
+			t.Errorf("factory received wrong agent: %+v", options.Agent)
+		}
+		created = &fakeSession{hooks: options.Hooks}
+		return created, nil
+	}
+	result, err := manager.Start(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentName != "Fast Agent" || result.ProviderSessionID != "native-session" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+// An id the mapping does not know, or whose target disappeared, fails
+// clearly instead of being guessed onto another agent.
+func TestManagerRejectsUnmappedLegacyAgentID(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "gone-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig(), map[string]string{"other-agent": "Fast Agent"})
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "unknown agent") {
+		t.Fatalf("expected an unknown agent error, got %v", err)
+	}
+
+	// The mapped target no longer exists: the error must say so.
+	manager = New(store, testConfig(), map[string]string{"gone-agent": "Removed Agent"})
+	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "Removed Agent") {
+		t.Fatalf("expected a migrated-target error, got %v", err)
 	}
 }

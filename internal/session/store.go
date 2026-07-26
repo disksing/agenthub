@@ -158,7 +158,7 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 		ID:        id,
 		Title:     input.Title,
 		Cwd:       input.Cwd,
-		AgentID:   input.AgentID,
+		AgentName: input.AgentName,
 		State:     StateReady,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -417,11 +417,20 @@ func (s *Store) loadSession(dir, id string) (*sessionState, error) {
 func applyEvent(projected *Session, event Event) error {
 	switch event.Type {
 	case "session.created":
-		var created Session
+		// The created snapshot is the Session itself. Legacy records carry
+		// agentId instead of agentName; the id is kept in the projection so
+		// the runtime can resolve it through the recorded id → name mapping.
+		var created struct {
+			Session
+			LegacyAgentID string `json:"agentId"`
+		}
 		if err := json.Unmarshal(event.Data, &created); err != nil {
 			return err
 		}
-		*projected = created
+		*projected = created.Session
+		if projected.AgentName == "" {
+			projected.AgentName = created.LegacyAgentID
+		}
 	case "session.state":
 		var data StateEventData
 		if err := json.Unmarshal(event.Data, &data); err != nil {
@@ -433,9 +442,17 @@ func applyEvent(projected *Session, event Event) error {
 		if err := json.Unmarshal(event.Data, &data); err != nil {
 			return err
 		}
-		projected.AgentID = data.AgentID
+		projected.AgentName = data.ResolvedAgentName()
 		projected.Provider = data.Provider
 		projected.ProviderSessionID = data.ProviderSessionID
+	case "session.agent":
+		// Appended when a configured agent is renamed: sessions that
+		// referenced the old name are re-pointed at the new one.
+		var data AgentRenameEventData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return err
+		}
+		projected.AgentName = data.AgentName
 	case "session.archived":
 		projected.State = StateArchived
 	case "turn.started":

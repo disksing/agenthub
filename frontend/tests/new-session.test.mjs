@@ -11,8 +11,8 @@ import {
 } from "../src/newSession.js";
 
 const agents = [
-  { id: "codex-default", name: "Codex", providerId: "codex" },
-  { id: "kimi-k3", name: "Kimi K3", providerId: "kimi" },
+  { name: "Codex", providerId: "codex" },
+  { name: "Kimi K3", providerId: "kimi" },
 ];
 
 test("cwd is required and trimmed", () => {
@@ -32,31 +32,31 @@ test("title allows empty and enforces the length limit", () => {
 
 test("agent must be selected and still available", () => {
   assert.equal(validateAgent("", agents), "Select an agent.");
-  assert.equal(validateAgent("codex-default", agents), "");
+  assert.equal(validateAgent("Codex", agents), "");
   assert.match(validateAgent("gone", agents), /no longer available/);
   // An empty agent list cannot confirm availability; the dialog blocks
-  // submission separately, so validation only requires a non-empty id.
-  assert.equal(validateAgent("codex-default", []), "");
+  // submission separately, so validation only requires a non-empty name.
+  assert.equal(validateAgent("Codex", []), "");
 });
 
 test("buildCreatePayload omits an empty title and trims fields", () => {
   const { errors, payload } = buildCreatePayload({
     title: "   ",
     cwd: "  /tmp/project ",
-    agentId: "kimi-k3",
+    agentName: "Kimi K3",
     agents,
   });
   assert.deepEqual(errors, { title: "", cwd: "", agent: "" });
-  assert.deepEqual(payload, { cwd: "/tmp/project", agentId: "kimi-k3" });
+  assert.deepEqual(payload, { cwd: "/tmp/project", agentName: "Kimi K3" });
 });
 
 test("buildCreatePayload keeps a non-empty title", () => {
-  const { payload } = buildCreatePayload({ title: "  Bug fix  ", cwd: "/tmp", agentId: "kimi-k3", agents });
-  assert.deepEqual(payload, { cwd: "/tmp", agentId: "kimi-k3", title: "Bug fix" });
+  const { payload } = buildCreatePayload({ title: "  Bug fix  ", cwd: "/tmp", agentName: "Kimi K3", agents });
+  assert.deepEqual(payload, { cwd: "/tmp", agentName: "Kimi K3", title: "Bug fix" });
 });
 
 test("buildCreatePayload refuses invalid input", () => {
-  const { errors, payload } = buildCreatePayload({ title: "", cwd: "", agentId: "", agents });
+  const { errors, payload } = buildCreatePayload({ title: "", cwd: "", agentName: "", agents });
   assert.equal(payload, null);
   assert.ok(errors.cwd);
   assert.ok(errors.agent);

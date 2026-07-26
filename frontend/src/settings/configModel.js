@@ -40,6 +40,14 @@ export const REASONING_EFFORT_OPTIONS = [
   { value: "ultra", label: "Ultra" },
 ];
 
+// normalizeAgentName mirrors config.NormalizeAgentName on the daemon: trim
+// and lower-case. Names are unique under this normalization.
+export function normalizeAgentName(name) {
+  return String(name ?? "").trim().toLowerCase();
+}
+
+export const AGENT_NAME_MAX_LENGTH = 80;
+
 const MODEL_FIELD = { key: "model", kind: "text", label: "Model", placeholder: "Leave empty to use the provider default model" };
 
 // providerOptionSchema returns the form description of the Agent options a
@@ -78,7 +86,8 @@ function cleanOptions(options) {
 // normalizeConfig deep-copies config from any source and normalizes it into a
 // fixed shape: missing arrays become empty, values become strings, blank
 // option keys and empty optional fields are dropped. Removed legacy fields
-// (agentProfiles, defaultChatAgentId) are tolerated in the input and dropped.
+// (agentProfiles, defaultChatAgentId, agent id) are tolerated in the input
+// and dropped.
 export function normalizeConfig(config = {}) {
   const providers = (Array.isArray(config.agentProviders) ? config.agentProviders : []).map((provider) => {
     const result = {
@@ -93,7 +102,6 @@ export function normalizeConfig(config = {}) {
   });
   const agents = (Array.isArray(config.agents) ? config.agents : []).map((agent) => {
     const result = {
-      id: String(agent?.id ?? ""),
       name: String(agent?.name ?? ""),
       providerId: String(agent?.providerId ?? ""),
     };
@@ -170,11 +178,20 @@ export function validateDraft(draft) {
 
   const providerById = providerMap({ agentProviders: providers });
   const agents = draft.agents || [];
-  const agentIds = new Set();
+  const agentNames = new Map();
   agents.forEach((agent, index) => {
-    if (!agent.id.trim()) push("agents", index, "id", "Agent ID is required");
-    else if (agentIds.has(agent.id)) push("agents", index, "id", `Agent ID "${agent.id}" is already used`);
-    agentIds.add(agent.id);
+    const trimmed = String(agent.name ?? "").trim();
+    if (!trimmed) push("agents", index, "name", "Agent name is required");
+    else if (Array.from(trimmed).length > AGENT_NAME_MAX_LENGTH) {
+      push("agents", index, "name", `Agent name must be ${AGENT_NAME_MAX_LENGTH} characters or fewer`);
+    } else {
+      const key = normalizeAgentName(trimmed);
+      if (agentNames.has(key)) {
+        push("agents", index, "name", `Agent name "${trimmed}" is already used by agent ${agentNames.get(key) + 1}`);
+      } else {
+        agentNames.set(key, index);
+      }
+    }
     if (!agent.providerId.trim()) push("agents", index, "providerId", "Select a provider");
     else if (!providerById.has(agent.providerId)) {
       push("agents", index, "providerId", `Referenced provider "${agent.providerId}" does not exist`);
@@ -184,23 +201,15 @@ export function validateDraft(draft) {
   return errors;
 }
 
-// slugify derives the base form of an id from a name.
-export function slugify(name) {
-  const slug = String(name ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "agent";
-}
-
-// uniqueId appends -2 / -3 … when the base id is already taken.
-export function uniqueId(base, existing) {
-  const taken = new Set(existing);
-  if (!taken.has(base)) return base;
+// uniqueAgentName appends " 2" / " 3" … until the name is free under the
+// normalized (case-insensitive, trimmed) uniqueness rule.
+export function uniqueAgentName(base, existing) {
+  const taken = new Set((existing || []).map((name) => normalizeAgentName(name)));
+  const cleanBase = String(base ?? "").trim() || "Agent";
+  if (!taken.has(normalizeAgentName(cleanBase))) return cleanBase;
   for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!taken.has(candidate)) return candidate;
+    const candidate = `${cleanBase} ${index}`;
+    if (!taken.has(normalizeAgentName(candidate))) return candidate;
   }
 }
 

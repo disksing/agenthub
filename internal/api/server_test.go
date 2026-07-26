@@ -55,7 +55,7 @@ func TestHostGuardRejectsForeignHost(t *testing.T) {
 
 func TestMutationAcceptsSameOriginLANBrowser(t *testing.T) {
 	server, _ := newGuardedTestServer(t)
-	body, _ := json.Marshal(map[string]any{"title": "LAN", "cwd": t.TempDir(), "agentId": "agent"})
+	body, _ := json.Marshal(map[string]any{"title": "LAN", "cwd": t.TempDir(), "agentName": "Agent"})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Host = "192.168.1.10:4646"
 	request.Header.Set("Content-Type", "application/json")
@@ -95,9 +95,9 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	defer server.Close()
 
 	body, _ := json.Marshal(map[string]any{
-		"title":   "API session",
-		"cwd":     t.TempDir(),
-		"agentId": "agent",
+		"title":     "API session",
+		"cwd":       t.TempDir(),
+		"agentName": "Agent",
 	})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -162,7 +162,7 @@ func newConfigTestServer(t *testing.T) *httptest.Server {
 	cfg := config.Config{
 		Version:        1,
 		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true, Command: "missing-test-command"}},
-		Agents:         []config.Agent{{ID: "agent", ProviderID: "provider"}},
+		Agents:         []config.Agent{{Name: "Pi Agent", ProviderID: "provider"}},
 	}
 	manager := runtime.New(store, cfg)
 	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager, ConfigPath: filepath.Join(root, "config.json")}).Handler())
@@ -223,10 +223,15 @@ func TestCreateSessionRequiresExplicitAgent(t *testing.T) {
 		want int
 		code string
 	}{
-		{"missing agentId", `{"cwd":"` + cwd + `"}`, http.StatusUnprocessableEntity, "agent_required"},
-		{"blank agentId", `{"cwd":"` + cwd + `","agentId":"  "}`, http.StatusUnprocessableEntity, "agent_required"},
-		{"unknown agent", `{"cwd":"` + cwd + `","agentId":"ghost"}`, http.StatusUnprocessableEntity, "invalid_agent"},
-		{"legacy selector field", `{"cwd":"` + cwd + `","agentId":"agent","selector":{"tags":["fast"]}}`, http.StatusBadRequest, "invalid_request"},
+		{"missing agentName", `{"cwd":"` + cwd + `"}`, http.StatusUnprocessableEntity, "agent_required"},
+		{"blank agentName", `{"cwd":"` + cwd + `","agentName":"  "}`, http.StatusUnprocessableEntity, "agent_required"},
+		{"unknown agent", `{"cwd":"` + cwd + `","agentName":"ghost"}`, http.StatusUnprocessableEntity, "invalid_agent"},
+		// A valid name passes validation (case-insensitively) and only
+		// fails later because the test provider cannot start.
+		{"agent name matches case-insensitively", `{"cwd":"` + cwd + `","agentName":"pi agent"}`, http.StatusBadGateway, "provider_start_failed"},
+		{"unresolvable legacy agentId", `{"cwd":"` + cwd + `","agentId":"agent"}`, http.StatusUnprocessableEntity, "agent_id_removed"},
+		{"both reference forms", `{"cwd":"` + cwd + `","agentName":"Pi Agent","agentId":"agent"}`, http.StatusBadRequest, "invalid_request"},
+		{"legacy selector field", `{"cwd":"` + cwd + `","agentName":"Pi Agent","selector":{"tags":["fast"]}}`, http.StatusBadRequest, "invalid_request"},
 	}
 	for _, item := range cases {
 		status, code := post(item.body)
@@ -268,8 +273,8 @@ func TestPutConfigRoundTrip(t *testing.T) {
 			{"id": "second", "name": "Kimi", "type": "kimi", "enabled": false}
 		],
 		"agents": [
-			{"id": "agent", "name": "Pi Agent", "providerId": "provider"},
-			{"id": "agent-b", "name": "Pi Agent B", "providerId": "provider", "options": {"model": "m"}}
+			{"name": "Pi Agent", "providerId": "provider"},
+			{"name": "Pi Agent B", "providerId": "provider", "options": {"model": "m"}}
 		]
 	}}`
 	status, code := putConfig(t, server, updated)
@@ -345,7 +350,13 @@ func TestPutConfigRejectsInvalidConfig(t *testing.T) {
 			{"id":"p","type":"bogus","enabled":true}]}}`,
 		"dangling agent provider": `{"config":{"agentProviders":[
 			{"id":"p","type":"pi","enabled":true}],
-			"agents":[{"id":"a","providerId":"ghost"}]}}`,
+			"agents":[{"name":"A","providerId":"ghost"}]}}`,
+		"duplicate agent names": `{"config":{"agentProviders":[
+			{"id":"p","type":"pi","enabled":true}],
+			"agents":[{"name":"Codex","providerId":"p"},{"name":" codex ","providerId":"p"}]}}`,
+		"blank agent name": `{"config":{"agentProviders":[
+			{"id":"p","type":"pi","enabled":true}],
+			"agents":[{"name":"  ","providerId":"p"}]}}`,
 	}
 	for name, body := range cases {
 		status, code := putConfig(t, server, body)
@@ -376,6 +387,9 @@ func TestPutConfigRejectsInvalidRequest(t *testing.T) {
 		"malformed JSON":               `{"config":`,
 		"wrong config type":            `{"config":"nope"}`,
 		"unknown field without config": `{"conf":{}}`,
+		// The removed agent id must never be written back through the API.
+		"legacy agent id field": `{"config":{"agentProviders":[{"id":"p","type":"pi","enabled":true}],
+			"agents":[{"id":"a","name":"A","providerId":"p"}]}}`,
 	}
 	for name, body := range cases {
 		status, code := putConfig(t, server, body)
@@ -516,7 +530,7 @@ func mustMarshal(t *testing.T, value any) []byte {
 
 func createTestSession(t *testing.T, server *httptest.Server) session.Session {
 	t.Helper()
-	body, _ := json.Marshal(map[string]any{"title": "archive api", "cwd": t.TempDir(), "agentId": "agent"})
+	body, _ := json.Marshal(map[string]any{"title": "archive api", "cwd": t.TempDir(), "agentName": "Agent"})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
@@ -734,7 +748,7 @@ func newToggleTestServer(t *testing.T) (*httptest.Server, string) {
 	cfg := config.Config{
 		Version:        1,
 		AgentProviders: []config.Provider{{ID: "pi", Name: "Pi Coding Agent", Type: "pi", Enabled: true, Command: "missing-test-command"}},
-		Agents:         []config.Agent{{ID: "agent", Name: "Pi Agent", ProviderID: "pi"}},
+		Agents:         []config.Agent{{Name: "Pi Agent", ProviderID: "pi"}},
 	}
 	configPath := filepath.Join(root, "config.json")
 	if err := config.Save(configPath, cfg); err != nil {
@@ -809,7 +823,7 @@ func TestToggleProviderDisableEnableRoundTrip(t *testing.T) {
 		t.Fatalf("agent of disabled provider should be unavailable: %v", agents)
 	}
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(
-		`{"cwd":"`+t.TempDir()+`","agentId":"agent"}`))
+		`{"cwd":"`+t.TempDir()+`","agentName":"Pi Agent"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -876,4 +890,192 @@ func TestToggleProviderRejectsBadRequests(t *testing.T) {
 			t.Errorf("%s: status = %d, code = %q, want %d %s", item.name, status, code, item.want, item.code)
 		}
 	}
+}
+
+// The session records the canonical configured display name, not the
+// spelling the client sent.
+func TestCreateSessionPersistsCanonicalAgentName(t *testing.T) {
+	server := newConfigTestServer(t)
+	body, _ := json.Marshal(map[string]any{"cwd": t.TempDir(), "agentName": " pi AGENT "})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	// The test provider cannot start; the session still exists.
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+	var parsed struct {
+		Error struct {
+			Details struct {
+				SessionID string `json:"sessionId"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	value := getSession(t, server, parsed.Error.Details.SessionID)
+	if value.AgentName != "Pi Agent" {
+		t.Fatalf("session did not record the canonical name: %+v", value)
+	}
+}
+
+// A deprecated agentId still resolves through the id → name mapping recorded
+// by the legacy config migration; the session is created with the name.
+func TestCreateSessionResolvesLegacyAgentID(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Version:        1,
+		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true, Command: "missing-test-command"}},
+		Agents:         []config.Agent{{Name: "Pi Agent", ProviderID: "provider"}},
+	}
+	manager := runtime.New(store, cfg, map[string]string{"agent-old": "Pi Agent"})
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager, ConfigPath: filepath.Join(root, "config.json")}).Handler())
+	defer server.Close()
+
+	body, _ := json.Marshal(map[string]any{"cwd": t.TempDir(), "agentId": "agent-old"})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+	var parsed struct {
+		Error struct {
+			Details struct {
+				SessionID string `json:"sessionId"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	value := getSession(t, server, parsed.Error.Details.SessionID)
+	if value.AgentName != "Pi Agent" {
+		t.Fatalf("legacy agentId did not resolve to the configured name: %+v", value)
+	}
+}
+
+// Renaming an agent through PUT /v1/config re-points the sessions that
+// referenced the old name at the new one via a session.agent event.
+func TestPutConfigRenameMigratesSessionReferences(t *testing.T) {
+	server := newConfigTestServer(t)
+	body, _ := json.Marshal(map[string]any{"cwd": t.TempDir(), "agentName": "Pi Agent"})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		Error struct {
+			Details struct {
+				SessionID string `json:"sessionId"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(response.Body).Decode(&created)
+	response.Body.Close()
+	sessionID := created.Error.Details.SessionID
+	if sessionID == "" {
+		t.Fatal("session was not created")
+	}
+
+	renamed := `{"config":{
+		"version": 1,
+		"agentProviders": [
+			{"id": "provider", "name": "Pi", "type": "pi", "enabled": true, "command": "missing-test-command"}
+		],
+		"agents": [{"name": "Pi Agent X", "providerId": "provider"}]
+	}}`
+	status, code := putConfig(t, server, renamed)
+	if status != http.StatusOK || code != "" {
+		t.Fatalf("rename save failed: status = %d, code = %q", status, code)
+	}
+	value := getSession(t, server, sessionID)
+	if value.AgentName != "Pi Agent X" {
+		t.Fatalf("session did not follow the rename: %+v", value)
+	}
+	response, err = http.Get(server.URL + "/v1/sessions/" + sessionID + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var eventsBody struct {
+		Events []session.Event `json:"events"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&eventsBody); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range eventsBody.Events {
+		if event.Type == "session.agent" && strings.Contains(string(event.Data), "Pi Agent X") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("rename did not append a session.agent event")
+	}
+}
+
+// A rename that matches several identical new agents is rejected instead of
+// guessed; the sessions keep referencing the old name.
+func TestPutConfigRejectsAmbiguousRename(t *testing.T) {
+	server := newConfigTestServer(t)
+	ambiguous := `{"config":{
+		"version": 1,
+		"agentProviders": [
+			{"id": "provider", "name": "Pi", "type": "pi", "enabled": true, "command": "missing-test-command"}
+		],
+		"agents": [
+			{"name": "Pi Agent X", "providerId": "provider"},
+			{"name": "Pi Agent Y", "providerId": "provider"}
+		]
+	}}`
+	status, code := putConfig(t, server, ambiguous)
+	if status != http.StatusUnprocessableEntity || code != "ambiguous_rename" {
+		t.Fatalf("ambiguous rename: status = %d, code = %q", status, code)
+	}
+	response, err := http.Get(server.URL + "/v1/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var configBody struct {
+		Config config.Config `json:"config"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&configBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(configBody.Config.Agents) != 1 || configBody.Config.Agents[0].Name != "Pi Agent" {
+		t.Fatalf("config changed after the rejected rename: %+v", configBody.Config)
+	}
+}
+
+func getSession(t *testing.T, server *httptest.Server, id string) session.Session {
+	t.Helper()
+	response, err := http.Get(server.URL + "/v1/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var body struct {
+		Session session.Session `json:"session"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Session
 }

@@ -191,14 +191,14 @@ test("provider errors, lifecycle and notable session states are visible", () => 
   reset();
   const items = buildTimeline([
     event("session.created", { id: "ses_test" }),
-    event("session.provider", { agentId: "codex-default", provider: "codex" }),
+    event("session.provider", { agentName: "Codex", provider: "codex" }),
     event("session.state", { state: "ready" }), // low-value transition, folded away
     event("provider.error", { message: "stream reset" }),
     event("turn.failed", { error: "provider died" }, { turnId: "turn_1" }),
     event("session.state", { state: "failed" }),
   ]);
   assert.deepEqual(items.map((item) => item.kind), ["lifecycle", "lifecycle", "error", "lifecycle", "lifecycle"]);
-  assert.equal(items[1].text, "Agent connected · codex-default · via codex");
+  assert.equal(items[1].text, "Agent connected · Codex · via codex");
   assert.equal(items[2].text, "stream reset");
   assert.equal(items[3].text, "Turn failed: provider died");
   assert.equal(items[4].text, "Session failed");
@@ -264,4 +264,14 @@ test("history rebuild and live streaming produce the same timeline", () => {
   // Rebuilding from the persisted log yields identical events (ids included).
   const rebuilt = buildTimeline(streamed.map((item, index) => ({ ...item, id: index + 1 })));
   assert.deepEqual(rebuilt, live);
+});
+
+// Events recorded before agent ids were removed still render their legacy
+// agentId reference.
+test("legacy session.provider agentId still renders", () => {
+  reset();
+  const items = buildTimeline([
+    event("session.provider", { agentId: "codex-default", provider: "codex" }),
+  ]);
+  assert.equal(items[0].text, "Agent connected · codex-default · via codex");
 });

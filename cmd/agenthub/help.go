@@ -97,9 +97,11 @@ Core concepts:
   Provider   Adapter for a local agent runtime or protocol (Codex
              app-server, Kimi/OpenCode ACP, Pi RPC). Providers are declared
              in the config file and probed for executable availability.
-  Agent      A named, runnable configuration bound to one provider. It
-             carries default options (model, mode, approval, sandbox, ...)
-             that are passed to the provider when a session starts.
+  Agent      A named, runnable configuration bound to one provider. Its
+             name is required and unique (case-insensitively) and is the
+             only way sessions refer to it; there is no separate agent id.
+             It carries default options (model, mode, approval, sandbox,
+             ...) that are passed to the provider when a session starts.
   Session    An AgentHub conversation. It is always created with an
              explicitly selected agent (no implicit routing or fallback),
              and binds that agent, a working directory and a
@@ -133,8 +135,8 @@ Environment:
 
 Examples:
   agenthub serve                              Start the daemon (loopback only)
-  agenthub run --agent pi-kimi "fix the tests"  One-shot run with an agent
-  agenthub chat --agent pi-kimi               Interactive chat with an agent
+  agenthub run --agent "Kimi K3" "fix the tests"  One-shot run with an agent
+  agenthub chat --agent "Kimi K3"                 Interactive chat with an agent
   agenthub session list                       List sessions
 `
 
@@ -187,7 +189,7 @@ Usage:
 
 Prints providers, agents and provider availability probes. Providers are
 adapters for local agent runtimes; agents are named runnable configurations
-bound to a provider. The Web UI settings panel enables or disables the four
+bound to a provider, referenced everywhere by their unique name. The Web UI settings panel enables or disables the four
 built-in providers and edits agents; anything more advanced is done in the
 config file (see "agenthub help"). Agents of a disabled provider are reported
 as unavailable and cannot create sessions.
@@ -198,21 +200,22 @@ See also: agenthub help run, agenthub help session create
 	"run": `Create a session, send one message and print the assistant reply.
 
 Usage:
-  agenthub run [--cwd dir] [--title title] --agent id <message>
+  agenthub run [--cwd dir] [--title title] --agent name <message>
 
 Options:
   --cwd dir      Working directory of the session (default ".")
   --title title  Session title
-  --agent id     Agent id from the configuration (required; sessions always
-                 run with an explicit agent)
+  --agent name   Agent name from the configuration (required; sessions
+                 always run with an explicit agent). Names match
+                 case-insensitively; unknown names fail with a clear error.
 
 The reply streams to stdout; the session id and agent are printed to
 stderr. If the agent requests an approval, resolve it from the Web UI or
 with "agenthub session approve".
 
 Examples:
-  agenthub run --agent pi-kimi "summarize this repository"
-  agenthub run --agent pi-kimi --cwd ~/src/app "run the tests"
+  agenthub run --agent "Kimi K3" "summarize this repository"
+  agenthub run --agent "Kimi K3" --cwd ~/src/app "run the tests"
 
 See also: agenthub help chat, agenthub help session create
 `,
@@ -220,7 +223,7 @@ See also: agenthub help chat, agenthub help session create
 	"chat": `Chat interactively on a new or existing session.
 
 Usage:
-  agenthub chat [--session id | --cwd dir --title title --agent id]
+  agenthub chat [--session id | --cwd dir --title title --agent name]
 
 Without --session a new session is created and --agent is required (same
 selection rules as "agenthub run"). Type a message to start a turn; the
@@ -230,7 +233,7 @@ Options:
   --session id   Attach an existing session
   --cwd dir      Working directory for a new session (default ".")
   --title title  Session title for a new session
-  --agent id     Agent id from the configuration (required for a new
+  --agent name   Agent name from the configuration (required for a new
                  session; sessions always run with an explicit agent)
 
 Commands inside chat:
@@ -239,7 +242,7 @@ Commands inside chat:
   /quit, /exit   Leave chat (the session is kept on the daemon)
 
 Examples:
-  agenthub chat --agent pi-kimi --cwd .
+  agenthub chat --agent "Kimi K3" --cwd .
   agenthub chat --session ses_01HX...
 
 See also: agenthub help run, agenthub help session attach
@@ -279,20 +282,20 @@ data directory and survives daemon restarts.
 	"session create": `Create a session without sending a message.
 
 Usage:
-  agenthub session create [--cwd dir] [--title title] --agent id
+  agenthub session create [--cwd dir] [--title title] --agent name
 
 Options:
   --cwd dir      Working directory of the session (default ".")
   --title title  Session title
-  --agent id     Agent id from the configuration (required; sessions always
-                 run with an explicit agent)
+  --agent name   Agent name from the configuration (required; sessions
+                 always run with an explicit agent)
 
 Prints the created session as JSON. Send messages with
 "agenthub chat --session <id>" or "agenthub session attach <id>".
 
 Examples:
-  agenthub session create --agent pi-kimi --title "bug hunt"
-  agenthub session create --agent pi-kimi --cwd ~/src/app
+  agenthub session create --agent "Kimi K3" --title "bug hunt"
+  agenthub session create --agent "Kimi K3" --cwd ~/src/app
 
 See also: agenthub help run, agenthub help session attach
 `,
@@ -326,7 +329,7 @@ See also: agenthub help session show, agenthub help session archive
 Usage:
   agenthub session show <session-id>
 
-Prints the full session record: state, agent, provider session/thread id,
+Prints the full session record: state, agent name, provider session/thread id,
 current turn, pending approvals and the event cursor.
 
 See also: agenthub help session events

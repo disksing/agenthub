@@ -79,7 +79,7 @@ func TestHelpTopicsHaveUsageAndExamples(t *testing.T) {
 func TestHelpCommandTopics(t *testing.T) {
 	cases := map[string]string{
 		"serve":          "agenthub serve [--addr host:port]",
-		"run":            "--agent id",
+		"run":            "--agent name",
 		"session":        "create",
 		"session list":   "--all",
 		"session attach": "agenthub chat --session",
@@ -232,6 +232,7 @@ func TestHelpTextHasNoProfileRouting(t *testing.T) {
 	allowedNegations := []string{
 		"no implicit routing or fallback",
 		"there is no silent fallback",
+		"there is no separate agent id",
 	}
 	banned := []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\bprofiles?\b`),
@@ -241,6 +242,7 @@ func TestHelpTextHasNoProfileRouting(t *testing.T) {
 		regexp.MustCompile(`(?i)\brouting\b`),
 		regexp.MustCompile(`(?i)\bfallback\b`),
 		regexp.MustCompile(`(?i)defaultchatagentid`),
+		regexp.MustCompile(`(?i)agent ids?\b`),
 	}
 	assertClean := func(name, text string) {
 		t.Helper()

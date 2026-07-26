@@ -19,6 +19,11 @@ type Manager struct {
 	cfg     config.Config
 	running map[string]*active
 	factory func(provider.Options) (provider.Session, error)
+	// legacyAgentNames maps agent ids recorded by old sessions to the agent
+	// names that replaced them. It is captured when a legacy config file is
+	// migrated (see config.LoadLegacyAgentIDs) and lets those sessions start
+	// again without guessing.
+	legacyAgentNames map[string]string
 }
 
 type active struct {
@@ -55,8 +60,11 @@ func (a *active) finishStart(err error) {
 	close(a.ready)
 }
 
-func New(store *session.Store, cfg config.Config) *Manager {
+func New(store *session.Store, cfg config.Config, legacyAgentNames ...map[string]string) *Manager {
 	manager := &Manager{store: store, cfg: cfg, running: make(map[string]*active), factory: provider.New}
+	if len(legacyAgentNames) > 0 {
+		manager.legacyAgentNames = legacyAgentNames[0]
+	}
 	for _, value := range store.List(false) {
 		if value.State == session.StateBusy || value.State == session.StateWaitingApproval || value.State == session.StateStarting {
 			_, _ = store.Append(value.ID, "session.state", "", marshal(session.StateEventData{State: session.StateReady}))
@@ -220,14 +228,15 @@ func (m *Manager) ensure(id string) (*active, error) {
 		return nil, session.ErrArchived
 	}
 	cfg := cloneConfig(m.cfg)
-	if value.AgentID == "" {
+	legacyNames := m.legacyAgentNames
+	if value.AgentName == "" {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("session %s has no agent: it was created before explicit agent selection and cannot be started; create a new session with an explicit agent", id)
 	}
-	agent, providerConfig, err := cfg.Agent(value.AgentID)
+	agent, providerConfig, err := resolveAgent(cfg, legacyNames, value.AgentName)
 	if err != nil {
 		m.mu.Unlock()
-		return nil, err
+		return nil, fmt.Errorf("session %s: %w", id, err)
 	}
 	run := &active{turnID: value.CurrentTurnID, ready: make(chan struct{})}
 	adapter, err := m.factory(provider.Options{
@@ -235,7 +244,7 @@ func (m *Manager) ensure(id string) (*active, error) {
 		Hooks: provider.Hooks{
 			NativeID: func(nativeID string) {
 				_, _ = m.store.Append(id, "session.provider", "", marshal(session.ProviderEventData{
-					AgentID: agent.ID, Provider: providerConfig.Type, ProviderSessionID: nativeID,
+					AgentName: agent.Name, Provider: providerConfig.Type, ProviderSessionID: nativeID,
 				}))
 			},
 			Event: func(event provider.Event) { m.providerEvent(id, run, event) },
@@ -292,6 +301,38 @@ func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
 	}
 	_, _ = m.store.Append(id, eventType, turnID, marshal(event.Data))
 	run.setTurn("")
+}
+
+// resolveAgent finds the agent a session refers to. Current sessions store
+// the agent name and resolve directly (case-insensitively). Sessions
+// recorded before agent ids were removed store the old id; those resolve
+// through the id → name mapping captured during config migration, and only
+// when the mapped name still exists. Anything else fails with a clear error
+// instead of being guessed onto a different agent.
+func resolveAgent(cfg config.Config, legacyNames map[string]string, reference string) (config.Agent, config.Provider, error) {
+	agent, providerConfig, err := cfg.Agent(reference)
+	if err == nil {
+		return agent, providerConfig, nil
+	}
+	if mapped, ok := legacyNames[reference]; ok {
+		if agent, providerConfig, mappedErr := cfg.Agent(mapped); mappedErr == nil {
+			return agent, providerConfig, nil
+		} else {
+			return config.Agent{}, config.Provider{}, fmt.Errorf("agent %q was migrated to %q, which is no longer available: %w", reference, mapped, mappedErr)
+		}
+	}
+	return config.Agent{}, config.Provider{}, err
+}
+
+// ResolveLegacyAgentName maps an agent id from a migrated legacy
+// configuration to its replacement name, reporting whether the mapping
+// exists. It backs the one-time compatibility path for clients that still
+// submit agentId when creating a session.
+func (m *Manager) ResolveLegacyAgentName(id string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name, ok := m.legacyAgentNames[id]
+	return name, ok
 }
 
 func marshal(value any) []byte {

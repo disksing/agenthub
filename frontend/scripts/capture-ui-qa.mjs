@@ -68,16 +68,16 @@ await desktop.getByRole("button", { name: "Agents" }).click();
 await desktop.getByRole("button", { name: /Codex Main Codex/ }).click();
 await shot(desktop, "04-settings-agents");
 
-// Validation error surfaced by Save all (empty agent ID).
-const idInput = desktop.locator("#settings-agent-0-id");
-const originalId = await idInput.inputValue();
-await idInput.fill("");
+// Validation error surfaced by Save all (empty agent name).
+const nameInput = desktop.locator("#settings-agent-0-name");
+const originalName = await nameInput.inputValue();
+await nameInput.fill("");
 await desktop.getByRole("button", { name: "Save all" }).click();
-await desktop.getByText("Agent ID is required").waitFor();
+await desktop.getByText("Agent name is required").waitFor();
 await shot(desktop, "05-settings-validation-error");
 
-// Restore the ID, make a real change, save, and confirm the Saved state.
-await idInput.fill(originalId);
+// Restore the name, make a real change, save, and confirm the Saved state.
+await nameInput.fill(originalName);
 await desktop.locator("#settings-agent-0-name").fill(`Codex Main (QA run ${Date.now() % 100000})`);
 await desktop.getByRole("button", { name: "Save all" }).click();
 await desktop.getByText("Saved", { exact: true }).waitFor();

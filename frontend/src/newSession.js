@@ -25,25 +25,25 @@ export function validateTitle(value) {
   return "";
 }
 
-export function validateAgent(agentId, agents) {
-  if (!agentId) return "Select an agent.";
-  if (Array.isArray(agents) && agents.length && !agents.some((agent) => agent.id === agentId)) {
+export function validateAgent(agentName, agents) {
+  if (!agentName) return "Select an agent.";
+  if (Array.isArray(agents) && agents.length && !agents.some((agent) => agent.name === agentName)) {
     return "The selected agent is no longer available.";
   }
   return "";
 }
 
-// Returns { title?, cwd, agentId } ready for POST /v1/sessions, or null when
-// any field is invalid. An empty title is omitted so the daemon applies its
-// default title.
-export function buildCreatePayload({ title, cwd, agentId, agents }) {
+// Returns { title?, cwd, agentName } ready for POST /v1/sessions, or null
+// when any field is invalid. An empty title is omitted so the daemon applies
+// its default title.
+export function buildCreatePayload({ title, cwd, agentName, agents }) {
   const errors = {
     title: validateTitle(title),
     cwd: validateCwd(cwd),
-    agent: validateAgent(agentId, agents),
+    agent: validateAgent(agentName, agents),
   };
   if (errors.title || errors.cwd || errors.agent) return { errors, payload: null };
-  const payload = { cwd: normalizeCwd(cwd), agentId };
+  const payload = { cwd: normalizeCwd(cwd), agentName };
   const clean = normalizeTitle(title);
   if (clean) payload.title = clean;
   return { errors, payload };
