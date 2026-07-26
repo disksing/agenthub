@@ -136,6 +136,123 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	}
 }
 
+func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+
+	create := func(title string, sourceValue any) session.Session {
+		t.Helper()
+		body := map[string]any{
+			"title": title, "cwd": t.TempDir(), "agentName": "Agent",
+		}
+		if sourceValue != nil {
+			body["source"] = sourceValue
+		}
+		encoded, _ := json.Marshal(body)
+		request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(encoded))
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusCreated {
+			t.Fatalf("create %q status = %s", title, response.Status)
+		}
+		var result struct {
+			Session session.Session `json:"session"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Session
+	}
+	sourceValue := map[string]any{"app": "forge", "instanceId": "mac-1", "externalId": "task-1"}
+	forgeOne := create("forge one", sourceValue)
+	forgeDuplicate := create("forge duplicate", sourceValue)
+	forgeTwo := create("forge two", map[string]any{"app": "forge", "instanceId": "mac-2", "externalId": "task-2"})
+	other := create("other", map[string]any{"app": "other", "instanceId": "mac-1", "externalId": "task-1"})
+	legacy := create("legacy", nil)
+
+	if forgeOne.Source == nil || forgeOne.Source.App != "forge" {
+		t.Fatalf("create response source = %+v", forgeOne.Source)
+	}
+	fetched := getSession(t, server, forgeOne.ID)
+	if fetched.Source == nil || *fetched.Source != (session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+		t.Fatalf("GET response source = %+v", fetched.Source)
+	}
+	stateData, err := json.Marshal(session.StateEventData{State: session.StateStopped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(forgeTwo.ID, "session.state", "", stateData); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	assertList := func(query string, want ...string) {
+		t.Helper()
+		response, err := http.Get(server.URL + "/v1/sessions?" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var result struct {
+			Sessions []session.Session `json:"sessions"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		got := make(map[string]bool, len(result.Sessions))
+		for _, value := range result.Sessions {
+			got[value.ID] = true
+			if value.Source == nil {
+				t.Fatalf("%s: listed session %s omitted source", query, value.ID)
+			}
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: ids = %v, want %v", query, got, want)
+		}
+		for _, id := range want {
+			if !got[id] {
+				t.Fatalf("%s: missing %s in %v", query, id, got)
+			}
+		}
+	}
+	assertList("sourceApp=forge", forgeOne.ID, forgeTwo.ID)
+	assertList("sourceInstanceId=mac-1", forgeOne.ID, other.ID)
+	assertList("sourceExternalId=task-2", forgeTwo.ID)
+	assertList("sourceApp=forge&sourceInstanceId=mac-1&sourceExternalId=task-1", forgeOne.ID)
+	assertList("includeArchived=true&sourceApp=forge&sourceInstanceId=mac-1&sourceExternalId=task-1", forgeOne.ID, forgeDuplicate.ID)
+	assertList("archived=true&sourceApp=forge&sourceInstanceId=mac-1", forgeDuplicate.ID)
+	assertList("sourceApp=forge&sourceExternalId=task-2&state=stopped", forgeTwo.ID)
+
+	for _, id := range []string{legacy.ID, other.ID} {
+		if list := listIDs(t, server, "?sourceApp=forge"); list[id] != "" {
+			t.Fatalf("unmatched session %s appeared in source filter", id)
+		}
+	}
+
+	server.Close()
+	reopened, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := reopened.Get(forgeOne.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Source == nil || *value.Source != (session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+		t.Fatalf("source after daemon-style reopen = %+v", value.Source)
+	}
+}
+
 func TestMutationRejectsCrossOriginBrowser(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {

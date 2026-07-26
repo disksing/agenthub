@@ -81,6 +81,88 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 	}
 }
 
+func TestSessionSourcePersistsAndFilters(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(title string, source *Source) Session {
+		t.Helper()
+		value, err := store.Create(CreateInput{
+			Title: title, Cwd: t.TempDir(), AgentName: "Agent", Source: source,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	forgeOne := create("forge one", &Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"})
+	forgeDuplicate := create("forge duplicate", &Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"})
+	forgeTwo := create("forge two", &Source{App: "forge", InstanceID: "mac-2", ExternalID: "task-2"})
+	other := create("other app", &Source{App: "other", InstanceID: "mac-1", ExternalID: "task-1"})
+	_ = create("legacy", nil)
+
+	if _, err := store.Append(forgeTwo.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	app, instance, external := "forge", "mac-1", "task-1"
+	assertIDs := func(name string, filter ListFilter, want ...string) {
+		t.Helper()
+		values := store.Filter(filter)
+		got := make(map[string]bool, len(values))
+		for _, value := range values {
+			got[value.ID] = true
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: ids = %v, want %v", name, got, want)
+		}
+		for _, id := range want {
+			if !got[id] {
+				t.Fatalf("%s: missing %s in %v", name, id, got)
+			}
+		}
+	}
+	assertIDs("app", ListFilter{SourceApp: &app}, forgeOne.ID, forgeTwo.ID)
+	assertIDs("instance", ListFilter{SourceInstanceID: &instance}, forgeOne.ID, other.ID)
+	assertIDs("external", ListFilter{SourceExternalID: &external}, forgeOne.ID, other.ID)
+	assertIDs("combination", ListFilter{
+		SourceApp: &app, SourceInstanceID: &instance, SourceExternalID: &external,
+	}, forgeOne.ID)
+	assertIDs("combination including archived", ListFilter{
+		IncludeArchived: true, SourceApp: &app, SourceInstanceID: &instance, SourceExternalID: &external,
+	}, forgeOne.ID, forgeDuplicate.ID)
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{forgeOne.ID, forgeDuplicate.ID} {
+		value, err := reopened.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value.Source == nil || *value.Source != (Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+			t.Fatalf("replayed source for %s = %+v", id, value.Source)
+		}
+	}
+	events, err := reopened.EventsAfter(forgeOne.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created Session
+	if err := json.Unmarshal(events[0].Data, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Source == nil || created.Source.App != "forge" {
+		t.Fatalf("session.created source = %+v", created.Source)
+	}
+}
+
 func TestStoreRepairsPartialTailAndRebuildsSnapshot(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)

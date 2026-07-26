@@ -20,6 +20,7 @@ type Session struct {
 	Title              string    `json:"title"`
 	Cwd                string    `json:"cwd"`
 	AgentName          string    `json:"agentName,omitempty"`
+	Source             *Source   `json:"source,omitempty"`
 	Provider           string    `json:"provider,omitempty"`
 	ProviderSessionID  string    `json:"providerSessionId,omitempty"`
 	State              string    `json:"state"`
@@ -28,6 +29,15 @@ type Session struct {
 	LastEventID        int64     `json:"lastEventId"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
+}
+
+// Source is caller-supplied metadata for correlating sessions with the
+// application that created them. AgentHub stores these values verbatim and
+// does not authenticate them or impose uniqueness.
+type Source struct {
+	App        string `json:"app,omitempty"`
+	InstanceID string `json:"instanceId,omitempty"`
+	ExternalID string `json:"externalId,omitempty"`
 }
 
 type Event struct {
@@ -43,6 +53,7 @@ type CreateInput struct {
 	Title     string
 	Cwd       string
 	AgentName string
+	Source    *Source
 }
 
 type StateEventData struct {
