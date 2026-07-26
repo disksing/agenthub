@@ -498,6 +498,28 @@ select {
   white-space: nowrap;
 }
 
+/* The expand/collapse caret must keep its width even when the summary pill
+   is long; plain SVG children of a flex container shrink to zero otherwise. */
+.settings-card-toggle > svg {
+  flex-shrink: 0;
+}
+
+/* Inside a card head the summary pill must yield space instead of
+   overflowing the card; the full text remains available via title.
+   The large shrink factor makes the pill absorb nearly all overflow so the
+   agent name stays readable; it only truncates in extreme cases. */
+.settings-card-toggle .settings-pill {
+  flex-shrink: 100;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.settings-pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-card-icon {
   display: inline-flex;
   flex-shrink: 0;
