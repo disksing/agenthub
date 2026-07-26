@@ -314,9 +314,17 @@ The no-authentication mode is only suitable for the local machine and trusted ne
 go test -race ./...
 go vet ./...
 cd frontend
+npm ci
 npm run build
+npm test
 npm run test:sites
 ```
+
+The Go suite includes a real-process
+[Forge integration gate](docs/forge-integration-gate.md): it launches an
+isolated daemon and fake ACP provider subprocesses, injects lifecycle and
+streaming failures, and verifies cleanup, recovery, replay, capabilities,
+and structured errors across the process boundary.
 
 The implementation has also been integration-tested locally against real providers: Codex app-server, Kimi ACP, Pi/Kimi K3, Pi/Grok, Codex native thread recovery across restarts, and Kimi creating and writing files in the workspace.
 

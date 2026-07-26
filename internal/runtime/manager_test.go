@@ -446,6 +446,51 @@ func TestProviderCrashClosesApprovalAndTurnBeforeStopped(t *testing.T) {
 	}
 }
 
+func TestProviderTurnFailureClosesApprovalBeforeCanonicalTerminal(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	var adapter *fakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter = &fakeSession{hooks: options.Hooks, holdTurn: true}
+		return adapter, nil
+	}
+	if _, err := manager.Send(value.ID, "question", false); err != nil {
+		t.Fatal(err)
+	}
+	adapter.hooks.Approval("apr_rpc", "tool/request", nil)
+	adapter.hooks.Event(provider.Event{
+		Type: "provider.error", Data: map[string]any{"message": "provider exited before responding"},
+		TurnDone: true, TurnFailed: true,
+	})
+
+	got, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentTurnID != "" || len(got.PendingApprovalIDs) != 0 {
+		t.Fatalf("turn terminal left work open: %+v", got)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tail []string
+	for _, event := range events[len(events)-3:] {
+		tail = append(tail, event.Type)
+	}
+	want := []string{"provider.error", "approval.resolved", "turn.failed"}
+	if string(mustJSON(tail)) != string(mustJSON(want)) {
+		t.Fatalf("terminal event order = %v, want %v", tail, want)
+	}
+}
+
 func TestStopAndNaturalExitRaceProducesOneStoppedBoundary(t *testing.T) {
 	for attempt := 0; attempt < 25; attempt++ {
 		store, err := session.Open(t.TempDir())

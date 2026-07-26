@@ -384,9 +384,23 @@ func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
 		}
 		eventType := session.EventTurnCompleted
 		terminal := session.TurnTerminalEventData{}
+		approvalReason := session.StopReasonCompleted
 		if event.TurnFailed {
 			eventType = session.EventTurnFailed
 			terminal.Error = providerEventMessage(event.Data)
+			approvalReason = session.StopReasonProviderError
+		}
+		// A canonical turn terminal is also the closure boundary for every
+		// approval belonging to that turn. In particular, an RPC waiter can
+		// observe a crashed provider before the process Wait callback runs.
+		// Close approvals here so clients never see turn.failed followed by
+		// a still-pending approval while ProcessEnd catches up.
+		if value, err := m.store.Get(id); err == nil {
+			for _, approvalID := range value.PendingApprovalIDs {
+				_, _ = m.store.Append(id, "approval.resolved", turnID, marshal(map[string]any{
+					"approvalId": approvalID, "decision": "cancel", "reason": approvalReason,
+				}))
+			}
 		}
 		_, _ = m.store.Append(id, eventType, turnID, marshal(terminal))
 		run.turnID = ""
