@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -517,6 +518,53 @@ func TestSSEStreamsUnknownEventTypes(t *testing.T) {
 		t.Fatalf("second event type = %q, want provider.some.future.event", event.Type)
 	}
 	cancel()
+}
+
+// When the server starts shutting down, live SSE streams must end on their
+// own so http.Server.Shutdown is not blocked until its deadline by clients
+// that keep the connection open.
+func TestSSEStopsWhenServerCloses(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Title: "SSE", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closing := make(chan struct{})
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Closing: closing}).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?stream=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if line, err := reader.ReadString('\n'); err != nil || line != "id: 1\n" {
+		t.Fatalf("expected replayed first event, got %q (%v)", line, err)
+	}
+
+	close(closing)
+	deadline := time.After(5 * time.Second)
+	errCh := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := reader.ReadString('\n'); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-errCh:
+		if err != io.EOF {
+			t.Fatalf("stream ended with %v, want clean EOF", err)
+		}
+	case <-deadline:
+		t.Fatal("SSE stream did not end after the server started closing")
+	}
 }
 
 func mustMarshal(t *testing.T, value any) []byte {

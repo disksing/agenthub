@@ -8,9 +8,11 @@ package main
 // touched.
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -303,8 +305,70 @@ func TestServeRefusesToStartOnMigrationConflict(t *testing.T) {
 	}
 }
 
-func TestServeSkipsMigrationUnderAgentHubHome(t *testing.T) {
-	home := legacyHome(t, []string{"ses_old111"}, nil)
+// SIGTERM must stop the daemon promptly and cleanly even while an SSE
+// client keeps an event stream open: the stream ends when Shutdown begins,
+// and any straggler connection is force-closed instead of turning the exit
+// into a crash error.
+func TestServeSIGTERMClosesSSEAndExitsCleanly(t *testing.T) {
+	home := t.TempDir()
+	isolated := t.TempDir()
+	writeLegacySessionEvents(t, filepath.Join(isolated, "data", "sessions", "ses_sse001"), "ses_sse001", false)
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTHUB_HOME", isolated)
+	t.Setenv("AGENTHUB_CODEX_CLI", "definitely-missing-codex")
+	t.Setenv("AGENTHUB_KIMI_CLI", "definitely-missing-kimi")
+	t.Setenv("AGENTHUB_PI_CLI", "definitely-missing-pi")
+	t.Setenv("AGENTHUB_OPENCODE_CLI", "definitely-missing-opencode")
+	addr := freePort(t)
+	done := serveAsync(t, addr)
+	waitForStatus(t, addr)
+
+	response, err := http.Get("http://" + addr + "/v1/sessions/ses_sse001/events?stream=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if line, err := reader.ReadString('\n'); err != nil || !strings.HasPrefix(line, "id: ") {
+		t.Fatalf("expected replayed SSE event, got %q (%v)", line, err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(isolated, "state", "server.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := syscall.Kill(state.PID, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serve returned: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("daemon did not shut down promptly with an open SSE stream")
+	}
+	if elapsed := time.Since(started); elapsed >= 5*time.Second {
+		t.Fatalf("shutdown took %v; SSE stream blocked the graceful shutdown", elapsed)
+	}
+	for {
+		if _, err := reader.ReadString('\n'); err != nil {
+			if err != io.EOF {
+				t.Fatalf("SSE stream ended with %v, want clean EOF", err)
+			}
+			break
+		}
+	}
+}
+
+func TestServeSkipsMigrationUnderAgentHubHome(t *testing.T) {home := legacyHome(t, []string{"ses_old111"}, nil)
 	isolated := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTHUB_HOME", isolated)
