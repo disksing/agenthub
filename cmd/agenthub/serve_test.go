@@ -368,13 +368,23 @@ func TestServeSIGTERMClosesSSEAndExitsCleanly(t *testing.T) {
 	if elapsed := time.Since(started); elapsed >= 5*time.Second {
 		t.Fatalf("shutdown took %v; SSE stream blocked the graceful shutdown", elapsed)
 	}
-	for {
-		if _, err := reader.ReadString('\n'); err != nil {
-			if err != io.EOF {
-				t.Fatalf("SSE stream ended with %v, want clean EOF", err)
+	streamEnded := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := reader.ReadString('\n'); err != nil {
+				streamEnded <- err
+				return
 			}
-			break
 		}
+	}()
+	select {
+	case err := <-streamEnded:
+		if err != io.EOF {
+			t.Fatalf("SSE stream ended with %v, want clean EOF", err)
+		}
+	case <-time.After(2 * time.Second):
+		_ = response.Body.Close()
+		t.Fatal("SSE stream did not end after daemon shutdown")
 	}
 }
 
