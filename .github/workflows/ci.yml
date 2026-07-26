@@ -29,6 +29,7 @@ jobs:
             packages: ./internal/provider
           - name: command
             packages: ./cmd/...
+            test_args: -v -timeout=90s
           - name: client-config
             packages: ./internal/client ./internal/config
           - name: migrate-paths
@@ -42,7 +43,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Race-enabled tests
-        run: go test -race ${{ matrix.packages }}
+        run: go test -race ${{ matrix.test_args }} ${{ matrix.packages }}
 
   vet:
     name: Go vet
