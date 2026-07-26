@@ -21,6 +21,39 @@ type Client struct {
 	http     *http.Client
 }
 
+// APIError is the stable error envelope returned by every non-2xx API
+// response. Callers may use errors.As to inspect Code and Retryable.
+type APIError struct {
+	StatusCode int
+	Code       string          `json:"code"`
+	Message    string          `json:"message"`
+	Retryable  bool            `json:"retryable"`
+	Details    json.RawMessage `json:"details,omitempty"`
+	RequestID  string          `json:"requestId,omitempty"`
+}
+
+func (e *APIError) Error() string {
+	if e.Code == "" {
+		return fmt.Sprintf("agenthub API returned HTTP %d", e.StatusCode)
+	}
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// IncompatibleDaemonError reports an API version or capability mismatch
+// before a client creates a session.
+type IncompatibleDaemonError struct {
+	APIVersion          string
+	SupportedAPIVersion string
+	MissingCapabilities []string
+}
+
+func (e *IncompatibleDaemonError) Error() string {
+	if e.APIVersion != e.SupportedAPIVersion {
+		return fmt.Sprintf("incompatible AgentHub API version %q (client requires %q)", e.APIVersion, e.SupportedAPIVersion)
+	}
+	return fmt.Sprintf("AgentHub daemon is missing required capabilities: %s", strings.Join(e.MissingCapabilities, ", "))
+}
+
 type EventPage struct {
 	Events []session.Event `json:"events"`
 	Page   struct {
@@ -69,6 +102,42 @@ func (c *Client) Status() (map[string]any, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+// RequireCapabilities rejects old or incomplete daemons before the caller
+// creates a session. Unknown additional capabilities are ignored.
+func (c *Client) RequireCapabilities(apiVersion string, required ...string) error {
+	var status struct {
+		APIVersion   string   `json:"apiVersion"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := c.request(http.MethodGet, "/v1/status", nil, &status); err != nil {
+		return err
+	}
+	if status.APIVersion != apiVersion {
+		return &IncompatibleDaemonError{
+			APIVersion:          status.APIVersion,
+			SupportedAPIVersion: apiVersion,
+		}
+	}
+	available := make(map[string]bool, len(status.Capabilities))
+	for _, capability := range status.Capabilities {
+		available[capability] = true
+	}
+	var missing []string
+	for _, capability := range required {
+		if !available[capability] {
+			missing = append(missing, capability)
+		}
+	}
+	if len(missing) > 0 {
+		return &IncompatibleDaemonError{
+			APIVersion:          status.APIVersion,
+			SupportedAPIVersion: apiVersion,
+			MissingCapabilities: missing,
+		}
+	}
+	return nil
 }
 
 func (c *Client) CreateSession(title, cwd, agentName string) (session.Session, error) {
@@ -243,15 +312,13 @@ func (c *Client) request(method, path string, body any, target any) error {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
 		var apiError struct {
-			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
+			Error APIError `json:"error"`
 		}
 		if json.Unmarshal(data, &apiError) == nil && apiError.Error.Message != "" {
-			return fmt.Errorf("%s: %s", apiError.Error.Code, apiError.Error.Message)
+			apiError.Error.StatusCode = response.StatusCode
+			return &apiError.Error
 		}
-		return fmt.Errorf("agenthub API returned %s", response.Status)
+		return &APIError{StatusCode: response.StatusCode, Message: response.Status}
 	}
 	if target == nil || response.StatusCode == http.StatusNoContent {
 		return nil

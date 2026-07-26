@@ -6,10 +6,72 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/disksing/agenthub/internal/session"
 )
+
+func TestRequireCapabilitiesRejectsOldAndIncompleteDaemons(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "old daemon without negotiation fields",
+			body: `{"version":"0.1.0"}`,
+			want: `incompatible AgentHub API version ""`,
+		},
+		{
+			name: "missing capability",
+			body: `{"apiVersion":"1","capabilities":["session.source"]}`,
+			want: "events.lossless-replay",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			err := New(server.URL).RequireCapabilities("1", "session.source", "events.lossless-replay")
+			var incompatible *IncompatibleDaemonError
+			if !errors.As(err, &incompatible) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want IncompatibleDaemonError containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRequireCapabilitiesAllowsUnknownAdditions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"1","capabilities":["session.source","future.feature"]}`))
+	}))
+	defer server.Close()
+	if err := New(server.URL).RequireCapabilities("1", "session.source"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequestReturnsStructuredAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":"runtime_unavailable","message":"runtime is unavailable","retryable":true,"details":{"scope":"runtime"},"requestId":"req_1"}}`))
+	}))
+	defer server.Close()
+	_, err := New(server.URL).Status()
+	var apiError *APIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("error = %v, want APIError", err)
+	}
+	if apiError.StatusCode != http.StatusServiceUnavailable || apiError.Code != "runtime_unavailable" || !apiError.Retryable || apiError.RequestID != "req_1" {
+		t.Fatalf("APIError = %+v", apiError)
+	}
+}
 
 func TestEventsAfterPagesToInitialDurableHead(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

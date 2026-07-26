@@ -186,8 +186,10 @@ Usage:
 Requires a running daemon (see "agenthub help serve"). The CLI discovers the
 endpoint through server.json or AGENTHUB_ENDPOINT. The report includes the
 daemon version and uptime, the config, session store, archive and logs
-paths, and the runtime summary, so you can confirm the unified ~/.agenthub
-layout after an upgrade migration.
+paths, the runtime summary, the stable apiVersion and the capabilities this
+daemon instance actually supports. API clients should check apiVersion and
+all required capabilities before creating a session; a missing field means
+the daemon is too old for capability negotiation.
 
 See also: agenthub help agents, agenthub help session list
 `,

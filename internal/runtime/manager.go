@@ -173,7 +173,7 @@ func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
 		_, _ = m.store.Append(id, "message.user.steer", turnID, marshal(map[string]any{"text": text}))
 	}
 	if err := run.adapter.Prompt(text, steer); err != nil {
-		_, _ = m.store.Append(id, "turn.failed", turnID, marshal(map[string]any{"error": err.Error()}))
+		_, _ = m.store.Append(id, session.EventTurnFailed, turnID, marshal(session.TurnTerminalEventData{Error: err.Error()}))
 		run.setTurn("")
 		return session.Session{}, err
 	}
@@ -191,7 +191,7 @@ func (m *Manager) Interrupt(id string) error {
 		return err
 	}
 	if turnID := run.turn(); turnID != "" {
-		_, _ = m.store.Append(id, "turn.cancelled", turnID, marshal(map[string]any{"reason": "interrupted"}))
+		_, _ = m.store.Append(id, session.EventTurnCancelled, turnID, marshal(session.TurnTerminalEventData{Reason: "interrupted"}))
 		run.setTurn("")
 	}
 	return nil
@@ -382,13 +382,27 @@ func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
 		if !event.TurnDone || turnID == "" {
 			return
 		}
-		eventType := "turn.completed"
+		eventType := session.EventTurnCompleted
+		terminal := session.TurnTerminalEventData{}
 		if event.TurnFailed {
-			eventType = "turn.failed"
+			eventType = session.EventTurnFailed
+			terminal.Error = providerEventMessage(event.Data)
 		}
-		_, _ = m.store.Append(id, eventType, turnID, marshal(event.Data))
+		_, _ = m.store.Append(id, eventType, turnID, marshal(terminal))
 		run.turnID = ""
 	})
+}
+
+func providerEventMessage(data any) string {
+	switch value := data.(type) {
+	case map[string]any:
+		message, _ := value["message"].(string)
+		return message
+	case struct{ Message string }:
+		return value.Message
+	default:
+		return ""
+	}
 }
 
 func (m *Manager) convergeActive(id string, run *active, processErr error) {
@@ -427,12 +441,12 @@ func (m *Manager) convergeStored(id, reason string, cause error) {
 		}))
 	}
 	if value.CurrentTurnID != "" {
-		eventType := "turn.cancelled"
-		data := map[string]any{"reason": reason}
+		eventType := session.EventTurnCancelled
+		data := session.TurnTerminalEventData{Reason: reason}
 		if reason == session.StopReasonProviderError || reason == session.StopReasonStartupError {
-			eventType = "turn.failed"
+			eventType = session.EventTurnFailed
 			if cause != nil {
-				data["error"] = cause.Error()
+				data.Error = cause.Error()
 			}
 		}
 		_, _ = m.store.Append(id, eventType, value.CurrentTurnID, marshal(data))

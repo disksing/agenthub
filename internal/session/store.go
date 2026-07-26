@@ -607,7 +607,7 @@ func applyEvent(projected *Session, event Event) error {
 	case "turn.started":
 		projected.CurrentTurnID = event.TurnID
 		projected.State = StateBusy
-	case "turn.completed", "turn.failed", "turn.cancelled":
+	case EventTurnCompleted, EventTurnFailed, EventTurnCancelled:
 		if projected.CurrentTurnID == event.TurnID {
 			projected.CurrentTurnID = ""
 		}

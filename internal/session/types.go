@@ -30,6 +30,22 @@ const (
 	StopReasonDaemonRecovery = "daemon_recovery"
 )
 
+const (
+	EventTurnCompleted = "turn.completed"
+	EventTurnFailed    = "turn.failed"
+	EventTurnCancelled = "turn.cancelled"
+)
+
+// TurnTerminalEventData is the provider-independent payload of a canonical
+// turn terminal event. A successful completion has an empty payload. Failed
+// and cancelled turns may carry a human-readable error or stable reason.
+// Provider-native completion payloads remain available on their preceding
+// diagnostic event and are never copied into this public payload.
+type TurnTerminalEventData struct {
+	Error  string `json:"error,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
 type Session struct {
 	ID                 string            `json:"id"`
 	Title              string            `json:"title"`

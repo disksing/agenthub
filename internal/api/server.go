@@ -21,6 +21,17 @@ import (
 	"github.com/disksing/agenthub/internal/session"
 )
 
+const APIVersion = "1"
+
+const (
+	CapabilitySessionSource            = "session.source"
+	CapabilitySessionLaunchEnvironment = "session.launch-environment"
+	CapabilitySessionStrictStopped     = "session.strict-stopped"
+	CapabilityEventsLosslessReplay     = "events.lossless-replay"
+	CapabilityEventsCanonicalTerminal  = "events.canonical-turn-terminals"
+	CapabilityRecoveryClosedTurns      = "recovery.closed-turns"
+)
+
 // ModelLister enumerates the models of a built-in provider and can drop its
 // cached results. *provider.ModelCache implements it; tests substitute fakes.
 type ModelLister interface {
@@ -102,6 +113,9 @@ func (s *Server) routes() []apiRoute {
 		{"POST /v1/sessions", s.createSession, "POST /v1/sessions"},
 		{"/v1/sessions/", s.sessionRoute, ""}, // sub-routes dispatch through sessionOps()
 		{"GET /api.md", s.apiDocs, ""},
+		{"/api.md", s.apiDocsRoute, ""},
+		{"/v1", s.apiNotFound, ""},
+		{"/v1/", s.apiNotFound, ""},
 	}
 }
 
@@ -158,6 +172,8 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
+		"apiVersion":    APIVersion,
+		"capabilities":  s.capabilities(),
 		"version":       s.version,
 		"startedAt":     s.startedAt,
 		"uptimeSeconds": int64(time.Since(s.startedAt).Seconds()),
@@ -174,6 +190,26 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		},
 		"runtime": s.runtimeStatus(),
 	})
+}
+
+// capabilities reports only behavior available from this server instance.
+// Store/API capabilities are always present. Runtime lifecycle capabilities
+// are omitted from store-only instances instead of claiming behavior that
+// cannot be exercised.
+func (s *Server) capabilities() []string {
+	capabilities := []string{
+		CapabilityEventsLosslessReplay,
+		CapabilitySessionSource,
+	}
+	if s.runtime != nil {
+		capabilities = append(capabilities,
+			CapabilityEventsCanonicalTerminal,
+			CapabilityRecoveryClosedTurns,
+			CapabilitySessionLaunchEnvironment,
+			CapabilitySessionStrictStopped,
+		)
+	}
+	return capabilities
 }
 
 func (s *Server) runtimeStatus() any {
@@ -580,7 +616,7 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/")
 	parts := strings.Split(path, "/")
 	if parts[0] == "" {
-		http.NotFound(w, r)
+		writeAPIError(w, http.StatusNotFound, "route_not_found", "API route not found", nil)
 		return
 	}
 	id, tail := parts[0], parts[1:]
@@ -612,10 +648,10 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(tail) == 0 {
 		// The session exists as an addressable resource; the method is not.
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method is not allowed for this API route", nil)
 		return
 	}
-	http.NotFound(w, r)
+	writeAPIError(w, http.StatusNotFound, "route_not_found", "API route not found", nil)
 }
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) {
@@ -634,6 +670,23 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
+	if strings.TrimSpace(body.Text) == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "message text is required", nil)
+		return
+	}
+	current, err := s.store.Get(id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if current.State == session.StateStopping {
+		writeAPIError(w, http.StatusConflict, "session_stopping", "session provider is stopping", nil)
+		return
+	}
+	if current.CurrentTurnID != "" && !body.Steer {
+		writeAPIError(w, http.StatusConflict, "turn_active", "session already has an active turn; set steer=true or wait", map[string]any{"turnId": current.CurrentTurnID})
+		return
+	}
 	value, err := s.runtime.Send(id, body.Text, body.Steer)
 	if err != nil {
 		s.writeRuntimeError(w, err)
@@ -650,6 +703,15 @@ func (s *Server) resumeSession(w http.ResponseWriter, _ *http.Request, id string
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
 	}
+	current, err := s.store.Get(id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if current.State == session.StateStopping {
+		writeAPIError(w, http.StatusConflict, "session_stopping", "session provider is stopping", nil)
+		return
+	}
 	value, err := s.runtime.Start(id)
 	if err != nil {
 		s.writeRuntimeError(w, err)
@@ -664,6 +726,15 @@ func (s *Server) interruptSession(w http.ResponseWriter, _ *http.Request, id str
 	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
+		return
+	}
+	current, err := s.store.Get(id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if current.CurrentTurnID == "" {
+		writeAPIError(w, http.StatusConflict, "turn_not_active", "session has no active turn to interrupt", nil)
 		return
 	}
 	if err := s.runtime.Interrupt(id); err != nil {
@@ -706,12 +777,36 @@ func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, id stri
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
+	switch body.Decision {
+	case "accept", "acceptForSession", "decline", "cancel":
+	default:
+		writeAPIError(w, http.StatusBadRequest, "invalid_approval_decision", "decision must be accept, acceptForSession, decline, or cancel", nil)
+		return
+	}
+	current, err := s.store.Get(id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if !containsString(current.PendingApprovalIDs, approvalID) {
+		writeAPIError(w, http.StatusConflict, "approval_not_pending", "approval is not pending", map[string]any{"approvalId": approvalID})
+		return
+	}
 	if err := s.runtime.Approve(id, approvalID, body.Decision); err != nil {
 		s.writeRuntimeError(w, err)
 		return
 	}
 	value, _ := s.store.Get(id)
 	writeJSON(w, http.StatusOK, map[string]any{"session": value})
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) writeRuntimeError(w http.ResponseWriter, err error) {
@@ -923,6 +1018,12 @@ func decodeJSON(r *http.Request, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain one JSON value")
+		}
+		return err
+	}
 	return nil
 }
 
@@ -990,10 +1091,37 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string, deta
 		"error": map[string]any{
 			"code":      code,
 			"message":   message,
+			"retryable": retryableAPIError(code),
 			"details":   details,
 			"requestId": requestID,
 		},
 	})
+}
+
+func retryableAPIError(code string) bool {
+	switch code {
+	case "runtime_unavailable",
+		"provider_unavailable",
+		"provider_timeout",
+		"provider_error",
+		"session_store_failed",
+		"session_archive_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) apiNotFound(w http.ResponseWriter, _ *http.Request) {
+	writeAPIError(w, http.StatusNotFound, "route_not_found", "API route not found", nil)
+}
+
+func (s *Server) apiDocsRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method is not allowed for this API route", nil)
+		return
+	}
+	s.apiDocs(w, r)
 }
 
 func mutatingMethod(method string) bool {

@@ -1731,3 +1731,251 @@ func TestStatusReportsUnifiedDataPaths(t *testing.T) {
 		t.Errorf("sessionStore = %+v", body.Store)
 	}
 }
+
+func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Agent",
+		Source:            &session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-30"},
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "session-30"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnID := "turn_contract"
+	if _, err := store.Append(created.ID, "turn.started", turnID, []byte(`{"text":"work"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "approval.requested", turnID, []byte(`{"approvalId":"approval-1"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manager construction is the daemon-recovery boundary. It must close
+	// the pending approval and open turn before this instance advertises
+	// runtime lifecycle capabilities.
+	manager := runtime.New(store, config.Config{})
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager}).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/v1/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var status struct {
+		APIVersion   string   `json:"apiVersion"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.APIVersion != APIVersion {
+		t.Fatalf("apiVersion = %q", status.APIVersion)
+	}
+	wantCapabilities := []string{
+		CapabilityEventsLosslessReplay,
+		CapabilitySessionSource,
+		CapabilityEventsCanonicalTerminal,
+		CapabilityRecoveryClosedTurns,
+		CapabilitySessionLaunchEnvironment,
+		CapabilitySessionStrictStopped,
+	}
+	if strings.Join(status.Capabilities, ",") != strings.Join(wantCapabilities, ",") {
+		t.Fatalf("capabilities = %v, want %v", status.Capabilities, wantCapabilities)
+	}
+
+	response, err = http.Get(server.URL + "/v1/sessions?sourceApp=forge&sourceInstanceId=mac-1&sourceExternalId=task-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var listed struct {
+		Sessions []session.Session `json:"sessions"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 1 ||
+		listed.Sessions[0].LaunchEnvironment["FORGE_SESSION_ID"] != "session-30" ||
+		listed.Sessions[0].State != session.StateStopped ||
+		listed.Sessions[0].StopReason != session.StopReasonDaemonRecovery ||
+		listed.Sessions[0].CurrentTurnID != "" ||
+		len(listed.Sessions[0].PendingApprovalIDs) != 0 {
+		t.Fatalf("recovered session = %+v", listed.Sessions)
+	}
+
+	response, err = http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?after=0&limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var firstPage struct {
+		Events       []session.Event `json:"events"`
+		LatestCursor int64           `json:"latestCursor"`
+		Page         struct {
+			NextAfter int64 `json:"nextAfter"`
+			HasMore   bool  `json:"hasMore"`
+		} `json:"page"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Events) != 2 || !firstPage.Page.HasMore || firstPage.LatestCursor <= firstPage.Page.NextAfter {
+		t.Fatalf("lossless first page = %+v", firstPage)
+	}
+	allEvents, err := store.EventsAfter(created.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terminal *session.Event
+	for i := range allEvents {
+		if allEvents[i].Type == session.EventTurnCancelled {
+			terminal = &allEvents[i]
+		}
+	}
+	if terminal == nil || string(terminal.Data) != `{"reason":"daemon_recovery"}` {
+		t.Fatalf("canonical terminal event = %+v", terminal)
+	}
+}
+
+func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	New(store, "test", time.Now()).Handler().ServeHTTP(response, request)
+	var body struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{CapabilityEventsLosslessReplay, CapabilitySessionSource}
+	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
+		t.Fatalf("capabilities = %v, want %v", body.Capabilities, want)
+	}
+}
+
+func TestEveryAPINon2xxResponseUsesStructuredEnvelope(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(store, "test", time.Now()).Handler()
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		contentType string
+		body        string
+		code        string
+		retryable   bool
+	}{
+		{"unknown API route", http.MethodGet, "/v1/unknown", "", "", "route_not_found", false},
+		{"API root", http.MethodGet, "/v1", "", "", "route_not_found", false},
+		{"session method", http.MethodPut, "/v1/sessions/" + created.ID, "application/json", `{}`, "method_not_allowed", false},
+		{"docs method", http.MethodPost, "/api.md", "application/json", `{}`, "method_not_allowed", false},
+		{"missing runtime", http.MethodGet, "/v1/config", "", "", "runtime_unavailable", true},
+		{"invalid JSON", http.MethodPost, "/v1/sessions", "application/json", `{} {}`, "invalid_request", false},
+		{"wrong media type", http.MethodPost, "/v1/sessions", "text/plain", `{}`, "json_required", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			if test.contentType != "" {
+				request.Header.Set("Content-Type", test.contentType)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code < 400 {
+				t.Fatalf("status = %d", response.Code)
+			}
+			if got := response.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q", got)
+			}
+			var body struct {
+				Error struct {
+					Code      string          `json:"code"`
+					Message   string          `json:"message"`
+					Retryable *bool           `json:"retryable"`
+					Details   json.RawMessage `json:"details"`
+					RequestID string          `json:"requestId"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != test.code || body.Error.Message == "" || body.Error.Retryable == nil ||
+				*body.Error.Retryable != test.retryable || body.Error.RequestID == "" {
+				t.Fatalf("error envelope = %+v", body.Error)
+			}
+		})
+	}
+}
+
+func TestSessionConflictCodesAreStable(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := runtime.New(store, config.Config{})
+	active, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(active.ID, "turn.started", "turn_active", []byte(`{"text":"work"}`)); err != nil {
+		t.Fatal(err)
+	}
+	stopping, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(stopping.ID, "session.state", "", []byte(`{"state":"stopping"}`)); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(store, "test", time.Now(), Dependencies{Runtime: manager}).Handler()
+	tests := []struct {
+		name   string
+		path   string
+		body   string
+		status int
+		code   string
+	}{
+		{"blank message", "/v1/sessions/" + active.ID + "/messages", `{"text":" "}`, http.StatusBadRequest, "invalid_request"},
+		{"active turn", "/v1/sessions/" + active.ID + "/messages", `{"text":"next"}`, http.StatusConflict, "turn_active"},
+		{"interrupt without turn", "/v1/sessions/" + stopping.ID + "/interrupt", `{}`, http.StatusConflict, "turn_not_active"},
+		{"resume while stopping", "/v1/sessions/" + stopping.ID + "/resume", `{}`, http.StatusConflict, "session_stopping"},
+		{"invalid approval decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"decision":"maybe"}`, http.StatusBadRequest, "invalid_approval_decision"},
+		{"approval not pending", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"decision":"accept"}`, http.StatusConflict, "approval_not_pending"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			var body struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != test.status || body.Error.Code != test.code {
+				t.Fatalf("status/code = %d/%s, want %d/%s", response.Code, body.Error.Code, test.status, test.code)
+			}
+		})
+	}
+}

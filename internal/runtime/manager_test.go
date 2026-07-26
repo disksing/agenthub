@@ -46,7 +46,11 @@ func (f *fakeSession) Prompt(text string, _ bool) error {
 	if f.holdTurn {
 		return nil
 	}
-	f.hooks.Event(provider.Event{Type: "provider.turn.completed", TurnDone: true})
+	f.hooks.Event(provider.Event{
+		Type:     "provider.turn.completed",
+		Data:     map[string]any{"nativeTurnId": "provider-private"},
+		TurnDone: true,
+	})
 	return nil
 }
 func (f *fakeSession) Interrupt() error          { return nil }
@@ -118,6 +122,12 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	expected := []string{"session.created", "session.state", "session.provider", "session.state", "message.user", "turn.started", "message.assistant.delta", "provider.turn.completed", "turn.completed"}
 	if string(mustJSON(types)) != string(mustJSON(expected)) {
 		t.Fatalf("event types = %v", types)
+	}
+	if got := string(events[len(events)-1].Data); got != "{}" {
+		t.Fatalf("canonical turn.completed payload = %s, want provider-independent {}", got)
+	}
+	if got := string(events[len(events)-2].Data); !strings.Contains(got, "provider-private") {
+		t.Fatalf("provider-native diagnostic payload was not preserved: %s", got)
 	}
 
 	manager.Close()

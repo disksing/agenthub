@@ -61,6 +61,7 @@ Every non-2xx response uses a single error envelope:
   "error": {
     "code": "session_not_found",
     "message": "session not found",
+    "retryable": false,
     "details": null,
     "requestId": "req_1753502400001a2b3c4d5e6f7a8b9c"
   }
@@ -68,9 +69,45 @@ Every non-2xx response uses a single error envelope:
 ```
 
 `code` is a stable machine-readable identifier; `message` is human-readable
-and may change; `details` carries optional structured context (for example
-the session id after a provider start failure); `requestId` correlates the
-response with daemon logs.
+and may change; `retryable` says whether retrying the same operation later
+can be useful without first changing the request; `details` carries optional
+structured context (for example the session id after a provider start
+failure); `requestId` correlates the response with daemon logs. Clients must
+branch on `code`, not on `message`. A false `retryable` does not mean the
+condition is permanent: the caller may need to change state or construct a
+new request first. In particular, create and message failures are never
+marked retryable because the daemon may already have persisted a session or
+turn.
+
+Unknown API paths and unsupported methods use this envelope too
+(`route_not_found` and `method_not_allowed`); no public API error is plain
+text or an empty body.
+
+### Compatibility and capability negotiation
+
+Call `GET /v1/status` before creating a session. `apiVersion` is the major
+public contract version; a client must reject a value it does not support.
+`capabilities` is a set of independently testable behaviors. Require every
+behavior your workflow needs and reject a daemon that omits one. Older
+daemons that return neither field are therefore explicitly incompatible,
+not silently assumed to support the current contract. Ignore unknown
+capabilities, response fields and event types so a compatible daemon can add
+information without breaking the client.
+
+Current runtime-backed daemon instances advertise:
+
+| Capability | Guaranteed behavior |
+| --- | --- |
+| `session.source` | Durable caller source metadata and exact list filters. |
+| `session.launch-environment` | Durable per-session provider environment, including provider resume. |
+| `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
+| `events.lossless-replay` | Durable exclusive cursors, paginated REST catch-up and gap-free SSE replay. |
+| `events.canonical-turn-terminals` | Provider-independent `turn.completed`, `turn.failed` and `turn.cancelled`. |
+| `recovery.closed-turns` | Daemon recovery closes open approvals and turns before publishing `stopped`. |
+
+Store-only test/diagnostic server instances omit runtime-backed capabilities;
+the daemon never advertises them merely because their names are compiled
+into the binary.
 
 ### Sessions
 
@@ -156,8 +193,8 @@ present on events that belong to a turn. Core event types:
 | `message.user` | `{"text"}` | A user message started a new turn. |
 | `message.user.steer` | `{"text"}` | A steer message was injected into the active turn. |
 | `turn.started` | `{"text"}` | A turn began. |
-| `turn.completed` | provider-specific | The active turn finished successfully. |
-| `turn.failed` | `{"error"}` or provider-specific | The active turn failed. |
+| `turn.completed` | `{}` | The active turn finished successfully. |
+| `turn.failed` | `{"error"}` | The active turn failed. |
 | `turn.cancelled` | `{"reason"}` | The active turn was interrupted. |
 | `approval.requested` | `{"approvalId", "method", "params"}` | The provider asks for approval; resolve it through the approvals endpoint. |
 | `approval.resolved` | `{"approvalId", "decision"}` | An approval was answered. |
@@ -170,7 +207,11 @@ present on events that belong to a turn. Core event types:
 | `provider.warning` | `{"message", ...}` | Non-fatal provider problem. |
 
 Providers may emit additional types over time. Consumers must ignore event
-types they do not recognize.
+types they do not recognize. The three `turn.*` terminal events above are
+the only canonical turn terminal signals. A preceding provider-native event
+such as `provider.turn.completed` is diagnostic only: clients must not use it
+to close a turn, and its private payload is never copied into the canonical
+terminal event.
 
 ## Endpoints
 
@@ -183,6 +224,15 @@ Daemon status, effective data paths and runtime summary.
 
 ```json
 {
+  "apiVersion": "1",
+  "capabilities": [
+    "events.lossless-replay",
+    "session.source",
+    "events.canonical-turn-terminals",
+    "recovery.closed-turns",
+    "session.launch-environment",
+    "session.strict-stopped"
+  ],
   "version": "0.1.0",
   "startedAt": "2026-07-26T11:00:00Z",
   "uptimeSeconds": 3600,
@@ -202,7 +252,9 @@ Daemon status, effective data paths and runtime summary.
 ```
 
   `runtime` is `{"available": false}` when the daemon runs without a
-  session runtime.
+  session runtime. Such an instance also omits the runtime-backed
+  capabilities described under
+  [Compatibility and capability negotiation](#compatibility-and-capability-negotiation).
 
 ```bash
 curl -s "$BASE/v1/status"
@@ -481,7 +533,8 @@ unarchiving is not supported.
   intact and a retry or daemon restart completes the move).
 
 ```bash
-curl -s -X DELETE "$BASE/v1/sessions/$SESSION"
+curl -s -X DELETE "$BASE/v1/sessions/$SESSION" \
+  -H "Content-Type: application/json" -d '{}'
 ```
 
 ### GET /v1/sessions/{id}/events
@@ -595,8 +648,9 @@ active turn the message is rejected unless `steer` is set.
   watch it through the events endpoint.
 - **Errors:** `400 invalid_request`, `415 json_required`,
   `404 session_not_found`, `409 session_archived`,
-  `409 runtime_operation_failed` (blank text, an active turn without
-  `steer=true`, or the provider rejecting the prompt),
+  `409 session_stopping`, `409 turn_active` (an active turn exists without
+  `steer=true`), `409 runtime_operation_failed` (the provider rejected the
+  prompt),
   `503 runtime_unavailable`.
 
 ```bash
@@ -619,8 +673,9 @@ restarts. Safe to call when the provider is already running.
 - **Request body:** empty (`{}`).
 - **Success `200`:** `{"session": {...}}`.
 - **Errors:** `415 json_required`, `404 session_not_found`,
-  `409 session_archived`, `409 runtime_operation_failed` (the provider could
-  not start, for example because the recorded agent no longer exists),
+  `409 session_archived`, `409 session_stopping`,
+  `409 runtime_operation_failed` (the provider could not start, for example
+  because the recorded agent no longer exists),
   `503 runtime_unavailable`.
 
 ```bash
@@ -637,8 +692,9 @@ message.
 - **Request body:** empty (`{}`).
 - **Success `200`:** `{"session": {...}}`.
 - **Errors:** `415 json_required`, `404 session_not_found`,
-  `409 session_archived`, `409 runtime_operation_failed` (the provider is
-  not running), `503 runtime_unavailable`.
+  `409 session_archived`, `409 turn_not_active`,
+  `409 runtime_operation_failed` (the provider rejected interruption),
+  `503 runtime_unavailable`.
 
 ```bash
 curl -s -X POST "$BASE/v1/sessions/$SESSION/interrupt" \
@@ -684,8 +740,9 @@ event and the session enters `waiting_approval` with the id in
   appended.
 - **Errors:** `400 invalid_request`, `415 json_required`,
   `404 session_not_found`, `409 session_archived`,
-  `409 runtime_operation_failed` (unknown approval id, or the provider is
-  not running). Pending approvals do not survive a daemon restart: recovery
+  `400 invalid_approval_decision`, `409 approval_not_pending`,
+  `409 runtime_operation_failed` (the provider is not running or rejected
+  the response). Pending approvals do not survive a daemon restart: recovery
   appends `approval.resolved` with decision `cancel`, closes the open turn,
   and then publishes `stopped` with reason `daemon_recovery`,
   `503 runtime_unavailable`.
@@ -706,3 +763,72 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/approvals/approval-1" \
 - The daemon writes all state; session files under the data root
   (`events.jsonl`, `session.json`) are its private storage — read them for
   diagnostics if needed, but never write them.
+- JSON request objects are strict: unknown fields, malformed JSON, multiple
+  top-level JSON values and bodies larger than 1 MiB are rejected with
+  `invalid_request`. JSON response objects are extensible: clients must
+  ignore fields they do not recognize.
+
+### Idempotency and conflicts
+
+AgentHub does not currently interpret an `Idempotency-Key` header. Callers
+must use the following operation semantics:
+
+| Operation | Idempotency contract | Important conflict |
+| --- | --- | --- |
+| Create | Non-idempotent. Every accepted request creates a new session. A `provider_start_failed` response includes the created `details.sessionId`; inspect that session instead of blindly retrying. | Validation errors are 400/422; provider startup is 502. |
+| Message | Non-idempotent. A user message and `turn.started` may already be durable even if provider submission fails. | `turn_active`, `session_stopping`, `session_archived`. |
+| Steer (`messages` with `steer=true`) | Non-idempotent. Repeating it injects the text again. With no active turn it starts a normal new turn. | `session_stopping`, `session_archived`; provider rejection uses `runtime_operation_failed`. |
+| Approval | Non-idempotent. Once resolved, the same id is no longer pending. | `approval_not_pending`, `session_archived`. |
+| Interrupt | Not retry-idempotent: a successful call creates one `turn.cancelled`; a repeat sees no active turn. | `turn_not_active`, `session_archived`. |
+| Stop | Idempotent for an already stopped session. It blocks through confirmed provider exit. | `session_archived`; process cleanup failure uses `runtime_operation_failed`. |
+| Resume | Idempotent while the provider is already running; one provider instance remains associated with the session. | `session_stopping`, `session_archived`. |
+| Archive | Idempotent for an already archived session. | `session_active`, `session_archive_conflict`. |
+
+### Complete session flow
+
+The following sequence negotiates the contract, creates a Forge-owned
+session, catches up through the durable cursor, sends a message, resolves an
+approval if one appears, waits for a canonical terminal event, then stops
+and resumes the session. Shell snippets use `jq` for brevity:
+
+```bash
+STATUS=$(curl -fsS "$BASE/v1/status")
+test "$(jq -r .apiVersion <<<"$STATUS")" = "1"
+for capability in session.source session.launch-environment \
+  session.strict-stopped events.lossless-replay \
+  events.canonical-turn-terminals recovery.closed-turns; do
+  jq -e --arg c "$capability" '.capabilities | index($c) != null' \
+    <<<"$STATUS" >/dev/null
+done
+
+CREATED=$(curl -fsS -X POST "$BASE/v1/sessions" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"title\":\"Forge task\",
+    \"cwd\":\"$PWD\",
+    \"agentName\":\"Codex\",
+    \"source\":{\"app\":\"forge\",\"instanceId\":\"mac-mini\",\"externalId\":\"project7.task30\"},
+    \"launchEnvironment\":{\"FORGE_SESSION_ID\":\"session-123\"}
+  }")
+SESSION=$(jq -r .session.id <<<"$CREATED")
+
+PAGE=$(curl -fsS "$BASE/v1/sessions/$SESSION/events?after=0&limit=500")
+CURSOR=$(jq -r .page.nextAfter <<<"$PAGE")
+
+curl -fsS -X POST "$BASE/v1/sessions/$SESSION/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Implement the requested change."}'
+
+# Reconnect with Last-Event-ID=$CURSOR. Process each adjacent id and ignore
+# unknown types. If approval.requested arrives, resolve its approvalId:
+curl -fsS -X POST "$BASE/v1/sessions/$SESSION/approvals/approval-1" \
+  -H "Content-Type: application/json" \
+  -d '{"decision":"accept"}'
+
+# End the turn only on turn.completed, turn.failed or turn.cancelled, never
+# on provider.turn.completed. Then release and later restore the provider:
+curl -fsS -X POST "$BASE/v1/sessions/$SESSION/stop" \
+  -H "Content-Type: application/json" -d '{}'
+curl -fsS -X POST "$BASE/v1/sessions/$SESSION/resume" \
+  -H "Content-Type: application/json" -d '{}'
+```

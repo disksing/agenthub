@@ -177,6 +177,23 @@ in sync with the registered routes by automated tests. Fetch it with:
 curl -s http://127.0.0.1:4646/api.md
 ```
 
+`GET /v1/status` is the compatibility handshake. It returns
+`"apiVersion": "1"` and only the capabilities this daemon instance can
+actually exercise: `session.source`, `session.launch-environment`,
+`session.strict-stopped`, `events.lossless-replay`,
+`events.canonical-turn-terminals`, and `recovery.closed-turns`. A client
+must reject an unsupported API version or a missing required capability
+before creating a session; older daemons with neither field are explicitly
+incompatible. Unknown additional capabilities, response fields and event
+types must be ignored.
+
+Every non-2xx public API response uses the same JSON error envelope with a
+stable `code`, human-readable `message`, boolean `retryable`, optional
+`details`, and `requestId`. Unknown routes and unsupported methods are JSON
+errors too. The three provider-independent turn terminal events are
+`turn.completed`, `turn.failed`, and `turn.cancelled`; provider-native
+completion events are diagnostic and must not close a client turn.
+
 Main endpoints:
 
 ```text
