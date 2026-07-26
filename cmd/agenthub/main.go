@@ -180,14 +180,18 @@ func runServe(args []string) error {
 	}
 	defer os.Remove(resolved.ServerFile)
 
+	closing := make(chan struct{})
 	httpServer := &http.Server{
 		Handler: api.New(store, version, startedAt, api.Dependencies{
 			Runtime: manager, ConfigPath: resolved.ConfigFile, WebDir: *webDir, Listen: listenAddress,
-			Models: provider.NewModelCache(), LogsDir: resolved.LogsDir,
+			Models: provider.NewModelCache(), LogsDir: resolved.LogsDir, Closing: closing,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       75 * time.Second,
 	}
+	// End SSE streams as soon as Shutdown begins so open event clients do
+	// not hold the graceful shutdown (and the process exit) hostage.
+	httpServer.RegisterOnShutdown(func() { close(closing) })
 	serverErrors := make(chan error, 1)
 	go func() {
 		err := httpServer.Serve(listener)
@@ -214,7 +218,11 @@ func runServe(args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(ctx); err != nil {
-			return err
+			// Connections that outlived the grace period are dropped so the
+			// daemon still exits promptly and cleanly; a non-zero exit here
+			// would be reported by the service manager as a crash.
+			_ = httpServer.Close()
+			return nil
 		}
 		return <-serverErrors
 	}

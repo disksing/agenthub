@@ -38,6 +38,9 @@ type Server struct {
 	webDir    string
 	listen    *ListenAddress
 	models    ModelLister
+	// closing, when set, is closed once the HTTP server begins shutting
+	// down so long-lived handlers (SSE streams) can finish promptly.
+	closing <-chan struct{}
 	// configMu serializes config mutations so a whole-config PUT and a
 	// single-provider toggle cannot interleave and lose each other's changes.
 	configMu sync.Mutex
@@ -55,6 +58,9 @@ type Dependencies struct {
 	// LogsDir is the directory service logs are written to, reported by
 	// the status endpoint.
 	LogsDir string
+	// Closing, when set, is closed when the HTTP server starts shutting
+	// down; streaming handlers must return so Shutdown can complete.
+	Closing <-chan struct{}
 }
 
 func New(store *session.Store, version string, startedAt time.Time, dependencies ...Dependencies) *Server {
@@ -66,6 +72,7 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 		server.webDir = dependencies[0].WebDir
 		server.listen = dependencies[0].Listen
 		server.models = dependencies[0].Models
+		server.closing = dependencies[0].Closing
 	}
 	return server
 }
@@ -731,6 +738,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.closing:
+			// The daemon is shutting down; end the stream so
+			// http.Server.Shutdown is not held open by SSE clients.
 			return
 		case event, ok := <-live:
 			if !ok {
