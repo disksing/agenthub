@@ -193,7 +193,7 @@ POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
 ```
 
-The events endpoint returns JSON for plain requests; with `Accept: text/event-stream` or `?stream=true` it returns SSE and supports `Last-Event-ID`. SSE frames use the default message channel (no per-type `event:` field); the JSON payload's `type` field carries the event type, so consumers receive every event — including types they do not know about yet.
+The events endpoint returns paginated JSON with an exclusive `after` cursor, `nextAfter`, `hasMore`, and the latest durable cursor. With `Accept: text/event-stream` or `?stream=true` it returns SSE and uses the same exclusive cursor through `Last-Event-ID`. The daemon subscribes before capturing a high-water mark, replays the entire durable backlog in pages, and then switches to live delivery; overflow closes the stream so reconnecting from the last contiguous id can recover from `events.jsonl`, including after a daemon restart. SSE frames use the default message channel (no per-type `event:` field), so unknown event envelopes are preserved.
 
 ### Archiving Sessions
 

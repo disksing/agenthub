@@ -160,17 +160,82 @@ func TestSubscribeReceivesNewEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, cancel, err := store.Subscribe(created.ID)
+	subscription, highWater, err := store.Subscribe(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cancel()
+	defer subscription.Cancel()
+	if highWater != 1 {
+		t.Fatalf("high-water mark = %d, want 1", highWater)
+	}
 	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
 		t.Fatal(err)
 	}
-	event := <-events
+	event := <-subscription.Events()
 	if event.ID != 2 || event.Type != "session.state" {
 		t.Fatalf("unexpected live event: %+v", event)
+	}
+}
+
+func TestSubscriptionOverflowIsTerminal(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Title: "Overflow", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscription, _, err := store.Subscribe(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.Cancel()
+	for i := 0; i <= subscriptionBuffer; i++ {
+		if _, err := store.Append(created.ID, "provider.test", "", mustJSON(t, map[string]int{"i": i})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-subscription.Overflow():
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscription did not report overflow")
+	}
+	if !subscription.Overflowed() {
+		t.Fatal("subscription must remain terminal after overflow")
+	}
+}
+
+func TestRejectedEventDoesNotConsumeOrReuseDurableCursor(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Title: "Cursor", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", []byte(`{"state":`)); err == nil {
+		t.Fatal("expected invalid projection data to be rejected")
+	}
+	event, err := store.Append(created.ID, "provider.future", "", mustJSON(t, map[string]bool{"ok": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.ID != 2 {
+		t.Fatalf("next durable id = %d, want 2", event.ID)
+	}
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := reopened.EventsAfter(created.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Type != "provider.future" {
+		t.Fatalf("durable events = %+v", events)
 	}
 }
 

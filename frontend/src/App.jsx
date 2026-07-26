@@ -5,6 +5,7 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "./api";
 import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionsQuery } from "./archive.js";
+import { catchUpEvents, projectLiveEvent } from "./events.js";
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
@@ -87,25 +88,53 @@ export function App() {
     if (!activeId) { setEvents([]); return undefined; }
     let source;
     let disposed = false;
-    api(`/v1/sessions/${activeId}/events?limit=1000`)
-      .then((body) => {
-        if (disposed) return;
-        setEvents(body.events || []);
-        const after = body.events?.at(-1)?.id || 0;
-        source = new EventSource(`/v1/sessions/${activeId}/events?stream=true&after=${after}`);
-        // All events arrive on the default message channel (see the daemon's
-        // writeSSE), so unknown future event types are never dropped here.
-        source.onmessage = (message) => {
-          const event = JSON.parse(message.data);
-          setEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
-          if (/^(session|turn|approval)\./.test(event.type)) {
-            // Refreshing the default list drops freshly archived sessions, so
-            // realtime clients never keep ghost entries.
-            refreshSessions().catch(() => {});
-            if (event.type === "session.archived") refreshArchivedSessions().catch(() => {});
+    let cursor = 0;
+    let recovering = false;
+    const project = (incoming) => {
+      setEvents((current) => {
+        const known = new Set(current.map((event) => event.id));
+        return [...current, ...incoming.filter((event) => !known.has(event.id))];
+      });
+    };
+    const refreshForEvent = (event) => {
+      if (/^(session|turn|approval)\./.test(event.type)) {
+        refreshSessions().catch(() => {});
+        if (event.type === "session.archived") refreshArchivedSessions().catch(() => {});
+      }
+    };
+    const connect = () => {
+      if (disposed) return;
+      source = new EventSource(`/v1/sessions/${activeId}/events?stream=true&after=${cursor}`);
+      // All envelopes arrive on the default message channel. A gap pauses
+      // live projection and catches up from the durable REST log.
+      source.onmessage = async (message) => {
+        if (disposed || recovering) return;
+        const event = JSON.parse(message.data);
+        if (event.id > cursor + 1) {
+          recovering = true;
+          source.close();
+        }
+        try {
+          cursor = await projectLiveEvent({ sessionId: activeId, cursor, event, project });
+          refreshForEvent(event);
+          if (recovering) {
+            recovering = false;
+            connect();
           }
-        };
-        source.onerror = () => {};
+        } catch (value) {
+          if (!disposed) setError(value.message);
+        }
+      };
+      // EventSource reconnects with Last-Event-ID after an overflow or daemon
+      // restart. The server replays from the durable store.
+      source.onerror = () => {};
+    };
+    catchUpEvents(activeId)
+      .then((history) => {
+        if (disposed) return;
+        setEvents(history.events);
+        cursor = history.cursor;
+        connect();
       })
       .catch((value) => setError(value.message));
     return () => { disposed = true; source?.close(); };

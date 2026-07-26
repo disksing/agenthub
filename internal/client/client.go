@@ -21,6 +21,26 @@ type Client struct {
 	http     *http.Client
 }
 
+type EventPage struct {
+	Events []session.Event `json:"events"`
+	Page   struct {
+		After     int64 `json:"after"`
+		Limit     int   `json:"limit"`
+		NextAfter int64 `json:"nextAfter"`
+		HasMore   bool  `json:"hasMore"`
+	} `json:"page"`
+	LatestCursor int64 `json:"latestCursor"`
+}
+
+type EventCursorGapError struct {
+	Expected int64
+	Got      int64
+}
+
+func (e *EventCursorGapError) Error() string {
+	return fmt.Sprintf("event cursor gap: expected %d, got %d; projection stopped", e.Expected, e.Got)
+}
+
 func Discover() (*Client, error) {
 	if endpoint := strings.TrimRight(strings.TrimSpace(os.Getenv("AGENTHUB_ENDPOINT")), "/"); endpoint != "" {
 		return New(endpoint), nil
@@ -112,15 +132,46 @@ func (c *Client) ResolveApproval(id, approvalID, decision string) (session.Sessi
 	return result.Session, nil
 }
 
-func (c *Client) EventsAfter(id string, after int64) ([]session.Event, error) {
-	var result struct {
-		Events []session.Event `json:"events"`
-	}
-	path := fmt.Sprintf("/v1/sessions/%s/events?after=%d&limit=1000", id, after)
+func (c *Client) EventsPage(id string, after int64, limit int) (EventPage, error) {
+	var result EventPage
+	path := fmt.Sprintf("/v1/sessions/%s/events?after=%d&limit=%d", id, after, limit)
 	if err := c.request(http.MethodGet, path, nil, &result); err != nil {
-		return nil, err
+		return EventPage{}, err
 	}
-	return result.Events, nil
+	return result, nil
+}
+
+// EventsAfter catches up through the durable head reported by the first REST
+// page. It stops before projecting any non-contiguous event.
+func (c *Client) EventsAfter(id string, after int64) ([]session.Event, error) {
+	cursor := after
+	var target int64 = -1
+	var events []session.Event
+	for {
+		page, err := c.EventsPage(id, cursor, session.MaxEventPageSize)
+		if err != nil {
+			return nil, err
+		}
+		if target < 0 {
+			target = page.LatestCursor
+		}
+		for _, event := range page.Events {
+			if event.ID > target {
+				break
+			}
+			if event.ID != cursor+1 {
+				return nil, &EventCursorGapError{Expected: cursor + 1, Got: event.ID}
+			}
+			events = append(events, event)
+			cursor = event.ID
+		}
+		if cursor >= target {
+			return events, nil
+		}
+		if len(page.Events) == 0 {
+			return nil, &EventCursorGapError{Expected: cursor + 1, Got: 0}
+		}
+	}
 }
 
 func (c *Client) ListSessions(includeArchived bool) ([]session.Session, error) {

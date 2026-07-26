@@ -32,12 +32,22 @@ var (
 	ErrInvalidID = errors.New("invalid session id")
 	// ErrArchiveConflict reports that the archive target already exists.
 	ErrArchiveConflict = errors.New("archive target already exists")
+	// ErrEventCursorAhead reports a cursor that is newer than the durable
+	// head of the requested session. Accepting it would silently skip future
+	// events until the store caught up to an unrelated cursor.
+	ErrEventCursorAhead = errors.New("event cursor is ahead of durable log")
 )
 
 // ArchiveDirName is the subdirectory of the session store that holds
 // archived sessions. It never contains a live session and is never scanned
 // as one.
 const ArchiveDirName = "Archive"
+
+const (
+	DefaultEventPageSize = 500
+	MaxEventPageSize     = 1000
+	subscriptionBuffer   = 256
+)
 
 var sessionIDPattern = regexp.MustCompile(`^ses_[a-z0-9]+$`)
 
@@ -49,9 +59,9 @@ func validSessionID(id string) bool {
 }
 
 type sessionState struct {
-	mu       sync.Mutex
-	session  Session
-	events   []Event
+	mu      sync.Mutex
+	session Session
+	events  []Event
 	// archived reports whether the session directory lives under Archive/.
 	// It is the in-memory record of the physical location, which is the
 	// authoritative archive signal.
@@ -63,7 +73,39 @@ type Store struct {
 
 	mu          sync.RWMutex
 	sessions    map[string]*sessionState
-	subscribers map[string]map[chan Event]struct{}
+	subscribers map[string]map[*Subscription]struct{}
+}
+
+// Subscription is a best-effort notification queue layered over the durable
+// event log. Overflow is terminal: callers must end the live connection and
+// resume from their last processed durable cursor instead of consuming a
+// queue that is known to contain a gap.
+type Subscription struct {
+	events   chan Event
+	overflow chan struct{}
+	cancel   func()
+	once     sync.Once
+}
+
+func (s *Subscription) Events() <-chan Event {
+	return s.events
+}
+
+func (s *Subscription) Overflow() <-chan struct{} {
+	return s.overflow
+}
+
+func (s *Subscription) Overflowed() bool {
+	select {
+	case <-s.overflow:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Subscription) Cancel() {
+	s.once.Do(s.cancel)
 }
 
 func Open(root string) (*Store, error) {
@@ -77,7 +119,7 @@ func Open(root string) (*Store, error) {
 	store := &Store{
 		root:        root,
 		sessions:    make(map[string]*sessionState),
-		subscribers: make(map[string]map[chan Event]struct{}),
+		subscribers: make(map[string]map[*Subscription]struct{}),
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -254,13 +296,15 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 	if err != nil {
 		return Event{}, err
 	}
+	projected := cloneSession(state.session)
+	if err := applyEvent(&projected, event); err != nil {
+		return Event{}, fmt.Errorf("project event: %w", err)
+	}
 	encoded = append(encoded, '\n')
 	if err := appendDurable(s.eventsPath(id), encoded); err != nil {
 		return Event{}, err
 	}
-	if err := applyEvent(&state.session, event); err != nil {
-		return Event{}, fmt.Errorf("project event: %w", err)
-	}
+	state.session = projected
 	state.events = append(state.events, event)
 	if err := writeJSONAtomic(s.snapshotPath(id), state.session); err != nil {
 		return Event{}, fmt.Errorf("write session snapshot: %w", err)
@@ -343,19 +387,66 @@ func (s *Store) moveToArchive(id string, state *sessionState) error {
 }
 
 func (s *Store) EventsAfter(id string, after int64, limit int) ([]Event, error) {
+	page, err := s.EventsPage(id, after, limit)
+	return page.Events, err
+}
+
+// EventsPage returns events after an exclusive durable cursor plus enough
+// metadata for a caller to page to the head captured by this request.
+func (s *Store) EventsPage(id string, after int64, limit int) (EventPage, error) {
+	state, err := s.state(id)
+	if err != nil {
+		return EventPage{}, err
+	}
+	limit = normalizeEventLimit(limit)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	latest := state.session.LastEventID
+	if after > latest {
+		return EventPage{After: after, Limit: limit, NextAfter: after, LatestCursor: latest},
+			fmt.Errorf("%w: %d > %d", ErrEventCursorAhead, after, latest)
+	}
+	start := sort.Search(len(state.events), func(index int) bool {
+		return state.events[index].ID > after
+	})
+	events := make([]Event, 0, min(limit, len(state.events)-start))
+	for _, event := range state.events[start:] {
+		events = append(events, cloneEvent(event))
+		if len(events) == limit {
+			break
+		}
+	}
+	next := after
+	if len(events) > 0 {
+		next = events[len(events)-1].ID
+	}
+	return EventPage{
+		Events:       events,
+		After:        after,
+		Limit:        limit,
+		NextAfter:    next,
+		HasMore:      next < latest,
+		LatestCursor: latest,
+	}, nil
+}
+
+// EventsThrough returns at most limit events after after, never crossing the
+// supplied durable high-water mark.
+func (s *Store) EventsThrough(id string, after, highWater int64, limit int) ([]Event, error) {
 	state, err := s.state(id)
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 1000 {
-		limit = 500
-	}
+	limit = normalizeEventLimit(limit)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	events := make([]Event, 0, min(limit, len(state.events)))
-	for _, event := range state.events {
-		if event.ID <= after {
-			continue
+	start := sort.Search(len(state.events), func(index int) bool {
+		return state.events[index].ID > after
+	})
+	events := make([]Event, 0, min(limit, len(state.events)-start))
+	for _, event := range state.events[start:] {
+		if event.ID > highWater {
+			break
 		}
 		events = append(events, cloneEvent(event))
 		if len(events) == limit {
@@ -365,30 +456,49 @@ func (s *Store) EventsAfter(id string, after int64, limit int) ([]Event, error) 
 	return events, nil
 }
 
-func (s *Store) Subscribe(id string) (<-chan Event, func(), error) {
-	if _, err := s.state(id); err != nil {
-		return nil, nil, err
-	}
-	ch := make(chan Event, 256)
+// Subscribe installs the live notification queue before capturing and
+// returning the durable high-water mark. Replaying through that mark and
+// then consuming Events removes the history/live subscription race.
+func (s *Store) Subscribe(id string) (*Subscription, int64, error) {
 	s.mu.Lock()
-	if s.subscribers[id] == nil {
-		s.subscribers[id] = make(map[chan Event]struct{})
+	state := s.sessions[id]
+	if state == nil {
+		s.mu.Unlock()
+		return nil, 0, ErrNotFound
 	}
-	s.subscribers[id][ch] = struct{}{}
+	subscription := &Subscription{
+		events:   make(chan Event, subscriptionBuffer),
+		overflow: make(chan struct{}),
+	}
+	if s.subscribers[id] == nil {
+		s.subscribers[id] = make(map[*Subscription]struct{})
+	}
+	s.subscribers[id][subscription] = struct{}{}
+	state.mu.Lock()
+	highWater := state.session.LastEventID
+	state.mu.Unlock()
 	s.mu.Unlock()
-	cancel := func() {
+	subscription.cancel = func() {
 		s.mu.Lock()
 		if subscribers := s.subscribers[id]; subscribers != nil {
-			if _, ok := subscribers[ch]; ok {
-				delete(subscribers, ch)
-			}
+			delete(subscribers, subscription)
 			if len(subscribers) == 0 {
 				delete(s.subscribers, id)
 			}
 		}
 		s.mu.Unlock()
 	}
-	return ch, cancel, nil
+	return subscription, highWater, nil
+}
+
+func normalizeEventLimit(limit int) int {
+	if limit <= 0 {
+		return DefaultEventPageSize
+	}
+	if limit > MaxEventPageSize {
+		return MaxEventPageSize
+	}
+	return limit
 }
 
 func (s *Store) loadSession(dir, id string) (*sessionState, error) {
@@ -620,12 +730,12 @@ func (s *Store) state(id string) (*sessionState, error) {
 func (s *Store) publish(event Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for ch := range s.subscribers[event.SessionID] {
+	for subscription := range s.subscribers[event.SessionID] {
 		select {
-		case ch <- cloneEvent(event):
+		case subscription.events <- cloneEvent(event):
 		default:
-			delete(s.subscribers[event.SessionID], ch)
-			close(ch)
+			delete(s.subscribers[event.SessionID], subscription)
+			close(subscription.overflow)
 		}
 	}
 	if len(s.subscribers[event.SessionID]) == 0 {

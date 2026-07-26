@@ -39,6 +39,18 @@ type Event struct {
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 
+// EventPage is a stable snapshot page of a session's durable event log.
+// After and NextAfter use exclusive cursor semantics: a subsequent request
+// passes NextAfter as its After value.
+type EventPage struct {
+	Events       []Event `json:"events"`
+	After        int64   `json:"after"`
+	Limit        int     `json:"limit"`
+	NextAfter    int64   `json:"nextAfter"`
+	HasMore      bool    `json:"hasMore"`
+	LatestCursor int64   `json:"latestCursor"`
+}
+
 type CreateInput struct {
 	Title     string
 	Cwd       string

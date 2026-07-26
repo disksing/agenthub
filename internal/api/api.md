@@ -126,7 +126,8 @@ looks like:
 }
 ```
 
-`id` is a per-session, monotonically increasing integer cursor. `turnId` is
+`id` is a durable, per-session, monotonically increasing integer cursor. A
+committed id is never reused, including across daemon restarts. `turnId` is
 present on events that belong to a turn. Core event types:
 
 | Type | `data` payload | Meaning |
@@ -442,9 +443,30 @@ Plain requests return a JSON snapshot of the log after a cursor.
     (default `0`, i.e. from the beginning).
   - `limit=<n>` — maximum number of events returned (default `500`,
     values above `1000` are clamped to the page size).
-- **Success `200`:** `{"events": [...]}` in ascending id order. Page
-  forward by passing the id of the last received event as `after`.
-- **Errors:** `404 session_not_found`.
+- **Success `200`:** events are in ascending id order. `after` and
+  `nextAfter` are exclusive cursors; `latestCursor` is the durable head
+  captured for this response.
+
+  ```json
+  {
+    "events": [],
+    "page": {
+      "after": 100,
+      "limit": 200,
+      "nextAfter": 100,
+      "hasMore": false
+    },
+    "latestCursor": 100
+  }
+  ```
+
+  Page forward with `page.nextAfter` while `page.hasMore` is true. Clients
+  that need a stable catch-up target should retain the first response's
+  `latestCursor`; events appended later can be consumed by a subsequent
+  request or SSE.
+- **Errors:** `400 invalid_event_cursor`, `404 session_not_found`,
+  `409 event_cursor_ahead` (the supplied cursor is newer than this session's
+  durable head; the error details include `latestCursor`).
 
 ```bash
 curl -s "$BASE/v1/sessions/$SESSION/events"
@@ -460,17 +482,24 @@ connection open and receive events as they happen.
   the id of the last event already processed (the standard SSE resume
   mechanism; `?after=` is an equivalent query form).
 - **Connection lifecycle:**
-  1. The daemon replays up to 1000 stored events after the cursor, in
-     order.
-  2. New events stream live, in order, each exactly once per connection.
-  3. Every 15 seconds without traffic the daemon sends a `: heartbeat`
+  1. The daemon installs the live subscription and captures a durable
+     high-water mark.
+  2. It pages through **all** stored events after the exclusive cursor up to
+     that high-water mark, with no 1000-event backlog limit.
+  3. It then consumes the live subscription, discarding only duplicate
+     notifications at or below the high-water mark.
+  4. Every 15 seconds without traffic the daemon sends a `: heartbeat`
      comment line to keep proxies and clients alive.
-  4. The stream ends when the client disconnects or when the daemon shuts
+  5. The stream ends when the client disconnects or when the daemon shuts
      down (daemon shutdown closes streams promptly so restarts are fast).
+     A subscriber queue overflow also ends the stream immediately; the
+     daemon never continues sending a queue known to contain a gap.
 - **Recovery:** reconnect with `Last-Event-ID` set to the id of the last
-  event received; events are durable, so nothing between the cursor and the
-  current head is lost. Clients that buffer no state can resume from the
-  session's `lastEventId` minus the overlap they want to re-read.
+  contiguous event processed. Events are replayed from `events.jsonl`, not
+  the in-memory subscriber queue, so overflow and daemon restart are
+  recoverable. A client that observes an adjacent id other than
+  `last_processed_id + 1` must stop projection and catch up through REST
+  before resuming SSE.
 - **Frame format:** every event uses the default SSE message channel (no
   per-type `event:` field), so consumers receive every event — including
   types they do not know about yet — instead of silently dropping events
@@ -487,8 +516,9 @@ id: 44
 data: {"id":44,"time":"2026-07-26T12:05:02Z","type":"turn.completed","sessionId":"ses_...","turnId":"turn_...","data":{...}}
 ```
 
-- **Errors:** `404 session_not_found` (before the stream starts),
-  `500 stream_unsupported`.
+- **Errors:** `400 invalid_event_cursor`, `404 session_not_found`,
+  `409 event_cursor_ahead`, `500 stream_unsupported` (all before the stream
+  starts).
 
 ```bash
 curl -N -H "Accept: text/event-stream" "$BASE/v1/sessions/$SESSION/events"

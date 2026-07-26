@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -436,6 +438,201 @@ func TestSSEReplaysFromCursor(t *testing.T) {
 	cancel()
 }
 
+func TestRESTEventPaginationReportsDurableHead(t *testing.T) {
+	store, created := seedEventStore(t, 1001)
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+
+	var first struct {
+		Events []session.Event `json:"events"`
+		Page   struct {
+			After     int64 `json:"after"`
+			Limit     int   `json:"limit"`
+			NextAfter int64 `json:"nextAfter"`
+			HasMore   bool  `json:"hasMore"`
+		} `json:"page"`
+		LatestCursor int64 `json:"latestCursor"`
+	}
+	response, err := http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?after=0&limit=5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if err := json.NewDecoder(response.Body).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Events) != 1000 || first.Page.After != 0 || first.Page.Limit != 1000 ||
+		first.Page.NextAfter != 1000 || !first.Page.HasMore || first.LatestCursor != 1001 {
+		t.Fatalf("unexpected first page: events=%d page=%+v latest=%d", len(first.Events), first.Page, first.LatestCursor)
+	}
+
+	var second struct {
+		Events       []session.Event `json:"events"`
+		LatestCursor int64           `json:"latestCursor"`
+		Page         struct {
+			NextAfter int64 `json:"nextAfter"`
+			HasMore   bool  `json:"hasMore"`
+		} `json:"page"`
+	}
+	response, err = http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?after=1000&limit=1000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if err := json.NewDecoder(response.Body).Decode(&second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Events) != 1 || second.Events[0].ID != 1001 ||
+		second.Page.NextAfter != 1001 || second.Page.HasMore || second.LatestCursor != 1001 {
+		t.Fatalf("unexpected second page: %+v", second)
+	}
+}
+
+func TestEventCursorValidation(t *testing.T) {
+	store, created := seedEventStore(t, 1)
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+	for _, test := range []struct {
+		query  string
+		status int
+		code   string
+	}{
+		{"after=invalid", http.StatusBadRequest, "invalid_event_cursor"},
+		{"after=-1", http.StatusBadRequest, "invalid_event_cursor"},
+		{"after=2", http.StatusConflict, "event_cursor_ahead"},
+	} {
+		response, err := http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?" + test.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			response.Body.Close()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != test.status || body.Error.Code != test.code {
+			t.Errorf("%s: status=%d code=%q", test.query, response.StatusCode, body.Error.Code)
+		}
+	}
+}
+
+func TestSSEReplaysEntireBacklog(t *testing.T) {
+	for _, total := range []int{1, 1000, 1001, 5000} {
+		t.Run(strconv.Itoa(total), func(t *testing.T) {
+			store, created := seedEventStore(t, total)
+			writer := newSSERecorder(total, 0)
+			ctx, cancel := context.WithCancel(context.Background())
+			request := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?stream=true", nil).WithContext(ctx)
+			done := make(chan struct{})
+			go func() {
+				New(store, "test", time.Now()).events(writer, request, created.ID)
+				close(done)
+			}()
+			waitClosed(t, writer.reached, "SSE backlog")
+			cancel()
+			waitClosed(t, done, "SSE handler")
+			assertContiguousIDs(t, writer.IDs(), 1, total)
+		})
+	}
+}
+
+func TestSSECatchesEventsAppendedDuringBacklogReplay(t *testing.T) {
+	store, created := seedEventStore(t, 5000)
+	writer := newSSERecorder(5100, 1000)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?stream=true", nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		New(store, "test", time.Now()).events(writer, request, created.ID)
+		close(done)
+	}()
+	waitClosed(t, writer.blocked, "blocked backlog replay")
+	for id := 5001; id <= 5100; id++ {
+		if _, err := store.Append(created.ID, "provider.concurrent", "", mustMarshal(t, map[string]int{"id": id})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(writer.release)
+	waitClosed(t, writer.reached, "SSE live catch-up")
+	cancel()
+	waitClosed(t, done, "SSE handler")
+	assertContiguousIDs(t, writer.IDs(), 1, 5100)
+}
+
+func TestSSEStopsImmediatelyAfterSubscriberOverflow(t *testing.T) {
+	store, created := seedEventStore(t, 1)
+	writer := newSSERecorder(0, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?stream=true", nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		New(store, "test", time.Now()).events(writer, request, created.ID)
+		close(done)
+	}()
+	if _, err := store.Append(created.ID, "provider.live", "", mustMarshal(t, map[string]int{"id": 2})); err != nil {
+		t.Fatal(err)
+	}
+	waitClosed(t, writer.blocked, "blocked live write")
+	for id := 3; id <= 3+256; id++ {
+		if _, err := store.Append(created.ID, "provider.overflow", "", mustMarshal(t, map[string]int{"id": id})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(writer.release)
+	waitClosed(t, done, "overflowed SSE handler")
+	ids := writer.IDs()
+	if len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
+		t.Fatalf("overflowed connection continued sending buffered events: %v", ids)
+	}
+}
+
+func TestEventsRecoverAfterStoreRestart(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Title: "Restart", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := 2; id <= 25; id++ {
+		if _, err := store.Append(created.ID, "provider.before_restart", "", mustMarshal(t, map[string]int{"id": id})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := reopened.EventsPage(created.ID, 10, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.LatestCursor != 25 || page.NextAfter != 15 || !page.HasMore {
+		t.Fatalf("restart REST page = %+v", page)
+	}
+	writer := newSSERecorder(15, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?stream=true&after=10", nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		New(reopened, "test", time.Now()).events(writer, request, created.ID)
+		close(done)
+	}()
+	waitClosed(t, writer.reached, "restart SSE replay")
+	cancel()
+	waitClosed(t, done, "restart SSE handler")
+	assertContiguousIDs(t, writer.IDs(), 11, 25)
+}
+
 // Every event — including types a consumer has never heard of — must arrive
 // on the default SSE message channel, so no event is silently dropped just
 // because the client did not subscribe to its type name.
@@ -564,6 +761,136 @@ func TestSSEStopsWhenServerCloses(t *testing.T) {
 		}
 	case <-deadline:
 		t.Fatal("SSE stream did not end after the server started closing")
+	}
+}
+
+type sseRecorder struct {
+	header  http.Header
+	want    int
+	blockAt int
+
+	mu          sync.Mutex
+	ids         []int
+	reached     chan struct{}
+	reachedOnce sync.Once
+	blocked     chan struct{}
+	blockedOnce sync.Once
+	release     chan struct{}
+}
+
+func newSSERecorder(want, blockAt int) *sseRecorder {
+	return &sseRecorder{
+		header:  make(http.Header),
+		want:    want,
+		blockAt: blockAt,
+		reached: make(chan struct{}),
+		blocked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (w *sseRecorder) Header() http.Header {
+	return w.header
+}
+
+func (w *sseRecorder) WriteHeader(int) {}
+
+func (w *sseRecorder) Flush() {}
+
+func (w *sseRecorder) Write(data []byte) (int, error) {
+	line := strings.SplitN(string(data), "\n", 2)[0]
+	if !strings.HasPrefix(line, "id: ") {
+		return len(data), nil
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(line, "id: "))
+	if err != nil {
+		return 0, err
+	}
+	w.mu.Lock()
+	w.ids = append(w.ids, id)
+	count := len(w.ids)
+	w.mu.Unlock()
+	if w.want > 0 && count == w.want {
+		w.reachedOnce.Do(func() { close(w.reached) })
+	}
+	if w.blockAt > 0 && count == w.blockAt {
+		w.blockedOnce.Do(func() { close(w.blocked) })
+		<-w.release
+	}
+	return len(data), nil
+}
+
+func (w *sseRecorder) IDs() []int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]int(nil), w.ids...)
+}
+
+func seedEventStore(t *testing.T, total int) (*session.Store, session.Session) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Title: "Backlog", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total < 1 {
+		t.Fatal("seed total must include session.created")
+	}
+	path := filepath.Join(root, created.ID, "events.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder := json.NewEncoder(file)
+	for id := 2; id <= total; id++ {
+		event := session.Event{
+			ID:        int64(id),
+			Time:      time.Unix(int64(id), 0).UTC(),
+			Type:      "provider.seed",
+			SessionID: created.ID,
+			Data:      mustMarshal(t, map[string]int{"id": id}),
+		}
+		if err := encoder.Encode(event); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reopened, created
+}
+
+func waitClosed(t *testing.T, channel <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-channel:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+	}
+}
+
+func assertContiguousIDs(t *testing.T, ids []int, first, last int) {
+	t.Helper()
+	if len(ids) != last-first+1 {
+		t.Fatalf("received %d ids, want %d (%d..%d)", len(ids), last-first+1, first, last)
+	}
+	for index, id := range ids {
+		if want := first + index; id != want {
+			t.Fatalf("id[%d] = %d, want %d", index, id, want)
+		}
 	}
 }
 

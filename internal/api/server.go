@@ -757,15 +757,34 @@ func (s *Server) rejectArchivedSession(w http.ResponseWriter, id string) bool {
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
-	after := parseEventCursor(r)
+	after, err := parseEventCursor(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_event_cursor", err.Error(), nil)
+		return
+	}
 	if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") && r.URL.Query().Get("stream") != "true" {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		events, err := s.store.EventsAfter(id, after, limit)
+		page, err := s.store.EventsPage(id, after, limit)
 		if err != nil {
+			if errors.Is(err, session.ErrEventCursorAhead) {
+				writeAPIError(w, http.StatusConflict, "event_cursor_ahead", err.Error(), map[string]any{
+					"latestCursor": page.LatestCursor,
+				})
+				return
+			}
 			s.writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"events": events})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events": page.Events,
+			"page": map[string]any{
+				"after":     page.After,
+				"limit":     page.Limit,
+				"nextAfter": page.NextAfter,
+				"hasMore":   page.HasMore,
+			},
+			"latestCursor": page.LatestCursor,
+		})
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -773,15 +792,16 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 		writeAPIError(w, http.StatusInternalServerError, "stream_unsupported", "response writer does not support streaming", nil)
 		return
 	}
-	live, cancel, err := s.store.Subscribe(id)
+	live, highWater, err := s.store.Subscribe(id)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	defer cancel()
-	replay, err := s.store.EventsAfter(id, after, 1000)
-	if err != nil {
-		s.writeStoreError(w, err)
+	defer live.Cancel()
+	if after > highWater {
+		writeAPIError(w, http.StatusConflict, "event_cursor_ahead",
+			fmt.Sprintf("%s: %d > %d", session.ErrEventCursorAhead, after, highWater),
+			map[string]any{"latestCursor": highWater})
 		return
 	}
 
@@ -789,13 +809,28 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	lastSent := after
-	for _, event := range replay {
-		if err := writeSSE(w, event); err != nil {
+	for lastSent < highWater {
+		if live.Overflowed() {
 			return
 		}
-		lastSent = event.ID
+		replay, err := s.store.EventsThrough(id, lastSent, highWater, session.MaxEventPageSize)
+		if err != nil || len(replay) == 0 {
+			return
+		}
+		for _, event := range replay {
+			if live.Overflowed() || event.ID != lastSent+1 {
+				return
+			}
+			if err := writeSSE(w, event); err != nil {
+				return
+			}
+			lastSent = event.ID
+		}
+		flusher.Flush()
 	}
-	flusher.Flush()
+	if lastSent == after {
+		flusher.Flush()
+	}
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -807,12 +842,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 			// The daemon is shutting down; end the stream so
 			// http.Server.Shutdown is not held open by SSE clients.
 			return
-		case event, ok := <-live:
-			if !ok {
+		case <-live.Overflow():
+			return
+		case event := <-live.Events():
+			if live.Overflowed() {
 				return
 			}
 			if event.ID <= lastSent {
 				continue
+			}
+			if event.ID != lastSent+1 {
+				return
 			}
 			if err := writeSSE(w, event); err != nil {
 				return
@@ -886,13 +926,19 @@ func canonicalDirectory(value string) (string, error) {
 	return resolved, nil
 }
 
-func parseEventCursor(r *http.Request) int64 {
+func parseEventCursor(r *http.Request) (int64, error) {
 	value := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
 	if value == "" {
 		value = strings.TrimSpace(r.URL.Query().Get("after"))
 	}
-	cursor, _ := strconv.ParseInt(value, 10, 64)
-	return cursor
+	if value == "" {
+		return 0, nil
+	}
+	cursor, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || cursor < 0 {
+		return 0, fmt.Errorf("event cursor must be a non-negative integer")
+	}
+	return cursor, nil
 }
 
 // writeSSE frames an event using the default SSE message channel instead of
