@@ -1097,10 +1097,16 @@ func writeSSEHeartbeat(w http.ResponseWriter) error {
 func writeSSEBounded(w http.ResponseWriter, write func() error) error {
 	controller := http.NewResponseController(w)
 	deadlineSet := controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout)) == nil
-	if deadlineSet {
-		defer controller.SetWriteDeadline(time.Time{})
+	err := write()
+	if err == nil && deadlineSet {
+		// Clear successful writes so the 15-second idle heartbeat interval
+		// does not inherit the previous event's deadline. On failure the
+		// expired deadline intentionally remains in force while net/http
+		// flushes and closes the response; clearing it there can block the
+		// handler a second time on the same non-reading socket.
+		_ = controller.SetWriteDeadline(time.Time{})
 	}
-	return write()
+	return err
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
