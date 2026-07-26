@@ -38,6 +38,11 @@ launch environment. It can crash during startup or a turn, hold a prompt,
 request an approval, exit normally, and emit a large event burst. These are
 test fixtures, not public AgentHub configuration options.
 
+SSE event and heartbeat writes are bounded to five seconds. A client that
+stops reading therefore cannot pin a handler after its subscriber queue
+overflows; it is disconnected and must resume from its last contiguous
+durable cursor.
+
 Every test registers cleanup before starting a process. Cleanup terminates
 the daemon, and the runtime's strict stopped contract terminates and probes
 the provider process group. Temporary roots are removed by the Go test

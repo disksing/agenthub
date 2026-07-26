@@ -601,7 +601,9 @@ connection open and receive events as they happen.
   5. The stream ends when the client disconnects or when the daemon shuts
      down (daemon shutdown closes streams promptly so restarts are fast).
      A subscriber queue overflow also ends the stream immediately; the
-     daemon never continues sending a queue known to contain a gap.
+     daemon never continues sending a queue known to contain a gap. Event
+     and heartbeat writes have a five-second deadline, so a client that
+     stops reading cannot pin the handler and prevent that terminal close.
 - **Recovery:** reconnect with `Last-Event-ID` set to the id of the last
   contiguous event processed. Events are replayed from `events.jsonl`, not
   the in-memory subscriber queue, so overflow and daemon restart are

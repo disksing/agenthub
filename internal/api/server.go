@@ -978,7 +978,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 			lastSent = event.ID
 			flusher.Flush()
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+			if err := writeSSEHeartbeat(w); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -1075,8 +1075,32 @@ func writeSSE(w http.ResponseWriter, event session.Event) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.ID, data)
-	return err
+	return writeSSEBounded(w, func() error {
+		_, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.ID, data)
+		return err
+	})
+}
+
+const sseWriteTimeout = 5 * time.Second
+
+func writeSSEHeartbeat(w http.ResponseWriter) error {
+	return writeSSEBounded(w, func() error {
+		_, err := fmt.Fprint(w, ": heartbeat\n\n")
+		return err
+	})
+}
+
+// writeSSEBounded prevents a client that stopped reading from pinning an SSE
+// handler forever. This is also what makes subscriber overflow terminal at
+// the real socket boundary: a blocked write is released, the handler returns,
+// and the client can reconnect from its last contiguous durable cursor.
+func writeSSEBounded(w http.ResponseWriter, write func() error) error {
+	controller := http.NewResponseController(w)
+	deadlineSet := controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout)) == nil
+	if deadlineSet {
+		defer controller.SetWriteDeadline(time.Time{})
+	}
+	return write()
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
