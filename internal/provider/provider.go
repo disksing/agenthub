@@ -28,10 +28,16 @@ type Event struct {
 }
 
 type Hooks struct {
-	Event      func(Event)
-	NativeID   func(string)
-	Approval   func(id, method string, params json.RawMessage)
-	ProcessEnd func(error)
+	Event        func(Event)
+	NativeID     func(string)
+	Approval     func(id, method string, params json.RawMessage)
+	ProcessStart func(ProcessInfo) error
+	ProcessEnd   func(error)
+}
+
+type ProcessInfo struct {
+	PID            int
+	ProcessGroupID int
 }
 
 type Session interface {
@@ -39,6 +45,8 @@ type Session interface {
 	Prompt(text string, steer bool) error
 	Interrupt() error
 	Approve(id, decision string) error
+	// Close does not return until the provider process group can no longer
+	// execute or write to the session working directory.
 	Close() error
 }
 
@@ -123,11 +131,13 @@ type jsonRPC struct {
 	mu      sync.Mutex
 	writeMu sync.Mutex
 	cmd     *exec.Cmd
+	pgid    int
 	stdin   io.WriteCloser
 	nextID  int64
 	waiting map[string]chan rpcResult
 	pending map[string]pendingRequest
 	closed  bool
+	done    chan struct{}
 }
 
 type pendingRequest struct {
@@ -137,7 +147,11 @@ type pendingRequest struct {
 }
 
 func newJSONRPC(command string, args []string, cwd string, environment map[string]string, hooks Hooks) *jsonRPC {
-	return &jsonRPC{command: command, args: args, cwd: cwd, environment: environment, hooks: hooks, nextID: 1, waiting: make(map[string]chan rpcResult), pending: make(map[string]pendingRequest)}
+	return &jsonRPC{
+		command: command, args: args, cwd: cwd, environment: environment, hooks: hooks, nextID: 1,
+		waiting: make(map[string]chan rpcResult), pending: make(map[string]pendingRequest),
+		done: make(chan struct{}),
+	}
 }
 
 func (r *jsonRPC) start() error {
@@ -169,7 +183,13 @@ func (r *jsonRPC) start() error {
 		r.mu.Unlock()
 		return err
 	}
-	r.cmd, r.stdin = cmd, stdin
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("get provider process group: %w", err)
+	}
+	r.cmd, r.pgid, r.stdin = cmd, pgid, stdin
 	r.mu.Unlock()
 	go r.readLoop(stdout)
 	go r.stderrLoop(stderr)
@@ -177,6 +197,12 @@ func (r *jsonRPC) start() error {
 		err := cmd.Wait()
 		r.finish(err)
 	}()
+	if r.hooks.ProcessStart != nil {
+		if err := r.hooks.ProcessStart(ProcessInfo{PID: cmd.Process.Pid, ProcessGroupID: pgid}); err != nil {
+			_ = r.close()
+			return fmt.Errorf("persist provider process: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -336,14 +362,14 @@ func (r *jsonRPC) emit(kind string, data any) {
 
 func (r *jsonRPC) finish(processErr error) {
 	r.mu.Lock()
-	wasClosed := r.closed
 	r.closed = true
 	for key, ch := range r.waiting {
 		delete(r.waiting, key)
 		close(ch)
 	}
 	r.mu.Unlock()
-	if !wasClosed && r.hooks.ProcessEnd != nil {
+	close(r.done)
+	if r.hooks.ProcessEnd != nil {
 		r.hooks.ProcessEnd(processErr)
 	}
 }
@@ -351,23 +377,87 @@ func (r *jsonRPC) finish(processErr error) {
 func (r *jsonRPC) close() error {
 	r.mu.Lock()
 	if r.closed {
+		cmd, pgid, stdin, done := r.cmd, r.pgid, r.stdin, r.done
 		r.mu.Unlock()
+		if cmd != nil {
+			return terminateChildProcess(cmd, pgid, stdin, done)
+		}
 		return nil
 	}
 	r.closed = true
-	cmd, stdin := r.cmd, r.stdin
+	cmd, pgid, stdin := r.cmd, r.pgid, r.stdin
 	r.mu.Unlock()
 	if stdin != nil {
 		_ = stdin.Close()
 	}
-	if cmd != nil && cmd.Process != nil {
-		if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
-			_ = syscall.Kill(-pgid, syscall.SIGTERM)
-		} else {
-			_ = cmd.Process.Kill()
+	return terminateChildProcess(cmd, pgid, stdin, r.done)
+}
+
+const processTerminateGrace = 2 * time.Second
+
+func terminateChildProcess(cmd *exec.Cmd, pgid int, stdin io.Closer, done <-chan struct{}) error {
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if pgid <= 0 {
+		pgid, _ = syscall.Getpgid(pid)
+	}
+	if pgid <= 0 {
+		_ = cmd.Process.Kill()
+		<-done
+		return nil
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	select {
+	case <-done:
+	case <-time.After(processTerminateGrace):
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		<-done
+	}
+	// Wait confirms the direct child, then SIGKILL and an existence probe
+	// close the entire process group boundary, including descendants that
+	// ignored SIGTERM or outlived the group leader.
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	return waitProcessGroupGone(pgid, processTerminateGrace)
+}
+
+// TerminateProcessGroup closes a provider group recorded by a previous
+// daemon. Success means kill(0) confirms that no member remains.
+func TerminateProcessGroup(pid, pgid int) error {
+	if pid <= 1 || pgid <= 1 || pgid == syscall.Getpgrp() {
+		return fmt.Errorf("refusing unsafe provider process identity pid=%d pgid=%d", pid, pgid)
+	}
+	if !processGroupExists(pgid) {
+		return nil
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	if err := waitProcessGroupGone(pgid, processTerminateGrace); err == nil {
+		return nil
+	}
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+		return fmt.Errorf("kill recovered provider process group %d: %w", pgid, err)
+	}
+	return waitProcessGroupGone(pgid, processTerminateGrace)
+}
+
+func waitProcessGroupGone(pgid int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for processGroupExists(pgid) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("provider process group %d still exists after %s", pgid, timeout)
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	return nil
+}
+
+func processGroupExists(pgid int) bool {
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || err == syscall.EPERM
 }
 
 func rawString(raw json.RawMessage) string {

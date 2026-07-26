@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/disksing/agenthub/internal/config"
 )
@@ -194,5 +199,37 @@ func TestPiLaunchEnvironmentOverridesDaemonEnvironment(t *testing.T) {
 	}
 	if err := value.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCloseEliminatesDescendantsAfterGroupLeaderExited(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "writes")
+	cmd := exec.Command("sh", "-c", `(trap '' TERM; while :; do printf x >> "$1"; sleep 0.02; done) & exit 0`, "sh", marker)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	<-done
+	t.Cleanup(func() { _ = syscall.Kill(-pgid, syscall.SIGKILL) })
+	if !processGroupExists(pgid) {
+		t.Fatal("test descendant did not survive its group leader")
+	}
+	if err := terminateChildProcess(cmd, pgid, nil, done); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(marker)
+	time.Sleep(100 * time.Millisecond)
+	after, _ := os.Stat(marker)
+	if before != nil && after != nil && before.Size() != after.Size() {
+		t.Fatal("provider descendant wrote after Close returned")
 	}
 }

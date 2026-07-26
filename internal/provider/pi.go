@@ -17,12 +17,14 @@ type piSession struct {
 	options Options
 	command string
 	cmd     *exec.Cmd
+	pgid    int
 	stdin   io.WriteCloser
 	mu      sync.Mutex
 	writeMu sync.Mutex
 	nextID  int64
 	waiting map[string]chan piResponse
 	closed  bool
+	done    chan struct{}
 }
 
 type piResponse struct {
@@ -34,7 +36,7 @@ type piResponse struct {
 }
 
 func newPi(command string, options Options) *piSession {
-	return &piSession{command: command, options: options, nextID: 1, waiting: make(map[string]chan piResponse)}
+	return &piSession{command: command, options: options, nextID: 1, waiting: make(map[string]chan piResponse), done: make(chan struct{})}
 }
 
 func (p *piSession) Start(resumeID string) error {
@@ -67,13 +69,25 @@ func (p *piSession) Start(resumeID string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	p.cmd, p.stdin = cmd, stdin
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("get provider process group: %w", err)
+	}
+	p.cmd, p.pgid, p.stdin = cmd, pgid, stdin
 	go p.readLoop(stdout)
 	go p.stderrLoop(stderr)
 	go func() {
 		err := cmd.Wait()
 		p.finish(err)
 	}()
+	if p.options.Hooks.ProcessStart != nil {
+		if err := p.options.Hooks.ProcessStart(ProcessInfo{PID: cmd.Process.Pid, ProcessGroupID: pgid}); err != nil {
+			_ = p.Close()
+			return fmt.Errorf("persist provider process: %w", err)
+		}
+	}
 	response, err := p.startRequest("get_state", nil)
 	if err != nil {
 		return err
@@ -108,16 +122,18 @@ func (p *piSession) Interrupt() error {
 func (p *piSession) Approve(_, _ string) error { return errors.New("Pi RPC does not expose approvals") }
 func (p *piSession) Close() error {
 	p.mu.Lock()
+	if p.closed {
+		cmd, pgid, stdin, done := p.cmd, p.pgid, p.stdin, p.done
+		p.mu.Unlock()
+		if cmd != nil {
+			return terminateChildProcess(cmd, pgid, stdin, done)
+		}
+		return nil
+	}
 	p.closed = true
-	cmd, stdin := p.cmd, p.stdin
+	cmd, pgid, stdin := p.cmd, p.pgid, p.stdin
 	p.mu.Unlock()
-	if stdin != nil {
-		_ = stdin.Close()
-	}
-	if cmd != nil && cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
-	return nil
+	return terminateChildProcess(cmd, pgid, stdin, p.done)
 }
 
 // startRequest issues a handshake request bounded by the startup timeout,
@@ -259,14 +275,14 @@ func (p *piSession) stderrLoop(reader io.Reader) {
 
 func (p *piSession) finish(err error) {
 	p.mu.Lock()
-	wasClosed := p.closed
 	p.closed = true
 	for key, ch := range p.waiting {
 		delete(p.waiting, key)
 		close(ch)
 	}
 	p.mu.Unlock()
-	if !wasClosed && p.options.Hooks.ProcessEnd != nil {
+	close(p.done)
+	if p.options.Hooks.ProcessEnd != nil {
 		p.options.Hooks.ProcessEnd(err)
 	}
 }

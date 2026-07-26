@@ -220,8 +220,17 @@ const DECISION_LABELS = {
 
 const NOTABLE_STATES = {
   failed: "Session failed",
+  stopping: "Stopping provider",
   stopped: "Session stopped",
   archived: "Session archived",
+};
+
+const STOP_REASON_TIMELINE = {
+  requested: "requested",
+  completed: "provider completed",
+  provider_error: "provider error",
+  startup_error: "startup error",
+  daemon_recovery: "daemon recovery",
 };
 
 // Low-value provider notifications that stay available but folded into a
@@ -400,8 +409,12 @@ export function buildTimeline(events) {
         break;
       }
       case "session.state": {
-        const label = NOTABLE_STATES[data.state];
-        if (label) items.push({ kind: "lifecycle", tone: data.state === "failed" ? "danger" : "muted", key: event.id, time, text: label });
+        let label = NOTABLE_STATES[data.state];
+        if (data.state === "stopped" && STOP_REASON_TIMELINE[data.reason]) {
+          label += ` · ${STOP_REASON_TIMELINE[data.reason]}`;
+        }
+        const danger = data.state === "failed" || data.reason === "provider_error" || data.reason === "startup_error";
+        if (label) items.push({ kind: "lifecycle", tone: danger ? "danger" : "muted", key: event.id, time, text: label });
         break;
       }
       case "session.archived":

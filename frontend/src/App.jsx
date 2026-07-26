@@ -4,7 +4,7 @@ import {
   SidebarSimple, Stop, X,
 } from "@phosphor-icons/react";
 import { api } from "./api";
-import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionsQuery } from "./archive.js";
+import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionStatusLabel, sessionsQuery } from "./archive.js";
 import { catchUpEvents, projectLiveEvent } from "./events.js";
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
@@ -287,11 +287,11 @@ export function App() {
         <header className="workspace-header">
           <div>
             <h1>{activeSession?.title || "AgentHub"}</h1>
-            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentName || "No agent"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "No session yet"}</strong></div>
+            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentName || "No agent"}</span><span className="separator-dot">·</span><strong>{sessionStatusLabel(activeSession)}</strong></div>
           </div>
           <div className="header-actions">
             <button className="icon-button mobile-sidebar-toggle" aria-label="Toggle session list" onClick={() => setSidebarOpen((value) => !value)}><List size={20} /></button>
-            {activeSession && !isArchived(activeSession) && <button className="icon-button" aria-label="Stop or interrupt session" title="Stop or interrupt" onClick={stopSession}><Stop size={19} /></button>}
+            {activeSession && !isArchived(activeSession) && <button className="icon-button" aria-label="Stop or interrupt session" title="Stop or interrupt" disabled={activeSession.state === "stopping" || activeSession.state === "stopped"} onClick={stopSession}><Stop size={19} /></button>}
             <button className="icon-button details-toggle" aria-label="Toggle details panel" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? <CaretRight size={18} /> : <SidebarSimple size={18} />}</button>
           </div>
         </header>
@@ -306,11 +306,11 @@ export function App() {
         </div>
 
         <div className="composer">
-          <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopped" || isArchived(activeSession)} onChange={(event) => setDraft(event.target.value)}
+          <textarea aria-label="Message" value={draft} disabled={!activeSession || ["stopping", "stopped"].includes(activeSession.state) || isArchived(activeSession)} onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder={isArchived(activeSession) ? "Archived sessions are read-only" : "Type a message…"} />
           <div className="composer-footer">
             <span className="composer-agent">{activeSession?.agentName || "Create a session to chat"}</span>
-            <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession}><PaperPlaneTilt size={20} weight="fill" /></button>
+            <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession || ["stopping", "stopped"].includes(activeSession.state) || isArchived(activeSession)}><PaperPlaneTilt size={20} weight="fill" /></button>
           </div>
         </div>
       </section>

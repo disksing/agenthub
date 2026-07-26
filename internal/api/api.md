@@ -100,15 +100,19 @@ A session object looks like:
 ```
 
 `state` is one of `starting`, `ready`, `busy`, `waiting_approval`,
-`stopped`, `failed` or `archived`. Optional fields (`agentName`, `source`,
-`launchEnvironment`, `provider`, `providerSessionId`, `currentTurnId`,
-`pendingApprovalIds`) are omitted when absent. `source` is unverified,
-caller-supplied correlation metadata; AgentHub does not register source
-applications, reserve names, authenticate the values, or require them to be
-unique. `launchEnvironment` is durable session data and may be visible to any
-client that can read the session or its events. `lastEventId` is the id of the
-newest event in the session log and doubles as the resume cursor for the
-events endpoint.
+`stopping`, `stopped` or `archived`. Legacy logs may replay `failed` briefly
+during daemon recovery, but current runtimes preserve the failure in events
+and converge to `stopped`. A stopped session may include `stopReason`:
+`requested`, `completed`, `provider_error`, `startup_error` or
+`daemon_recovery`. Optional fields (`agentName`, `source`,
+`launchEnvironment`, `provider`, `stopReason`, `providerSessionId`,
+`currentTurnId`, `pendingApprovalIds`) are omitted when absent. `source` is
+unverified, caller-supplied correlation metadata; AgentHub does not register
+source applications, reserve names, authenticate the values, or require them
+to be unique. `launchEnvironment` is durable session data and may be visible
+to any client that can read the session or its events. `lastEventId` is the id
+of the newest event in the session log and doubles as the resume cursor for
+the events endpoint.
 
 ### Agents and providers
 
@@ -144,8 +148,9 @@ present on events that belong to a turn. Core event types:
 | Type | `data` payload | Meaning |
 | --- | --- | --- |
 | `session.created` | session object | The initial session snapshot, including caller-supplied `source` when present. |
-| `session.state` | `{"state": "..."}` | Session state transition (see states above). |
+| `session.state` | `{"state": "...", "reason": "..."}` | Session state transition. `reason` is present on new `stopped` events; consumers must also accept old events without it. |
 | `session.provider` | `{"agentName", "provider", "providerSessionId"}` | The provider-native session/thread id was established; used for resume. |
+| `provider.process.started` | `{"pid", "processGroupId"}` | Internal process-group evidence used to clean up after daemon crashes. |
 | `session.agent` | `{"agentName"}` | The configured agent was renamed; the session now references the new name. |
 | `session.archived` | — | The session was archived (moved to the archive store). |
 | `message.user` | `{"text"}` | A user message started a new turn. |
@@ -421,8 +426,9 @@ turn before the response returns.
   `=`/NUL, or a value contains NUL),
   `500 session_create_failed`,
   `502 provider_start_failed` (the provider handshake failed; the response
-  `details.sessionId` names the session kept for diagnostics in the `failed`
-  state), `502 turn_start_failed` (the provider started but the initial
+  `details.sessionId` names the session kept for diagnostics in the
+  `stopped` state with `stopReason: "startup_error"`),
+  `502 turn_start_failed` (the provider started but the initial
   message could not be sent; `details.sessionId` likewise).
 
 ```bash
@@ -463,8 +469,8 @@ events endpoint keep working for archived sessions. Archived sessions are
 read-only: all write operations below return `409 session_archived`, and
 unarchiving is not supported.
 
-- **Preconditions:** the session must have no active work — no starting or
-  running provider, no open turn, no pending approval. Stop it first with
+- **Preconditions:** the session must be `stopped`, with no open turn or
+  pending approval. Stop it first with
   `POST /v1/sessions/{id}/stop`; this endpoint never force-stops a provider.
 - **Success `200`:** `{"session": {...}}` (state `archived`). Repeating an
   archive is idempotent.
@@ -605,7 +611,7 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
 
 ### POST /v1/sessions/{id}/resume
 
-Start (or restart) the session's provider without sending a message. When
+Start (or restart) a stopped session's provider without sending a message. When
 the session recorded a provider-native session/thread id, the provider
 resumes that native conversation, so context survives daemon and provider
 restarts. Safe to call when the provider is already running.
@@ -641,8 +647,11 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/interrupt" \
 
 ### POST /v1/sessions/{id}/stop
 
-Stop the session's provider process and mark the session `stopped`. The
-session keeps its full history and can be resumed later. Stop is the
+Stop the session's provider process. The durable transition is `stopping`
+followed by `stopped` with `reason: "requested"` only after the adapter Wait
+path and process-group probe confirm that the provider can no longer write
+to the working directory. The request does not return early. The session
+keeps its full history and can be resumed later. Stop is the
 required precondition for archiving a session whose provider is running.
 
 - **Request body:** empty (`{}`).
@@ -676,7 +685,9 @@ event and the session enters `waiting_approval` with the id in
 - **Errors:** `400 invalid_request`, `415 json_required`,
   `404 session_not_found`, `409 session_archived`,
   `409 runtime_operation_failed` (unknown approval id, or the provider is
-  not running — pending approvals do not survive a daemon restart),
+  not running). Pending approvals do not survive a daemon restart: recovery
+  appends `approval.resolved` with decision `cancel`, closes the open turn,
+  and then publishes `stopped` with reason `daemon_recovery`,
   `503 runtime_unavailable`.
 
 ```bash

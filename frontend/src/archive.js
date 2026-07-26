@@ -3,10 +3,9 @@
 
 export const ARCHIVED_STATE = "archived";
 
-// Sessions in these states hold no running provider work and can be moved
-// to the archive. The daemon re-checks everything server-side; this mirrors
-// the rule so the UI can disable the action with an explanation.
-export const ARCHIVABLE_STATES = new Set(["ready", "stopped", "failed"]);
+// stopped is the only trustworthy provider-release boundary. The daemon
+// re-checks the turn and approval invariants before moving any files.
+export const ARCHIVABLE_STATES = new Set(["stopped"]);
 
 export function isArchived(session) {
   return session?.state === ARCHIVED_STATE;
@@ -55,4 +54,19 @@ export function pickActiveAfterArchive(sessions, archivedId, activeId) {
 export function archiveListError(session, reason) {
   const label = session?.title || session?.id || "session";
   return `Failed to archive "${label}": ${reason || "unknown error"}`;
+}
+
+const STOP_REASON_LABELS = {
+  requested: "requested",
+  completed: "provider completed",
+  provider_error: "provider error",
+  startup_error: "startup error",
+  daemon_recovery: "daemon recovery",
+};
+
+export function sessionStatusLabel(session) {
+  if (!session?.state) return "No session yet";
+  const state = session.state === "waiting_approval" ? "waiting approval" : session.state.replaceAll("_", " ");
+  const reason = session.state === "stopped" ? STOP_REASON_LABELS[session.stopReason] : "";
+  return reason ? `${state} · ${reason}` : state;
 }

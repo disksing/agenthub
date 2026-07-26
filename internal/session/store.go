@@ -353,8 +353,8 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 // next Open completes the move, so the physical location always converges
 // with the event log.
 //
-// Only sessions without active work can be archived (no starting/running
-// provider state, no open turn, no pending approval); otherwise
+// Only strictly stopped sessions without active work can be archived;
+// otherwise
 // ErrSessionActive is returned and nothing changes. Archiving is
 // idempotent: repeating it on a fully archived session succeeds, and
 // repeating it after a failed move retries the move. If the move itself
@@ -371,10 +371,9 @@ func (s *Store) Archive(id string) (Session, error) {
 	}
 	state.mu.Lock()
 	if state.session.State != StateArchived {
-		switch state.session.State {
-		case StateStarting, StateBusy, StateWaitingApproval:
+		if state.session.State != StateStopped {
 			state.mu.Unlock()
-			return Session{}, fmt.Errorf("%w: state %q", ErrSessionActive, state.session.State)
+			return Session{}, fmt.Errorf("%w: state %q is not stopped", ErrSessionActive, state.session.State)
 		}
 		if state.session.CurrentTurnID != "" || len(state.session.PendingApprovalIDs) > 0 {
 			state.mu.Unlock()
@@ -582,6 +581,11 @@ func applyEvent(projected *Session, event Event) error {
 			return err
 		}
 		projected.State = data.State
+		if data.State == StateStopped {
+			projected.StopReason = data.Reason
+		} else {
+			projected.StopReason = ""
+		}
 	case "session.provider":
 		var data ProviderEventData
 		if err := json.Unmarshal(event.Data, &data); err != nil {
@@ -607,8 +611,12 @@ func applyEvent(projected *Session, event Event) error {
 		if projected.CurrentTurnID == event.TurnID {
 			projected.CurrentTurnID = ""
 		}
-		if projected.State != StateStopped && projected.State != StateArchived {
-			projected.State = StateReady
+		if projected.State != StateStopping && projected.State != StateStopped && projected.State != StateArchived {
+			if len(projected.PendingApprovalIDs) > 0 {
+				projected.State = StateWaitingApproval
+			} else {
+				projected.State = StateReady
+			}
 		}
 	case "approval.requested":
 		var data ApprovalEventData
@@ -623,7 +631,8 @@ func applyEvent(projected *Session, event Event) error {
 			return err
 		}
 		projected.PendingApprovalIDs = removeString(projected.PendingApprovalIDs, data.ApprovalID)
-		if len(projected.PendingApprovalIDs) == 0 {
+		if len(projected.PendingApprovalIDs) == 0 &&
+			projected.State != StateStopping && projected.State != StateStopped && projected.State != StateArchived {
 			if projected.CurrentTurnID != "" {
 				projected.State = StateBusy
 			} else {
@@ -634,6 +643,35 @@ func applyEvent(projected *Session, event Event) error {
 	projected.LastEventID = event.ID
 	projected.UpdatedAt = event.Time
 	return nil
+}
+
+// OpenProviderProcess returns the newest provider process group that has not
+// subsequently reached a stopped state. Older logs simply return no process
+// metadata and continue to replay normally.
+func (s *Store) OpenProviderProcess(id string) (ProviderProcessEventData, bool, error) {
+	state, err := s.state(id)
+	if err != nil {
+		return ProviderProcessEventData{}, false, err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	var process ProviderProcessEventData
+	open := false
+	for _, event := range state.events {
+		switch event.Type {
+		case "provider.process.started":
+			if err := json.Unmarshal(event.Data, &process); err != nil {
+				return ProviderProcessEventData{}, false, fmt.Errorf("event %d: %w", event.ID, err)
+			}
+			open = process.PID > 0 && process.ProcessGroupID > 0
+		case "session.state":
+			var data StateEventData
+			if json.Unmarshal(event.Data, &data) == nil && data.State == StateStopped {
+				open = false
+			}
+		}
+	}
+	return process, open, nil
 }
 
 func readEventsRepairTail(path string) ([]Event, error) {

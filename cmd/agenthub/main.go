@@ -574,11 +574,12 @@ func runSessionList(args []string) error {
 		return printJSON(map[string]any{"sessions": values})
 	}
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "ID\tSTATE\tAGENT\tTITLE\tUPDATED")
+	fmt.Fprintln(writer, "ID\tSTATE\tSTOP REASON\tAGENT\tTITLE\tUPDATED")
 	for _, value := range values {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			value.ID,
 			value.State,
+			value.StopReason,
 			value.AgentName,
 			value.Title,
 			value.UpdatedAt.Local().Format(time.RFC3339),

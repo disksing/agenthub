@@ -231,6 +231,16 @@ func TestServeMigratesLegacyLayoutIntoDotAgentHub(t *testing.T) {
 		t.Fatalf("provider mapping lost: %+v", sessionBody)
 	}
 	// Archiving a migrated session works and keeps it readable.
+	stopRequest, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/sessions/ses_aaa111/stop", strings.NewReader("{}"))
+	stopRequest.Header.Set("Content-Type", "application/json")
+	stopResponse, err := http.DefaultClient.Do(stopRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopResponse.Body.Close()
+	if stopResponse.StatusCode != http.StatusOK {
+		t.Fatalf("stop migrated session: %s", stopResponse.Status)
+	}
 	request, _ := http.NewRequest(http.MethodDelete, "http://"+addr+"/v1/sessions/ses_aaa111", nil)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
@@ -368,7 +378,8 @@ func TestServeSIGTERMClosesSSEAndExitsCleanly(t *testing.T) {
 	}
 }
 
-func TestServeSkipsMigrationUnderAgentHubHome(t *testing.T) {home := legacyHome(t, []string{"ses_old111"}, nil)
+func TestServeSkipsMigrationUnderAgentHubHome(t *testing.T) {
+	home := legacyHome(t, []string{"ses_old111"}, nil)
 	isolated := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTHUB_HOME", isolated)

@@ -13,9 +13,21 @@ const (
 	StateReady           = "ready"
 	StateBusy            = "busy"
 	StateWaitingApproval = "waiting_approval"
+	StateStopping        = "stopping"
 	StateStopped         = "stopped"
-	StateFailed          = "failed"
-	StateArchived        = "archived"
+	// StateFailed is retained for replaying legacy event logs. Current
+	// runtimes preserve failures with provider.error and turn.failed events,
+	// then converge the session to StateStopped.
+	StateFailed   = "failed"
+	StateArchived = "archived"
+)
+
+const (
+	StopReasonRequested      = "requested"
+	StopReasonCompleted      = "completed"
+	StopReasonProviderError  = "provider_error"
+	StopReasonStartupError   = "startup_error"
+	StopReasonDaemonRecovery = "daemon_recovery"
 )
 
 type Session struct {
@@ -28,6 +40,7 @@ type Session struct {
 	Provider           string            `json:"provider,omitempty"`
 	ProviderSessionID  string            `json:"providerSessionId,omitempty"`
 	State              string            `json:"state"`
+	StopReason         string            `json:"stopReason,omitempty"`
 	CurrentTurnID      string            `json:"currentTurnId,omitempty"`
 	PendingApprovalIDs []string          `json:"pendingApprovalIds,omitempty"`
 	LastEventID        int64             `json:"lastEventId"`
@@ -92,7 +105,16 @@ func ValidateLaunchEnvironment(environment map[string]string) error {
 }
 
 type StateEventData struct {
-	State string `json:"state"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// ProviderProcessEventData is durable evidence that an adapter started an OS
+// process group. It lets a replacement daemon terminate and confirm the old
+// group after an ungraceful daemon exit before publishing stopped.
+type ProviderProcessEventData struct {
+	PID            int `json:"pid"`
+	ProcessGroupID int `json:"processGroupId"`
 }
 
 type ApprovalEventData struct {

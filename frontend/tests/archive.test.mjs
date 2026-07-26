@@ -8,6 +8,7 @@ import {
   archiveDisabledReason,
   isArchivable,
   isArchived,
+  sessionStatusLabel,
   sessionsQuery,
 } from "../src/archive.js";
 
@@ -22,14 +23,12 @@ test("isArchived only matches the archived state", () => {
 });
 
 test("inactive sessions are archivable", () => {
-  for (const state of ["ready", "stopped", "failed"]) {
-    assert.equal(isArchivable({ ...base, state }), true, state);
-    assert.equal(archiveDisabledReason({ ...base, state }), "", state);
-  }
+  assert.equal(isArchivable(base), true);
+  assert.equal(archiveDisabledReason(base), "");
 });
 
 test("active or unsafe sessions are not archivable", () => {
-  for (const state of ["starting", "busy", "waiting_approval"]) {
+  for (const state of ["ready", "starting", "busy", "waiting_approval", "stopping", "failed"]) {
     assert.equal(isArchivable({ ...base, state }), false, state);
     assert.match(archiveDisabledReason({ ...base, state }), /Stop the session/, state);
   }
@@ -41,6 +40,14 @@ test("active or unsafe sessions are not archivable", () => {
   assert.match(archiveDisabledReason({ ...base, state: ARCHIVED_STATE }), /already archived/);
   assert.equal(isArchivable(null), false);
   assert.match(archiveDisabledReason(null), /No session/);
+});
+
+test("session status exposes stopping and stopped reason", () => {
+  assert.equal(sessionStatusLabel({ state: "stopping" }), "stopping");
+  assert.equal(sessionStatusLabel({ state: "waiting_approval" }), "waiting approval");
+  assert.equal(sessionStatusLabel({ state: "stopped", stopReason: "daemon_recovery" }), "stopped · daemon recovery");
+  assert.equal(sessionStatusLabel({ state: "stopped" }), "stopped");
+  assert.equal(sessionStatusLabel(null), "No session yet");
 });
 
 test("sessionsQuery hides archived sessions by default", () => {

@@ -177,6 +177,11 @@ func TestSessionSourcePersistsAndFilters(t *testing.T) {
 	if _, err := store.Append(forgeTwo.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Append(forgeDuplicate.ID, "session.state", "", mustJSON(t, StateEventData{
+		State: StateStopped, Reason: StopReasonRequested,
+	})); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -560,8 +565,8 @@ func TestArchiveMovesWholeSessionDirectory(t *testing.T) {
 	}
 }
 
-func TestArchiveRejectsActiveSessions(t *testing.T) {
-	for _, state := range []string{StateStarting, StateBusy, StateWaitingApproval} {
+func TestArchiveRejectsEveryNonStoppedState(t *testing.T) {
+	for _, state := range []string{StateReady, StateStarting, StateBusy, StateWaitingApproval, StateStopping, StateFailed} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			store, err := Open(root)
@@ -600,6 +605,69 @@ func TestArchiveRejectsActiveSessions(t *testing.T) {
 	}
 	if _, err := store.Archive(created.ID); !errors.Is(err, ErrSessionActive) {
 		t.Fatalf("Archive error = %v, want ErrSessionActive", err)
+	}
+}
+
+func TestStoppedReasonProjectsAndLegacyStoppedEventStillReplays(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Cwd: t.TempDir(), AgentName: "Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, StateEventData{
+		State: StateStopped, Reason: StopReasonProviderError,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != StateStopped || value.StopReason != StopReasonProviderError {
+		t.Fatalf("new stopped event did not project its reason: %+v", value)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, map[string]any{"state": StateReady})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, map[string]any{"state": StateStopped})); err != nil {
+		t.Fatal(err)
+	}
+	value, err = store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != StateStopped || value.StopReason != "" {
+		t.Fatalf("legacy stopped event is incompatible: %+v", value)
+	}
+}
+
+func TestOpenProviderProcessUsesStoppedAsClosureBoundary(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Cwd: t.TempDir(), AgentName: "Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := ProviderProcessEventData{PID: 123, ProcessGroupID: 123}
+	if _, err := store.Append(created.ID, "provider.process.started", "", mustJSON(t, process)); err != nil {
+		t.Fatal(err)
+	}
+	got, open, err := store.OpenProviderProcess(created.ID)
+	if err != nil || !open || got != process {
+		t.Fatalf("open process = %+v, %v, %v", got, open, err)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", mustJSON(t, StateEventData{
+		State: StateStopped, Reason: StopReasonCompleted,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, open, err := store.OpenProviderProcess(created.ID); err != nil || open {
+		t.Fatalf("stopped did not close process evidence: open=%v err=%v", open, err)
 	}
 }
 

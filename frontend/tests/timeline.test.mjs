@@ -205,6 +205,17 @@ test("provider errors, lifecycle and notable session states are visible", () => 
   assert.equal(items[4].tone, "danger");
 });
 
+test("strict stopped lifecycle shows stopping and machine reason", () => {
+  reset();
+  const items = buildTimeline([
+    event("session.state", { state: "stopping" }),
+    event("session.state", { state: "stopped", reason: "provider_error" }),
+  ]);
+  assert.equal(items[0].text, "Stopping provider");
+  assert.equal(items[1].text, "Session stopped · provider error");
+  assert.equal(items[1].tone, "danger");
+});
+
 test("provider noise folds into a single activity group", () => {
   reset();
   const items = buildTimeline([

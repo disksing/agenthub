@@ -198,7 +198,7 @@ GET    /v1/sessions/{id}/events
 
 `DELETE /v1/sessions/{id}` 归档一个 Session：daemon 先追加一条持久化的 `session.archived` 事件，再把整个 Session 目录移动到 Session Store 的 `Archive/` 子目录（`sessions/Archive/<session-id>/`）。不删除任何数据——`session.json`、`events.jsonl` 和其他文件一起移动。
 
-- 只有非活动 Session 可以归档：没有正在启动/运行的 provider、没有未完成的 Turn、没有待处理的审批。端点不会强制停止 Session；请先调用 `POST /v1/sessions/{id}/stop`。
+- 仅严格处于 `stopped` 且没有未完成 Turn 或待处理审批的 Session 可以归档。端点不会强制停止 Session；请先调用 `POST /v1/sessions/{id}/stop`。
 - 状态码语义：`200` 归档成功（重复归档幂等成功）；`404` Session 不存在；`409 session_active` Session 仍有活动工作；`409 session_archive_conflict` 归档目标被占用；`500 session_archive_failed` 文件系统错误（数据保持完整，重试或 daemon 重启会补完移动）。
 - `GET /v1/sessions` 默认不返回归档 Session；用 `?includeArchived=true` 包含它们，或用 `?archived=true` 只列出归档 Session。归档后 `GET /v1/sessions/{id}` 和事件端点仍然可读。
 - 归档 Session 只读：`messages`、`resume`、`interrupt`、`stop` 和审批写入都返回 `409 session_archived`。不支持取消归档。
@@ -210,9 +210,25 @@ CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --a
 创建 Session 会同步启动 Provider：握手请求（`initialize`、`session/new` / `thread/start` 及其 resume/load 变体）必须在 2 分钟启动超时内应答。无法应答的 Provider——例如进程因操作系统挂起隐私授权弹窗而卡在读取 Session 工作目录上——会让创建请求快速失败而不是一直挂起：
 
 - API 返回 `502 provider_start_failed`，携带 Provider 的真实错误；超时时附带可操作的提示（在 macOS 上指向“系统设置 > 隐私与安全性”弹窗，例如“下载”文件夹或完全磁盘访问权限）。Web 新建 Session 窗口会显示该信息。
-- 失败 Session 保留用于诊断，进入终态 `failed` 并记录 `provider.error` 事件；可以查看、归档或忽略，但不会停留在 `starting`，也不会遗留孤儿 Provider 进程。
+- 失败 Session 保留用于诊断：记录 `provider.error`、失败闭合 open turn，并在确认进程退出后收敛到带 `stopReason: "startup_error"` 的 `stopped`；之后可查看、resume、归档或保留。
 
 `session/prompt` 等长请求使用单独的 15 分钟上限，因为一个 Turn 可能合理运行很久。
+
+### Strict stopped 生命周期与崩溃恢复
+
+`stopped` 是唯一可信的 Provider 资源释放边界。stop 请求先写入
+`stopping`；只有 adapter Wait 路径与进程组探测确认 Provider 及其子进程
+不能再写工作目录后，调用才返回并追加
+`session.state {"state":"stopped","reason":"requested"}`。
+
+所有退出路径使用同一终态收敛器：正常退出使用 `completed`；崩溃先记录
+`provider.error`、关闭 approval 与 open turn，再使用 `provider_error`；
+启动失败使用 `startup_error`；显式 stop 和 daemon 优雅关闭使用
+`requested`。daemon 被 SIGKILL 后，新 daemon 使用持久化的
+`provider.process.started` 证据终止遗留进程组，确定性取消 pending
+approval 与 open turn，最后使用 `daemon_recovery`。旧 `failed` 状态和
+不带 reason 的旧 `session.state` 事件仍可读取，并会恢复到同一 stopped
+边界。
 
 ## 数据与安全
 

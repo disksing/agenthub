@@ -397,9 +397,11 @@ See also: agenthub help session stop
 Usage:
   agenthub session stop <session-id>
 
-The session becomes stopped but is kept with its full event log. Continue
-later with "agenthub session resume" or by sending a new message, which
-re-attaches the provider-native session/thread on demand.
+The session first becomes stopping. This command returns only after the
+provider process group has exited; the durable stopped event then carries
+reason "requested". The full event log is kept. Continue later with
+"agenthub session resume" or by sending a new message, which re-attaches the
+provider-native session/thread on demand.
 
 See also: agenthub help session resume
 `,
@@ -415,7 +417,8 @@ Options:
 When a provider asks for permission (for example to run a command), the
 session enters waiting_approval and an approval.requested event carries the
 approval id. Resolving it lets the turn continue. The provider process must
-be running; pending approvals do not survive a daemon restart.
+be running. After a daemon crash, recovery cancels pending approvals and the
+open turn before publishing stopped with reason "daemon_recovery".
 
 Examples:
   agenthub session approve ses_01HX... apr_01HX...

@@ -221,7 +221,7 @@ The `source` object is persisted in `session.created`, rebuilt into `session.jso
 
 `DELETE /v1/sessions/{id}` archives a session: the daemon appends a durable `session.archived` event and then moves the whole session directory into the store's `Archive/` subdirectory (`sessions/Archive/<session-id>/`). Nothing is deleted — `session.json`, `events.jsonl` and all other files move along.
 
-- Only inactive sessions can be archived: no starting/running provider, no open turn, no pending approval. The endpoint never force-stops a session; stop it first with `POST /v1/sessions/{id}/stop`.
+- Only strictly stopped sessions can be archived, with no open turn or pending approval. The endpoint never force-stops a session; stop it first with `POST /v1/sessions/{id}/stop`.
 - Status codes: `200` archived (repeating an archive is idempotent), `404` unknown session, `409 session_active` the session still has active work, `409 session_archive_conflict` the archive target is occupied, `500 session_archive_failed` a filesystem error (the session's data stays intact and a retry or a daemon restart completes the move).
 - `GET /v1/sessions` hides archived sessions by default; use `?includeArchived=true` to include them or `?archived=true` to list only archived sessions. `GET /v1/sessions/{id}` and the events endpoint keep working for archived sessions.
 - Archived sessions are read-only: `messages`, `resume`, `interrupt`, `stop` and approval writes return `409 session_archived`. Unarchiving is not supported.
@@ -233,7 +233,25 @@ The CLI equivalents are `agenthub session archive <id>`, `agenthub session list 
 Session creation starts the provider synchronously: the handshake requests (`initialize`, `session/new` / `thread/start`, and their resume/load variants) must answer within a 2-minute startup timeout. A provider that cannot answer — for example a process stuck reading the session working directory because the operating system is holding a privacy permission prompt — fails the request instead of hanging it:
 
 - The API returns `502 provider_start_failed` with the provider's real error and, on timeout, an actionable hint (on macOS this points at System Settings > Privacy & Security prompts, e.g. the Downloads folder or Full Disk Access). The Web New Session dialog shows this message.
-- The session is kept for diagnostics in the terminal `failed` state with a `provider.error` event; it can be inspected, archived, or left alone, but it never stays in `starting` and never leaves an orphaned provider process behind.
+- The session is kept for diagnostics with `provider.error`, any open turn is failed, and the session converges to `stopped` with `stopReason: "startup_error"` only after process exit is confirmed. It can then be inspected, resumed, archived, or left alone.
+
+### Strict stopped lifecycle and crash recovery
+
+`stopped` is the single trustworthy provider-release boundary. A stop request
+first appends `stopping`; the stop call returns and the final
+`session.state {"state":"stopped","reason":"requested"}` event is appended
+only after the adapter Wait path and process-group probe confirm that the
+provider and its descendants cannot write to the working directory.
+
+All exit paths use the same terminal sequence. Clean provider exit uses
+`completed`; a crash records `provider.error`, closes approvals and the open
+turn, then uses `provider_error`; startup failure uses `startup_error`;
+explicit stop and graceful daemon shutdown use `requested`. If the daemon is
+killed, the next daemon uses durable `provider.process.started` evidence to
+terminate any surviving process group, deterministically cancels pending
+approvals and the open turn, and finishes with `daemon_recovery`. Legacy
+`failed` states and old `session.state` events without a reason remain
+readable and are recovered into the same stopped boundary.
 
 Long-running requests such as `session/prompt` keep a separate 15-minute bound, since turns may legitimately run for many minutes.
 

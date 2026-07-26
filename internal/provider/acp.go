@@ -215,7 +215,7 @@ func (a *acpSession) Approve(id, decision string) error {
 
 func (a *acpSession) Close() error {
 	if a.sessionID != "" && a.supports("close") {
-		_, _ = a.rpc.request("session/close", map[string]any{"sessionId": a.sessionID})
+		_, _ = a.rpc.requestWithTimeout("session/close", map[string]any{"sessionId": a.sessionID}, processTerminateGrace)
 	}
 	return a.rpc.close()
 }

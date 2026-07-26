@@ -233,6 +233,15 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 	if _, err := store.Append(forgeTwo.ID, "session.state", "", stateData); err != nil {
 		t.Fatal(err)
 	}
+	stoppedDuplicate, err := json.Marshal(session.StateEventData{
+		State: session.StateStopped, Reason: session.StopReasonRequested,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(forgeDuplicate.ID, "session.state", "", stoppedDuplicate); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1140,6 +1149,11 @@ func TestArchiveEndpointMovesAndHidesSession(t *testing.T) {
 	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
 	defer server.Close()
 	created := createTestSession(t, server)
+	if _, err := store.Append(created.ID, "session.state", "", mustMarshal(t, session.StateEventData{
+		State: session.StateStopped, Reason: session.StopReasonRequested,
+	})); err != nil {
+		t.Fatal(err)
+	}
 
 	response := deleteSession(t, server, created.ID)
 	defer response.Body.Close()
@@ -1260,6 +1274,11 @@ func TestArchivedSessionRejectsWrites(t *testing.T) {
 	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
 	defer server.Close()
 	created := createTestSession(t, server)
+	if _, err := store.Append(created.ID, "session.state", "", mustMarshal(t, session.StateEventData{
+		State: session.StateStopped, Reason: session.StopReasonRequested,
+	})); err != nil {
+		t.Fatal(err)
+	}
 	response := deleteSession(t, server, created.ID)
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -1475,8 +1494,8 @@ func TestCreateSessionPersistsCanonicalAgentName(t *testing.T) {
 }
 
 // When session creation fails at the provider, the API must surface the
-// real provider error and the session must end in a terminal failed state —
-// never stuck in starting.
+// real provider error and the session must end at the strict stopped boundary
+// with a startup_error reason — never stuck in starting.
 func TestCreateSessionProviderFailureSurfacesError(t *testing.T) {
 	server := newConfigTestServer(t)
 	body, _ := json.Marshal(map[string]any{"cwd": t.TempDir(), "agentName": "Pi Agent"})
@@ -1509,8 +1528,8 @@ func TestCreateSessionProviderFailureSurfacesError(t *testing.T) {
 		t.Fatalf("error message must carry the provider cause: %q", parsed.Error.Message)
 	}
 	value := getSession(t, server, parsed.Error.Details.SessionID)
-	if value.State != session.StateFailed {
-		t.Fatalf("session state = %q, want failed", value.State)
+	if value.State != session.StateStopped || value.StopReason != session.StopReasonStartupError {
+		t.Fatalf("unexpected session terminal state: %+v", value)
 	}
 }
 
