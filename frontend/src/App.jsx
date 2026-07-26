@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Archive, CaretRight, Check, ClockCounterClockwise, Copy, Gear, List, PaperPlaneTilt, Plus,
+  Archive, CaretRight, Check, CircleNotch, ClockCounterClockwise, Copy, Gear, List, PaperPlaneTilt, Plus,
   SidebarSimple, Stop, X,
 } from "@phosphor-icons/react";
 import { api } from "./api";
-import { archiveDisabledReason, isArchived, isArchivable, sessionsQuery } from "./archive.js";
+import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionsQuery } from "./archive.js";
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
@@ -19,6 +19,9 @@ export function App() {
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const archiveTriggerRef = useRef(null);
+  // Per-session pending set for the inline list archive button: only the
+  // clicked row is busy/disabled, and duplicate submissions are blocked.
+  const [listArchivingIds, setListArchivingIds] = useState(() => new Set());
   const [agents, setAgents] = useState([]);
   const [providers, setProviders] = useState([]);
   const [defaultAgentId, setDefaultAgentId] = useState("");
@@ -183,6 +186,36 @@ export function App() {
     }
   };
 
+  // archiveFromList is the one-click archive offered on hover/focus inside
+  // the default session list. It uses the same daemon archive API as the
+  // details panel but skips the confirmation dialog by design.
+  const archiveFromList = async (session) => {
+    if (!session || archivedView || !isArchivable(session)) return;
+    if (listArchivingIds.has(session.id)) return;
+    setError("");
+    setListArchivingIds((current) => new Set(current).add(session.id));
+    try {
+      await api(`/v1/sessions/${session.id}`, { method: "DELETE", body: "{}" });
+      // Refetch the default list so caches drop the archived session, then
+      // converge the selection when the archived session was being viewed.
+      const body = await api(sessionsQuery(false));
+      const remaining = body.sessions || [];
+      setSessions(remaining);
+      setActiveId((current) => pickActiveAfterArchive(remaining, session.id, current));
+      refreshArchivedSessions().catch(() => {});
+    } catch (value) {
+      // Failure keeps the list item and the current selection; the banner
+      // shows the actionable server reason.
+      setError(archiveListError(session, value.message));
+    } finally {
+      setListArchivingIds((current) => {
+        const next = new Set(current);
+        next.delete(session.id);
+        return next;
+      });
+    }
+  };
+
   const resolveApproval = async (approvalId, decision) => {
     try {
       await api(`/v1/sessions/${activeId}/approvals/${approvalId}`, { method: "POST", body: JSON.stringify({ decision }) });
@@ -203,11 +236,36 @@ export function App() {
           </button>
           <div className="session-label">{archivedView ? "Archived Sessions" : "Recent Sessions"}</div>
           <nav className="session-list" aria-label={archivedView ? "Archived sessions" : "Recent sessions"}>
-            {(archivedView ? archivedSessions : sessions).map((item) => (
-              <button key={item.id} className={`session-row ${item.id === activeId ? "active" : ""}`} onClick={() => { setActiveId(item.id); if (isNarrow()) setSidebarOpen(false); }}>
-                <span>{item.title}</span><time>{displayTime(item.updatedAt)}</time>
-              </button>
-            ))}
+            {(archivedView ? archivedSessions : sessions).map((item) => {
+              const itemArchiving = listArchivingIds.has(item.id);
+              const itemArchivable = isArchivable(item);
+              return (
+                <div key={item.id} className={`session-row ${item.id === activeId ? "active" : ""}`}>
+                  <button
+                    className="session-row-main"
+                    aria-current={item.id === activeId ? "true" : undefined}
+                    onClick={() => { setActiveId(item.id); if (isNarrow()) setSidebarOpen(false); }}
+                  >
+                    <span>{item.title}</span><time>{displayTime(item.updatedAt)}</time>
+                  </button>
+                  {!archivedView && (
+                    <button
+                      type="button"
+                      className="session-row-archive"
+                      aria-label={`Archive session ${item.title || item.id}`}
+                      aria-busy={itemArchiving || undefined}
+                      title={archiveDisabledReason(item) || `Archive session ${item.title || item.id}`}
+                      disabled={itemArchiving || !itemArchivable}
+                      onClick={(event) => { event.stopPropagation(); archiveFromList(item); }}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      {itemArchiving ? <CircleNotch className="spin" size={15} /> : <Archive size={15} />}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
             {archivedView && !archivedSessions.length && (
               <p className="session-list-empty" role="status">No archived sessions yet.</p>
             )}

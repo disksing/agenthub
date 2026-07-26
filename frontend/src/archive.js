@@ -39,3 +39,21 @@ export function archiveDisabledReason(session) {
 export function sessionsQuery(archivedOnly) {
   return archivedOnly ? "/v1/sessions?archived=true" : "/v1/sessions";
 }
+
+// pickActiveAfterArchive resolves the workspace selection after a session was
+// archived from the list. Archiving a session that is not selected keeps the
+// current selection; archiving the selected session moves to the first
+// remaining active session, or to the empty state when none are left.
+export function pickActiveAfterArchive(sessions, archivedId, activeId) {
+  if (!archivedId || activeId !== archivedId) return activeId;
+  const remaining = (sessions || []).filter((item) => item.id !== archivedId);
+  return remaining[0]?.id || "";
+}
+
+// archiveListError formats the inline-list archive failure banner. It always
+// names the session (falling back to the stable ID) and keeps the server
+// reason so state conflicts stay actionable.
+export function archiveListError(session, reason) {
+  const label = session?.title || session?.id || "session";
+  return `Failed to archive "${label}": ${reason || "unknown error"}`;
+}
