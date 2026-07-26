@@ -22,6 +22,7 @@ import (
 	"github.com/disksing/agenthub/internal/client"
 	"github.com/disksing/agenthub/internal/config"
 	"github.com/disksing/agenthub/internal/daemon"
+	"github.com/disksing/agenthub/internal/migrate"
 	"github.com/disksing/agenthub/internal/paths"
 	"github.com/disksing/agenthub/internal/provider"
 	"github.com/disksing/agenthub/internal/runtime"
@@ -104,6 +105,43 @@ func runServe(args []string) error {
 	}
 	defer lock.Release()
 
+	if !resolved.Isolated {
+		// Unify the default data layout: move legacy sessions and service
+		// logs under ~/.agenthub before opening the store. A conflict or an
+		// unfinished previous migration stops startup with an actionable
+		// error instead of splitting data across two locations.
+		legacy, err := paths.LegacyDefaults()
+		if err != nil {
+			return err
+		}
+		report, err := migrate.Run(migrate.Options{
+			JournalPath: filepath.Join(resolved.DataDir, "migration.json"),
+			Sessions: migrate.Plan{
+				From: filepath.Join(legacy.DataDir, "sessions"),
+				To:   resolved.SessionsDir,
+			},
+			Logs: migrate.Plan{
+				From: legacy.LogsDir,
+				To:   resolved.LogsDir,
+			},
+			LegacyStateFiles: []string{
+				filepath.Join(legacy.DataDir, "server.json"),
+				filepath.Join(legacy.DataDir, "server.lock"),
+			},
+			LegacyDataDir:    legacy.DataDir,
+			LegacyServerFile: filepath.Join(legacy.DataDir, "server.json"),
+		})
+		if err != nil {
+			return err
+		}
+		if report.SessionsMigrated {
+			fmt.Fprintf(os.Stderr, "migrated %d active and %d archived sessions to %s\n", report.SessionsActive, report.SessionsArchived, resolved.SessionsDir)
+		}
+		if len(report.LogsMoved) > 0 || len(report.LogsBackedUp) > 0 {
+			fmt.Fprintf(os.Stderr, "migrated service logs to %s (%d moved, %d kept as backups)\n", resolved.LogsDir, len(report.LogsMoved), len(report.LogsBackedUp))
+		}
+	}
+
 	store, err := session.Open(resolved.SessionsDir)
 	if err != nil {
 		return err
@@ -145,7 +183,7 @@ func runServe(args []string) error {
 	httpServer := &http.Server{
 		Handler: api.New(store, version, startedAt, api.Dependencies{
 			Runtime: manager, ConfigPath: resolved.ConfigFile, WebDir: *webDir, Listen: listenAddress,
-			Models: provider.NewModelCache(),
+			Models: provider.NewModelCache(), LogsDir: resolved.LogsDir,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       75 * time.Second,
@@ -265,15 +303,17 @@ func runChat(args []string) error {
 	if flags.NArg() != 0 {
 		return usageError("agenthub chat [--session id | --cwd dir --title title --agent name]", "chat")
 	}
+	// Validate usage before touching the daemon so argument errors fail
+	// fast, even with no daemon running.
+	if strings.TrimSpace(*sessionID) == "" && strings.TrimSpace(*agentName) == "" {
+		return errors.New("--agent is required when creating a session")
+	}
 	apiClient, err := client.Discover()
 	if err != nil {
 		return err
 	}
 	id := *sessionID
 	if id == "" {
-		if strings.TrimSpace(*agentName) == "" {
-			return errors.New("--agent is required when creating a session")
-		}
 		absolute, err := filepath.Abs(*cwd)
 		if err != nil {
 			return err

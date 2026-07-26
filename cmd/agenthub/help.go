@@ -121,9 +121,16 @@ Core concepts:
 
 Files:
   Config     ~/.agenthub/config.json (providers, agents)
-  Sessions   <data dir>/agenthub/sessions/<id>/session.json + events.jsonl
-  Archive    <data dir>/agenthub/sessions/Archive/<id>/ (archived sessions)
-  State      <state dir>/agenthub/server.json (daemon endpoint discovery)
+  Sessions   ~/.agenthub/sessions/<id>/session.json + events.jsonl
+  Archive    ~/.agenthub/sessions/Archive/<id>/ (archived sessions)
+  Logs       ~/.agenthub/logs/ (service stdout/stderr when installed)
+  State      ~/.agenthub/server.json (daemon endpoint discovery)
+
+All persistent data lives under ~/.agenthub. Older versions stored sessions
+under the operating system's user data directory (for example ~/Library/
+Application Support/agenthub on macOS) and service logs under ~/Library/
+Logs/AgentHub; the daemon migrates that data automatically on first start
+and refuses to start rather than merge when both locations hold sessions.
 
 Environment:
   AGENTHUB_HOME         Isolate config, data and state into one directory
@@ -177,7 +184,10 @@ Usage:
   agenthub status
 
 Requires a running daemon (see "agenthub help serve"). The CLI discovers the
-endpoint through server.json or AGENTHUB_ENDPOINT.
+endpoint through server.json or AGENTHUB_ENDPOINT. The report includes the
+daemon version and uptime, the config, session store, archive and logs
+paths, and the runtime summary, so you can confirm the unified ~/.agenthub
+layout after an upgrade migration.
 
 See also: agenthub help agents, agenthub help session list
 `,
@@ -308,7 +318,7 @@ Usage:
 By default only active sessions are listed; archived sessions stay hidden.
 Use --all to include them in the list, or --archived to list only archived
 sessions. Archived sessions keep their full event log under
-<data dir>/agenthub/sessions/Archive/<session-id>/ and can be inspected with
+~/.agenthub/sessions/Archive/<session-id>/ and can be inspected with
 "agenthub session show" and "agenthub session events".
 
 Options:
@@ -420,7 +430,7 @@ Usage:
   agenthub session archive <session-id>
 
 Archiving moves the whole session directory from the active store to
-<data dir>/agenthub/sessions/Archive/<session-id>/. Nothing is deleted:
+~/.agenthub/sessions/Archive/<session-id>/. Nothing is deleted:
 session.json, events.jsonl and every other persisted file move along and
 stay readable with "agenthub session show" and "agenthub session events".
 

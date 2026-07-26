@@ -34,6 +34,7 @@ type Server struct {
 	version   string
 	runtime   *runtime.Manager
 	config    string
+	logsDir   string
 	webDir    string
 	listen    *ListenAddress
 	models    ModelLister
@@ -51,6 +52,9 @@ type Dependencies struct {
 	Listen *ListenAddress
 	// Models, when set, enables the provider model enumeration endpoint.
 	Models ModelLister
+	// LogsDir is the directory service logs are written to, reported by
+	// the status endpoint.
+	LogsDir string
 }
 
 func New(store *session.Store, version string, startedAt time.Time, dependencies ...Dependencies) *Server {
@@ -58,6 +62,7 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 	if len(dependencies) > 0 {
 		server.runtime = dependencies[0].Runtime
 		server.config = dependencies[0].ConfigPath
+		server.logsDir = dependencies[0].LogsDir
 		server.webDir = dependencies[0].WebDir
 		server.listen = dependencies[0].Listen
 		server.models = dependencies[0].Models
@@ -109,6 +114,12 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		"version":       s.version,
 		"startedAt":     s.startedAt,
 		"uptimeSeconds": int64(time.Since(s.startedAt).Seconds()),
+		"paths": map[string]any{
+			"config":   s.config,
+			"sessions": s.store.Root(),
+			"archive":  s.store.ArchiveRoot(),
+			"logs":     s.logsDir,
+		},
 		"sessionStore": map[string]any{
 			"path":         s.store.Root(),
 			"archivePath":  s.store.ArchiveRoot(),
