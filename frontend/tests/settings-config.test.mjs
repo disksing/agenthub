@@ -6,7 +6,6 @@ import {
   isDirty,
   normalizeAgentOptions,
   normalizeConfig,
-  providerReferences,
   uniqueId,
   validateDraft,
 } from "../src/settings/configModel.js";
@@ -109,13 +108,6 @@ test("normalizeAgentOptions drops inapplicable fields on provider switch", () =>
   assert.deepEqual(normalizeAgentOptions("codex", {}), { sandbox: "workspace-write", approval: "on-request" });
   // The kimi mode default is an empty string and therefore not written.
   assert.deepEqual(normalizeAgentOptions("kimi", {}), {});
-});
-
-test("providerReferences reports the agents that use a provider", () => {
-  const draft = createDraft(sampleConfig());
-  assert.deepEqual(providerReferences(draft, "codex"), { agents: ["main"] });
-  assert.deepEqual(providerReferences(draft, "kimi"), { agents: ["backup"] });
-  assert.deepEqual(providerReferences(draft, "missing"), { agents: [] });
 });
 
 test("validateDraft returns no errors for a valid config", () => {

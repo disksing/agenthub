@@ -15,7 +15,7 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
   - Pi JSONL RPC，包括 Kimi K3 与 Grok 等模型
 - Session 创建、聊天、steer、interrupt、stop、resume、archive 和 approval。
 - daemon 重启后按需恢复 provider 原生 session/thread。
-- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及用于管理 provider 和 agent 的结构化设置界面。
+- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及包含四个内置 Provider 开关和结构化 Agent 表单的设置界面。
 - CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
 - 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
 
@@ -123,7 +123,9 @@ $HOME/.agenthub/config.json
 
 Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provider 并保存具体启动参数。每个 Session 都用显式 Agent ID 创建（`POST /v1/sessions` 要求 `agentId`，CLI 要求 `--agent`）；未知、缺失或 Provider 被禁用的 Agent 会直接返回明确错误，不会被路由到其他 Agent。
 
-推荐使用 Web UI 的 **Settings** 界面编辑配置：它为 provider 和 agent 提供结构化、带校验的表单，并展示 provider 命令可用性探测结果。所有修改都通过 daemon API（`PUT /v1/config`）提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
+推荐使用 Web UI 的 **Settings** 界面管理配置。**Providers** 区块刻意保持极简：只有四个开关用于启用或停用内置 Provider（Codex、Kimi、Grok/Pi、OpenCode），不提供 Provider 增删，也不提供命令、参数、环境变量或其他高级字段的编辑。开关只通过 `PUT /v1/config/providers/{id}` 翻转 `enabled` 标志，底层配置在停用/重新启用后完整保留；旧配置中缺失的内置 Provider 会在首次启用时由 daemon 以规范默认值创建。**Agents** 区块保留结构化、带校验的表单，Provider 命令可用性探测会区分“已启用”与“CLI 可用”。所有修改都通过 daemon API 提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
+
+Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` 中 `available: false` 并附原因），不会出现在新建 Session 的选择中；即使绕过 Web UI 直接调用 API，daemon 也会拒绝用这些 Agent 创建或恢复 Session。停用不会中断已经在运行的 Session，既有 Session 历史仍可查看。
 
 ### 旧配置迁移
 

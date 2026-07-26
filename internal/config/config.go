@@ -158,16 +158,76 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// BuiltinProviders returns the canonical definitions of the four built-in
+// providers in display order. The Web settings UI exposes exactly these as
+// enable/disable switches; other providers remain manageable only through
+// the config file.
+func BuiltinProviders() []Provider {
+	return []Provider{
+		{ID: "codex", Name: "Codex app-server", Type: "codex"},
+		{ID: "kimi", Name: "Kimi Code", Type: "kimi"},
+		{ID: "pi", Name: "Pi Coding Agent", Type: "pi"},
+		{ID: "opencode", Name: "OpenCode", Type: "opencode"},
+	}
+}
+
+// BuiltinProvider returns the canonical definition of a built-in provider.
+func BuiltinProvider(id string) (Provider, bool) {
+	for _, provider := range BuiltinProviders() {
+		if provider.ID == id {
+			return provider, true
+		}
+	}
+	return Provider{}, false
+}
+
+// SetProviderEnabled returns a copy of the config with the enabled flag of a
+// built-in provider flipped. Only the flag changes: an existing provider keeps
+// its name, type, command and position, so disabling and re-enabling never
+// loses the underlying configuration. When the provider is absent from an old
+// config, the canonical built-in default is appended. Unknown provider IDs are
+// rejected; the input config is never mutated.
+func (c Config) SetProviderEnabled(id string, enabled bool) (Config, Provider, error) {
+	if _, ok := BuiltinProvider(id); !ok {
+		return Config{}, Provider{}, fmt.Errorf("unknown built-in provider %q", id)
+	}
+	next := Config{
+		Version:        c.Version,
+		AgentProviders: make([]Provider, len(c.AgentProviders)),
+		Agents:         make([]Agent, len(c.Agents)),
+	}
+	copy(next.AgentProviders, c.AgentProviders)
+	for i, agent := range c.Agents {
+		if agent.Options != nil {
+			options := make(map[string]string, len(agent.Options))
+			for key, value := range agent.Options {
+				options[key] = value
+			}
+			agent.Options = options
+		}
+		next.Agents[i] = agent
+	}
+	for i := range next.AgentProviders {
+		if next.AgentProviders[i].ID == id {
+			next.AgentProviders[i].Enabled = enabled
+			return next, next.AgentProviders[i], nil
+		}
+	}
+	provider, _ := BuiltinProvider(id)
+	provider.Enabled = enabled
+	next.AgentProviders = append(next.AgentProviders, provider)
+	return next, provider, nil
+}
+
 func Defaults() Config {
+	providers := BuiltinProviders()
+	for i := range providers {
+		providers[i].Enabled = true
+	}
 	return Config{
-		Version: 1,
-		AgentProviders: []Provider{
-			{ID: "codex", Name: "Codex app-server", Type: "codex", Enabled: true},
-			{ID: "opencode", Name: "OpenCode", Type: "opencode", Enabled: true},
-			{ID: "kimi", Name: "Kimi Code", Type: "kimi", Enabled: true},
-			{ID: "pi", Name: "Pi Coding Agent", Type: "pi", Enabled: true},
-		},
-		Agents: []Agent{{ID: "codex-default", Name: "Codex", ProviderID: "codex", Options: map[string]string{"approval": "never", "sandbox": "danger-full-access"}}},
+		Version:        1,
+		AgentProviders: providers,
+		Agents:         []Agent{{ID: "codex-default", Name: "Codex", ProviderID: "codex", Options: map[string]string{"approval": "never", "sandbox": "danger-full-access"}}},
 	}
 }
 

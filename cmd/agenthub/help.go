@@ -187,8 +187,10 @@ Usage:
 
 Prints providers, agents and provider availability probes. Providers are
 adapters for local agent runtimes; agents are named runnable configurations
-bound to a provider. Edit them through the Web UI settings panel or the
-config file (see "agenthub help").
+bound to a provider. The Web UI settings panel enables or disables the four
+built-in providers and edits agents; anything more advanced is done in the
+config file (see "agenthub help"). Agents of a disabled provider are reported
+as unavailable and cannot create sessions.
 
 See also: agenthub help run, agenthub help session create
 `,

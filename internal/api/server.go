@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disksing/agenthub/internal/config"
@@ -27,6 +28,9 @@ type Server struct {
 	config    string
 	webDir    string
 	listen    *ListenAddress
+	// configMu serializes config mutations so a whole-config PUT and a
+	// single-provider toggle cannot interleave and lose each other's changes.
+	configMu sync.Mutex
 }
 
 type Dependencies struct {
@@ -55,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("GET /v1/config", s.getConfig)
 	mux.HandleFunc("PUT /v1/config", s.putConfig)
+	mux.HandleFunc("PUT /v1/config/providers/{id}", s.putProviderEnabled)
 	mux.HandleFunc("GET /v1/agents", s.agents)
 	mux.HandleFunc("GET /v1/sessions", s.listSessions)
 	mux.HandleFunc("POST /v1/sessions", s.createSession)
@@ -127,6 +132,8 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	if err := config.Save(s.config, body.Config); err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_config", err.Error(), nil)
 		return
@@ -135,15 +142,80 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"config": body.Config})
 }
 
+// putProviderEnabled flips the enabled flag of one built-in provider without
+// touching the rest of the configuration. It is the minimal contract behind
+// the four switches of the Web settings UI: clients never have to rebuild or
+// resubmit the whole provider structure, and the provider's command and other
+// fields survive a disable/enable cycle. A built-in provider missing from an
+// old config is created with its canonical defaults.
+func (s *Server) putProviderEnabled(w http.ResponseWriter, r *http.Request) {
+	if s.runtime == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	if body.Enabled == nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "enabled is required", nil)
+		return
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	next, provider, err := s.runtime.Config().SetProviderEnabled(r.PathValue("id"), *body.Enabled)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "unknown_provider", err.Error(), nil)
+		return
+	}
+	if err := config.Save(s.config, next); err != nil {
+		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_config", err.Error(), nil)
+		return
+	}
+	_ = s.runtime.SetConfig(next)
+	writeJSON(w, http.StatusOK, map[string]any{"provider": provider})
+}
+
+// agentStatus extends an agent with its effective availability. An agent is
+// unavailable when its provider is disabled or missing; the Web UI hides such
+// agents from the new-session choices and the daemon rejects attempts to use
+// them anyway.
+type agentStatus struct {
+	config.Agent
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailableReason,omitempty"`
+}
+
 func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
 	}
 	cfg := s.runtime.Config()
+	providers := make(map[string]config.Provider, len(cfg.AgentProviders))
+	for _, provider := range cfg.AgentProviders {
+		providers[provider.ID] = provider
+	}
+	agents := make([]agentStatus, 0, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		status := agentStatus{Agent: agent, Available: true}
+		provider, ok := providers[agent.ProviderID]
+		switch {
+		case !ok:
+			status.Available = false
+			status.UnavailableReason = fmt.Sprintf("provider %q is not configured", agent.ProviderID)
+		case !provider.Enabled:
+			status.Available = false
+			status.UnavailableReason = fmt.Sprintf("provider %q is disabled", agent.ProviderID)
+		}
+		agents = append(agents, status)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers": cfg.AgentProviders,
-		"agents":    cfg.Agents,
+		"agents":    agents,
 		"probes":    cfg.Probes(),
 	})
 }

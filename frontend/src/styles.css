@@ -529,6 +529,53 @@ select {
   accent-color: var(--teal);
 }
 
+.provider-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px 4px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: #5a6263;
+  background: #f0f2f1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.provider-toggle-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #b9c2c0;
+}
+
+.provider-toggle.on {
+  border-color: #9ccfc2;
+  color: #0b6e5f;
+  background: #e3f4ef;
+}
+
+.provider-toggle.on .provider-toggle-thumb {
+  background: var(--teal);
+}
+
+.provider-toggle:hover:not(:disabled) {
+  border-color: #9cbdb9;
+}
+
+.provider-toggle:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.provider-toggle:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
 .settings-add-card {
   display: flex;
   align-items: center;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Warning, X } from "@phosphor-icons/react";
 import { api } from "../api";
 import { buildPayload, createDraft, isDirty, normalizeConfig, validateDraft } from "./configModel";
+import { applyProviderToggle, requestProviderToggle } from "./providerSwitches";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { AgentsPanel } from "./AgentsPanel";
 
@@ -28,6 +29,10 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
   const [saveError, setSaveError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
+  // Provider switches persist immediately (not through the draft/save-all
+  // flow): pendingProviderId serializes toggles and prevents double submits.
+  const [pendingProviderId, setPendingProviderId] = useState(null);
+  const [providerToggleError, setProviderToggleError] = useState("");
   const dialogRef = useRef(null);
   const savedTimer = useRef(null);
 
@@ -89,6 +94,37 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
       return next;
     });
   }, []);
+
+  // toggleProvider flips one built-in provider through the minimal daemon
+  // endpoint. On success the persisted provider is merged into both the draft
+  // and the snapshot, so unsaved agent edits survive and dirty tracking stays
+  // accurate. On failure the switches are re-aligned with the true persisted
+  // state — the UI never shows a provider as enabled when it is not saved.
+  const toggleProvider = useCallback(async (id, enabled) => {
+    if (pendingProviderId || !draft) return;
+    setPendingProviderId(id);
+    setProviderToggleError("");
+    try {
+      const provider = await requestProviderToggle(api, id, enabled);
+      setDraft((current) => applyProviderToggle(current, provider));
+      setSnapshot((current) => applyProviderToggle(current, provider));
+      const agentsBody = await api("/v1/agents");
+      setProbes(agentsBody.probes || []);
+      onSaved?.();
+    } catch (value) {
+      setProviderToggleError(value.message || "Failed to update the provider");
+      try {
+        const configBody = await api("/v1/config");
+        const fresh = createDraft(configBody.config || {});
+        setDraft((current) => ({ ...current, agentProviders: fresh.agentProviders }));
+        setSnapshot((current) => ({ ...current, agentProviders: fresh.agentProviders }));
+      } catch {
+        // Keep the last known state when the reload also fails.
+      }
+    } finally {
+      setPendingProviderId(null);
+    }
+  }, [pendingProviderId, draft, onSaved]);
 
   const save = async (force = false) => {
     if (saving || !draft) return;
@@ -183,7 +219,13 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
             <div className="settings-content">
               <div className="settings-panel">
                 {section === "providers" ? (
-                  <ProvidersPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} />
+                  <ProvidersPanel
+                    config={draft}
+                    probes={probes}
+                    pendingId={pendingProviderId}
+                    toggleError={providerToggleError}
+                    onToggle={toggleProvider}
+                  />
                 ) : null}
                 {section === "agents" ? (
                   <AgentsPanel draft={draft} probes={probes} errors={errors} showErrors={showErrors} mutate={mutate} />
