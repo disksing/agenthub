@@ -40,29 +40,57 @@ func freePort(t *testing.T) string {
 
 func writeLegacySession(t *testing.T, dir, id string) {
 	t.Helper()
+	writeLegacySessionEvents(t, dir, id, false)
+}
+
+// writeLegacySessionEvents creates a session directory the real session
+// store can open. With provider=true a session.provider event records a
+// provider-native thread id, the mapping resume depends on.
+func writeLegacySessionEvents(t *testing.T, dir, id string, provider bool) {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	event := map[string]any{
-		"id":        1,
-		"time":      time.Now().UTC(),
-		"type":      "session.created",
-		"sessionId": id,
-		"data": map[string]any{
-			"id":        id,
-			"title":     "legacy " + id,
-			"cwd":       t.TempDir(),
-			"agentName": "Codex",
-			"state":     "ready",
-			"createdAt": time.Now().UTC(),
-			"updatedAt": time.Now().UTC(),
+	now := time.Now().UTC()
+	events := []map[string]any{
+		{
+			"id":        1,
+			"time":      now,
+			"type":      "session.created",
+			"sessionId": id,
+			"data": map[string]any{
+				"id":        id,
+				"title":     "legacy " + id,
+				"cwd":       t.TempDir(),
+				"agentName": "Codex",
+				"state":     "ready",
+				"createdAt": now,
+				"updatedAt": now,
+			},
 		},
 	}
-	data, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
+	if provider {
+		events = append(events, map[string]any{
+			"id":        2,
+			"time":      now,
+			"type":      "session.provider",
+			"sessionId": id,
+			"data": map[string]any{
+				"agentName":         "Codex",
+				"provider":          "codex",
+				"providerSessionId": "thread-legacy-42",
+			},
+		})
 	}
-	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), append(data, '\n'), 0o600); err != nil {
+	var data []byte
+	for _, event := range events {
+		line, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, append(line, '\n')...)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -72,8 +100,8 @@ func legacyHome(t *testing.T, active, archived []string) string {
 	t.Helper()
 	home := t.TempDir()
 	dataDir := filepath.Join(home, "Library", "Application Support", "agenthub")
-	for _, id := range active {
-		writeLegacySession(t, filepath.Join(dataDir, "sessions", id), id)
+	for i, id := range active {
+		writeLegacySessionEvents(t, filepath.Join(dataDir, "sessions", id), id, i == 0)
 	}
 	for _, id := range archived {
 		writeLegacySession(t, filepath.Join(dataDir, "sessions", "Archive", id), id)
@@ -190,8 +218,33 @@ func TestServeMigratesLegacyLayoutIntoDotAgentHub(t *testing.T) {
 		t.Fatalf("archived sessions = %+v", archived)
 	}
 	events := get("/v1/sessions/ses_aaa111/events")["events"].([]any)
-	if len(events) != 1 || events[0].(map[string]any)["type"] != "session.created" {
+	if len(events) != 2 || events[0].(map[string]any)["type"] != "session.created" {
 		t.Fatalf("events = %+v", events)
+	}
+	// The provider-native thread mapping survived the migration, so the
+	// session stays resumable.
+	detail := get("/v1/sessions/ses_aaa111")
+	sessionBody, _ := detail["session"].(map[string]any)
+	if sessionBody["providerSessionId"] != "thread-legacy-42" || sessionBody["provider"] != "codex" {
+		t.Fatalf("provider mapping lost: %+v", sessionBody)
+	}
+	// Archiving a migrated session works and keeps it readable.
+	request, _ := http.NewRequest(http.MethodDelete, "http://"+addr+"/v1/sessions/ses_aaa111", nil)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("archive migrated session: %s", response.Status)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sessions", "Archive", "ses_aaa111", "events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	archived = get("/v1/sessions?archived=true")["sessions"].([]any)
+	if len(archived) != 2 {
+		t.Fatalf("archived after archiving = %+v", archived)
 	}
 
 	// The legacy store is gone, the service log moved, and the journal
