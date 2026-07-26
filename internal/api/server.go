@@ -1106,6 +1106,16 @@ func writeSSEBounded(w http.ResponseWriter, write func() error) error {
 		// handler a second time on the same non-reading socket.
 		_ = controller.SetWriteDeadline(time.Time{})
 	}
+	if err != nil && deadlineSet {
+		// A timed-out HTTP/1 write can leave a partially buffered SSE frame
+		// attached to a connection even after the handler returns. AgentHub
+		// serves plaintext HTTP, so explicitly take ownership and close the
+		// connection when possible; the client then observes a prompt EOF and
+		// can reconnect instead of waiting on a permanently truncated frame.
+		if connection, _, hijackErr := controller.Hijack(); hijackErr == nil {
+			_ = connection.Close()
+		}
+	}
 	return err
 }
 
