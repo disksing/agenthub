@@ -27,8 +27,14 @@ jobs:
             packages: ./internal/runtime ./internal/session
           - name: provider
             packages: ./internal/provider
-          - name: remaining
-            packages: ./cmd/... ./internal/client ./internal/config ./internal/daemon ./internal/integrationtest/... ./internal/migrate ./internal/paths
+          - name: command
+            packages: ./cmd/...
+          - name: client-config
+            packages: ./internal/client ./internal/config
+          - name: migrate-paths
+            packages: ./internal/migrate ./internal/paths
+          - name: support
+            packages: ./internal/daemon ./internal/integrationtest/...
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
