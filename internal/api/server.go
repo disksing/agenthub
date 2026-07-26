@@ -77,22 +77,62 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 	return server
 }
 
-func (s *Server) Handler() http.Handler {
+// apiRoute binds a mux pattern to a handler. doc is the canonical
+// "METHOD /path" label of a documented public API route; routes with an
+// empty doc are internal (health probe, the session sub-route dispatcher,
+// the docs page itself) and must not be listed in api.md. The table
+// returned by routes() is the canonical route inventory, so the coverage
+// test in docs_test.go can prove api.md documents exactly the public API.
+type apiRoute struct {
+	pattern string
+	handler http.HandlerFunc
+	doc     string
+}
+
+func (s *Server) routes() []apiRoute {
+	return []apiRoute{
+		{"GET /v1/health", s.health, ""},
+		{"GET /v1/status", s.status, "GET /v1/status"},
+		{"GET /v1/config", s.getConfig, "GET /v1/config"},
+		{"PUT /v1/config", s.putConfig, "PUT /v1/config"},
+		{"PUT /v1/config/providers/{id}", s.putProviderEnabled, "PUT /v1/config/providers/{id}"},
+		{"GET /v1/providers/{id}/models", s.providerModels, "GET /v1/providers/{id}/models"},
+		{"GET /v1/agents", s.agents, "GET /v1/agents"},
+		{"GET /v1/sessions", s.listSessions, "GET /v1/sessions"},
+		{"POST /v1/sessions", s.createSession, "POST /v1/sessions"},
+		{"/v1/sessions/", s.sessionRoute, ""}, // sub-routes dispatch through sessionOps()
+		{"GET /api.md", s.apiDocs, ""},
+	}
+}
+
+// publicAPILabels returns the canonical "METHOD /path" labels of every
+// documented public API route, top-level and under /v1/sessions/{id}.
+func (s *Server) publicAPILabels() []string {
+	labels := make([]string, 0, len(s.routes())+len(s.sessionOps()))
+	for _, route := range s.routes() {
+		if route.doc != "" {
+			labels = append(labels, route.doc)
+		}
+	}
+	for _, op := range s.sessionOps() {
+		labels = append(labels, op.doc)
+	}
+	return labels
+}
+
+func (s *Server) mux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/health", s.health)
-	mux.HandleFunc("GET /v1/status", s.status)
-	mux.HandleFunc("GET /v1/config", s.getConfig)
-	mux.HandleFunc("PUT /v1/config", s.putConfig)
-	mux.HandleFunc("PUT /v1/config/providers/{id}", s.putProviderEnabled)
-	mux.HandleFunc("GET /v1/providers/{id}/models", s.providerModels)
-	mux.HandleFunc("GET /v1/agents", s.agents)
-	mux.HandleFunc("GET /v1/sessions", s.listSessions)
-	mux.HandleFunc("POST /v1/sessions", s.createSession)
-	mux.HandleFunc("/v1/sessions/", s.sessionRoute)
+	for _, route := range s.routes() {
+		mux.HandleFunc(route.pattern, route.handler)
+	}
 	if s.webDir != "" {
 		mux.Handle("/", spaHandler(s.webDir))
 	}
-	var handler http.Handler = requestMiddleware(mux)
+	return mux
+}
+
+func (s *Server) Handler() http.Handler {
+	var handler http.Handler = requestMiddleware(s.mux())
 	if s.listen != nil {
 		handler = hostGuardMiddleware(s.listen, handler)
 	}
@@ -401,14 +441,14 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title    string `json:"title"`
-		Cwd      string `json:"cwd"`
+		Title     string `json:"title"`
+		Cwd       string `json:"cwd"`
 		AgentName string `json:"agentName"`
 		// AgentID is the removed reference form. It is still accepted for one
 		// compatibility window: the daemon resolves it through the id → name
 		// mapping recorded when the legacy configuration was migrated, and
 		// rejects ids it cannot map. New clients must use agentName.
-		AgentID  string `json:"agentId"`
+		AgentID        string `json:"agentId"`
 		InitialMessage *struct {
 			Text string `json:"text"`
 		} `json:"initialMessage"`
@@ -487,46 +527,69 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"session": value})
 }
 
+// sessionOp is one operation under /v1/sessions/{id}. suffix is the fixed
+// path after the session id ("" for the bare session, "approvals/{approvalId}"
+// for the one nested operation); doc is the canonical label listed in
+// api.md. sessionRoute dispatches through this table, so adding, renaming
+// or dropping a session operation here is what the documentation coverage
+// test compares api.md against.
+type sessionOp struct {
+	method  string
+	suffix  string
+	handler func(http.ResponseWriter, *http.Request, string)
+	doc     string
+}
+
+func (s *Server) sessionOps() []sessionOp {
+	return []sessionOp{
+		{http.MethodGet, "", s.getSession, "GET /v1/sessions/{id}"},
+		{http.MethodDelete, "", s.archiveSession, "DELETE /v1/sessions/{id}"},
+		{http.MethodGet, "events", s.events, "GET /v1/sessions/{id}/events"},
+		{http.MethodPost, "messages", s.sendMessage, "POST /v1/sessions/{id}/messages"},
+		{http.MethodPost, "resume", s.resumeSession, "POST /v1/sessions/{id}/resume"},
+		{http.MethodPost, "interrupt", s.interruptSession, "POST /v1/sessions/{id}/interrupt"},
+		{http.MethodPost, "stop", s.stopSession, "POST /v1/sessions/{id}/stop"},
+		{http.MethodPost, "approvals/{approvalId}", s.resolveApproval, "POST /v1/sessions/{id}/approvals/{approvalId}"},
+	}
+}
+
 func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/")
 	parts := strings.Split(path, "/")
-	if len(parts) == 0 || parts[0] == "" {
+	if parts[0] == "" {
 		http.NotFound(w, r)
 		return
 	}
-	id := parts[0]
-	if len(parts) == 1 {
-		switch r.Method {
-		case http.MethodGet:
-			s.getSession(w, id)
-		case http.MethodDelete:
-			s.archiveSession(w, id)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
+	id, tail := parts[0], parts[1:]
+	for _, op := range s.sessionOps() {
+		if r.Method != op.method {
+			continue
 		}
-		return
-	}
-	if len(parts) == 2 && parts[1] == "events" && r.Method == http.MethodGet {
-		s.events(w, r, id)
-		return
-	}
-	if len(parts) == 2 && r.Method == http.MethodPost {
-		switch parts[1] {
-		case "messages":
-			s.sendMessage(w, r, id)
-		case "resume":
-			s.resumeSession(w, id)
-		case "interrupt":
-			s.interruptSession(w, id)
-		case "stop":
-			s.stopSession(w, id)
-		default:
-			http.NotFound(w, r)
+		var suffix []string
+		if op.suffix != "" {
+			suffix = strings.Split(op.suffix, "/")
 		}
-		return
+		if len(suffix) != len(tail) {
+			continue
+		}
+		match := true
+		for i, segment := range suffix {
+			if strings.HasPrefix(segment, "{") {
+				r.SetPathValue(strings.Trim(segment, "{}"), tail[i])
+				continue
+			}
+			if segment != tail[i] {
+				match = false
+			}
+		}
+		if match {
+			op.handler(w, r, id)
+			return
+		}
 	}
-	if len(parts) == 3 && parts[1] == "approvals" && r.Method == http.MethodPost {
-		s.resolveApproval(w, r, id, parts[2])
+	if len(tail) == 0 {
+		// The session exists as an addressable resource; the method is not.
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	http.NotFound(w, r)
@@ -556,7 +619,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 	writeJSON(w, http.StatusAccepted, map[string]any{"session": value})
 }
 
-func (s *Server) resumeSession(w http.ResponseWriter, id string) {
+func (s *Server) resumeSession(w http.ResponseWriter, _ *http.Request, id string) {
 	if s.rejectArchivedSession(w, id) {
 		return
 	}
@@ -572,7 +635,7 @@ func (s *Server) resumeSession(w http.ResponseWriter, id string) {
 	writeJSON(w, http.StatusOK, map[string]any{"session": value})
 }
 
-func (s *Server) interruptSession(w http.ResponseWriter, id string) {
+func (s *Server) interruptSession(w http.ResponseWriter, _ *http.Request, id string) {
 	if s.rejectArchivedSession(w, id) {
 		return
 	}
@@ -588,7 +651,7 @@ func (s *Server) interruptSession(w http.ResponseWriter, id string) {
 	writeJSON(w, http.StatusOK, map[string]any{"session": value})
 }
 
-func (s *Server) stopSession(w http.ResponseWriter, id string) {
+func (s *Server) stopSession(w http.ResponseWriter, _ *http.Request, id string) {
 	if s.rejectArchivedSession(w, id) {
 		return
 	}
@@ -604,7 +667,8 @@ func (s *Server) stopSession(w http.ResponseWriter, id string) {
 	writeJSON(w, http.StatusOK, map[string]any{"session": value})
 }
 
-func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, id, approvalID string) {
+func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, id string) {
+	approvalID := r.PathValue("approvalId")
 	if s.rejectArchivedSession(w, id) {
 		return
 	}
@@ -639,7 +703,7 @@ func (s *Server) writeRuntimeError(w http.ResponseWriter, err error) {
 	writeAPIError(w, http.StatusConflict, "runtime_operation_failed", err.Error(), nil)
 }
 
-func (s *Server) getSession(w http.ResponseWriter, id string) {
+func (s *Server) getSession(w http.ResponseWriter, _ *http.Request, id string) {
 	value, err := s.store.Get(id)
 	if err != nil {
 		s.writeStoreError(w, err)
@@ -648,7 +712,7 @@ func (s *Server) getSession(w http.ResponseWriter, id string) {
 	writeJSON(w, http.StatusOK, map[string]any{"session": value})
 }
 
-func (s *Server) archiveSession(w http.ResponseWriter, id string) {
+func (s *Server) archiveSession(w http.ResponseWriter, _ *http.Request, id string) {
 	if _, err := s.store.Get(id); err != nil {
 		s.writeStoreError(w, err)
 		return

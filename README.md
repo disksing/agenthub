@@ -161,6 +161,16 @@ Command discovery order: the provider's `command`, `AGENTHUB_*_CLI`, then `PATH`
 
 ## API
 
+The daemon serves a complete Markdown API reference at **`GET /api.md`**
+(`text/markdown; charset=utf-8`): every public endpoint with parameters,
+request and response bodies, error codes, curl examples and the SSE event
+contract. It is embedded in the binary, needs no frontend build, and is kept
+in sync with the registered routes by automated tests. Fetch it with:
+
+```bash
+curl -s http://127.0.0.1:4646/api.md
+```
+
 Main endpoints:
 
 ```text

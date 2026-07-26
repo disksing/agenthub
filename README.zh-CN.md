@@ -158,6 +158,12 @@ Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` �
 
 ## API
 
+daemon 在 **`GET /api.md`** 提供完整的 Markdown API 参考（`text/markdown; charset=utf-8`）：覆盖全部公共端点的参数、请求与响应体、错误码、curl 示例和 SSE 事件约定。文档内嵌在二进制中，无需前端构建即可访问，并由自动化测试保证与真实注册路由同步。获取方式：
+
+```bash
+curl -s http://127.0.0.1:4646/api.md
+```
+
 主要端点：
 
 ```text
