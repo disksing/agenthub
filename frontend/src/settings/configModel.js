@@ -27,6 +27,19 @@ export const MODE_OPTIONS = [
   { value: "plan", label: "Plan" },
 ];
 
+// Reasoning effort values are advertised per model by the Codex app-server
+// (model/list); this list covers the values current models advertise. The
+// daemon re-validates against the selected model when a session starts.
+export const REASONING_EFFORT_OPTIONS = [
+  { value: "", label: "Provider default" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" },
+  { value: "max", label: "Max" },
+  { value: "ultra", label: "Ultra" },
+];
+
 const MODEL_FIELD = { key: "model", kind: "text", label: "Model", placeholder: "Leave empty to use the provider default model" };
 
 // providerOptionSchema returns the form description of the Agent options a
@@ -38,6 +51,7 @@ export function providerOptionSchema(type) {
         MODEL_FIELD,
         { key: "sandbox", kind: "enum", label: "Sandbox", options: SANDBOX_OPTIONS, fallback: "workspace-write" },
         { key: "approval", kind: "enum", label: "Approval policy", options: APPROVAL_OPTIONS, fallback: "on-request" },
+        { key: "reasoning_effort", kind: "enum", label: "Reasoning effort", options: REASONING_EFFORT_OPTIONS, fallback: "" },
       ];
     case "kimi":
     case "opencode":

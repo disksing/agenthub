@@ -35,6 +35,12 @@ func (c *codexSession) Start(resumeID string) error {
 		return err
 	}
 	_ = c.rpc.send("initialized", map[string]any{})
+	effort := option(c.options.Agent, "reasoning_effort", "")
+	if effort != "" {
+		if err := c.validateReasoningEffort(effort); err != nil {
+			return err
+		}
+	}
 	method := "thread/start"
 	params := map[string]any{
 		"cwd": c.options.Cwd, "sandbox": option(c.options.Agent, "sandbox", "danger-full-access"),
@@ -43,6 +49,9 @@ func (c *codexSession) Start(resumeID string) error {
 	if model := option(c.options.Agent, "model", ""); model != "" {
 		params["model"] = model
 	}
+	if effort != "" {
+		params["config"] = map[string]any{"model_reasoning_effort": effort}
+	}
 	if resumeID != "" {
 		method = "thread/resume"
 		params["threadId"] = resumeID
@@ -50,6 +59,11 @@ func (c *codexSession) Start(resumeID string) error {
 	result, err := c.rpc.request(method, params)
 	if err != nil {
 		return err
+	}
+	if effort != "" {
+		if err := checkReasoningEffortEcho(result, effort); err != nil {
+			return err
+		}
 	}
 	c.thread = lookup(result, "thread", "id")
 	if c.thread == "" {
@@ -112,6 +126,90 @@ func (c *codexSession) Approve(id, decision string) error {
 }
 
 func (c *codexSession) Close() error { return c.rpc.close() }
+
+// codexModel is the subset of the app-server model/list response AgentHub
+// needs to validate the reasoning_effort agent option.
+type codexModel struct {
+	id        string
+	isDefault bool
+	efforts   []string
+}
+
+// validateReasoningEffort checks the configured effort against the values the
+// target model advertises via model/list. The app-server silently accepts
+// unknown effort values, so AgentHub validates before starting the thread.
+// When the model catalog is unavailable or the target model is not listed,
+// the value is passed through untouched.
+func (c *codexSession) validateReasoningEffort(effort string) error {
+	raw, err := c.rpc.request("model/list", map[string]any{})
+	if err != nil {
+		c.rpc.emit("provider.warning", map[string]any{"message": "model/list unavailable, skipping reasoning_effort validation", "error": err.Error()})
+		return nil
+	}
+	return checkReasoningEffort(effort, option(c.options.Agent, "model", ""), parseCodexModels(raw))
+}
+
+func parseCodexModels(raw json.RawMessage) []codexModel {
+	var payload struct {
+		Data []struct {
+			ID        string `json:"id"`
+			IsDefault bool   `json:"isDefault"`
+			Efforts   []struct {
+				Effort string `json:"reasoningEffort"`
+			} `json:"supportedReasoningEfforts"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil
+	}
+	models := make([]codexModel, 0, len(payload.Data))
+	for _, entry := range payload.Data {
+		model := codexModel{id: entry.ID, isDefault: entry.IsDefault}
+		for _, value := range entry.Efforts {
+			model.efforts = append(model.efforts, value.Effort)
+		}
+		models = append(models, model)
+	}
+	return models
+}
+
+// checkReasoningEffort validates effort against the requested model (or the
+// server default model when none is requested). Unknown targets pass through.
+func checkReasoningEffort(effort, requestedModel string, models []codexModel) error {
+	var target *codexModel
+	for index := range models {
+		if requestedModel != "" && models[index].id == requestedModel {
+			target = &models[index]
+			break
+		}
+		if requestedModel == "" && models[index].isDefault {
+			target = &models[index]
+			break
+		}
+	}
+	if target == nil || len(target.efforts) == 0 {
+		return nil
+	}
+	for _, supported := range target.efforts {
+		if supported == effort {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid reasoning_effort %q for model %q (supported: %s)", effort, target.id, strings.Join(target.efforts, ", "))
+}
+
+// checkReasoningEffortEcho compares the reasoningEffort echoed by
+// thread/start or thread/resume with the requested value.
+func checkReasoningEffortEcho(result json.RawMessage, effort string) error {
+	echo := lookup(result, "reasoningEffort")
+	if echo == "" {
+		return nil
+	}
+	if echo != effort {
+		return fmt.Errorf("Codex applied reasoning effort %q instead of requested %q", echo, effort)
+	}
+	return nil
+}
 
 func (c *codexSession) inbound(id json.RawMessage, method string, params json.RawMessage) {
 	switch method {
