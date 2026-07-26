@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	goruntime "runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,12 +43,13 @@ type Session interface {
 }
 
 type Options struct {
-	ID       string
-	Cwd      string
-	Title    string
-	Agent    config.Agent
-	Provider config.Provider
-	Hooks    Hooks
+	ID          string
+	Cwd         string
+	Title       string
+	Agent       config.Agent
+	Provider    config.Provider
+	Environment map[string]string
+	Hooks       Hooks
 }
 
 func New(options Options) (Session, error) {
@@ -109,12 +112,13 @@ func startRequestError(providerName, method string, err error) error {
 }
 
 type jsonRPC struct {
-	command string
-	args    []string
-	cwd     string
-	hooks   Hooks
-	inbound func(id json.RawMessage, method string, params json.RawMessage)
-	notify  func(method string, params json.RawMessage)
+	command     string
+	args        []string
+	cwd         string
+	environment map[string]string
+	hooks       Hooks
+	inbound     func(id json.RawMessage, method string, params json.RawMessage)
+	notify      func(method string, params json.RawMessage)
 
 	mu      sync.Mutex
 	writeMu sync.Mutex
@@ -132,8 +136,8 @@ type pendingRequest struct {
 	params json.RawMessage
 }
 
-func newJSONRPC(command string, args []string, cwd string, hooks Hooks) *jsonRPC {
-	return &jsonRPC{command: command, args: args, cwd: cwd, hooks: hooks, nextID: 1, waiting: make(map[string]chan rpcResult), pending: make(map[string]pendingRequest)}
+func newJSONRPC(command string, args []string, cwd string, environment map[string]string, hooks Hooks) *jsonRPC {
+	return &jsonRPC{command: command, args: args, cwd: cwd, environment: environment, hooks: hooks, nextID: 1, waiting: make(map[string]chan rpcResult), pending: make(map[string]pendingRequest)}
 }
 
 func (r *jsonRPC) start() error {
@@ -144,6 +148,7 @@ func (r *jsonRPC) start() error {
 	}
 	cmd := exec.Command(r.command, r.args...)
 	cmd.Dir = r.cwd
+	cmd.Env = processEnvironment(r.environment)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -173,6 +178,39 @@ func (r *jsonRPC) start() error {
 		r.finish(err)
 	}()
 	return nil
+}
+
+// processEnvironment merges per-session overrides onto the daemon's
+// environment. exec.Cmd does not merge Env itself, so the complete inherited
+// environment must be supplied while ensuring a session value wins when the
+// daemon defines the same key.
+func processEnvironment(overrides map[string]string) []string {
+	base := os.Environ()
+	if len(overrides) == 0 {
+		return base
+	}
+	result := append([]string(nil), base...)
+	index := make(map[string]int, len(base))
+	for position, entry := range result {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			index[key] = position
+		}
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		entry := key + "=" + overrides[key]
+		if position, ok := index[key]; ok {
+			result[position] = entry
+			continue
+		}
+		index[key] = len(result)
+		result = append(result, entry)
+	}
+	return result
 }
 
 func (r *jsonRPC) request(method string, params any) (json.RawMessage, error) {

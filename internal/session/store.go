@@ -188,6 +188,9 @@ func (s *Store) archiveRoot() string {
 }
 
 func (s *Store) Create(input CreateInput) (Session, error) {
+	if err := ValidateLaunchEnvironment(input.LaunchEnvironment); err != nil {
+		return Session{}, err
+	}
 	now := time.Now().UTC()
 	id, err := NewID("ses")
 	if err != nil {
@@ -197,13 +200,15 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 		input.Title = "New Session"
 	}
 	value := Session{
-		ID:        id,
-		Title:     input.Title,
-		Cwd:       input.Cwd,
-		AgentName: input.AgentName,
-		State:     StateReady,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                id,
+		Title:             input.Title,
+		Cwd:               input.Cwd,
+		AgentName:         input.AgentName,
+		Source:            cloneSource(input.Source),
+		LaunchEnvironment: cloneEnvironment(input.LaunchEnvironment),
+		State:             StateReady,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	state := &sessionState{session: value}
 	dir := s.sessionDir(id)
@@ -240,6 +245,21 @@ func (s *Store) Get(id string) (Session, error) {
 }
 
 func (s *Store) List(includeArchived bool) []Session {
+	return s.Filter(ListFilter{IncludeArchived: includeArchived})
+}
+
+// ListFilter selects sessions by their caller-supplied source metadata.
+// Non-nil fields are exact matches. A session without source metadata never
+// matches a source filter, including a filter for an empty string.
+type ListFilter struct {
+	IncludeArchived  bool
+	SourceApp        *string
+	SourceInstanceID *string
+	SourceExternalID *string
+}
+
+// Filter returns matching sessions, most recently updated first.
+func (s *Store) Filter(filter ListFilter) []Session {
 	s.mu.RLock()
 	states := make([]*sessionState, 0, len(s.sessions))
 	for _, state := range s.sessions {
@@ -252,7 +272,10 @@ func (s *Store) List(includeArchived bool) []Session {
 		state.mu.Lock()
 		value := cloneSession(state.session)
 		state.mu.Unlock()
-		if !includeArchived && value.State == StateArchived {
+		if !filter.IncludeArchived && value.State == StateArchived {
+			continue
+		}
+		if !matchesSource(value.Source, filter) {
 			continue
 		}
 		values = append(values, value)
@@ -261,6 +284,18 @@ func (s *Store) List(includeArchived bool) []Session {
 		return values[i].UpdatedAt.After(values[j].UpdatedAt)
 	})
 	return values
+}
+
+func matchesSource(source *Source, filter ListFilter) bool {
+	if filter.SourceApp == nil && filter.SourceInstanceID == nil && filter.SourceExternalID == nil {
+		return true
+	}
+	if source == nil {
+		return false
+	}
+	return (filter.SourceApp == nil || source.App == *filter.SourceApp) &&
+		(filter.SourceInstanceID == nil || source.InstanceID == *filter.SourceInstanceID) &&
+		(filter.SourceExternalID == nil || source.ExternalID == *filter.SourceExternalID)
 }
 
 func (s *Store) Append(id, eventType, turnID string, data []byte) (Event, error) {
@@ -763,7 +798,28 @@ func (s *Store) eventsPath(id string) string {
 
 func cloneSession(value Session) Session {
 	value.PendingApprovalIDs = append([]string(nil), value.PendingApprovalIDs...)
+	value.Source = cloneSource(value.Source)
+	value.LaunchEnvironment = cloneEnvironment(value.LaunchEnvironment)
 	return value
+}
+
+func cloneEnvironment(value map[string]string) map[string]string {
+	if value == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(value))
+	for key, entry := range value {
+		cloned[key] = entry
+	}
+	return cloned
+}
+
+func cloneSource(value *Source) *Source {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneEvent(value Event) Event {

@@ -127,6 +127,12 @@ Renaming an agent is safe: when a config save replaces a name with exactly one o
 
 Codex agents accept the options `model`, `sandbox`, `approval`, and `reasoning_effort`. `reasoning_effort` controls the Codex reasoning ("thinking") effort: it is sent as the `model_reasoning_effort` config override on `thread/start` and `thread/resume`, and the daemon validates the value against the efforts the selected model advertises via `model/list` (for example `low`, `medium`, `high`, `xhigh`; some models add `max` and `ultra`). An unsupported value fails session creation with the list of valid values; an empty value inherits the Codex default.
 
+### Per-session launch environment
+
+`POST /v1/sessions` accepts an optional string map named `launchEnvironment`. It is merged over the daemon environment for that session's Provider process, so a session value wins when both define the same variable. Codex receives the merged process environment and each session entry as `shell_environment_policy.set.<KEY>` on both `thread/start` and `thread/resume`; ACP and Pi receive the merged process environment. The value is part of the durable `session.created` event, so it survives event replay, daemon restarts, and Provider resume without leaking into another concurrent session. Older sessions without the field continue to inherit the daemon environment unchanged.
+
+The map is deliberately persisted in the Session's `events.jsonl` and rebuildable `session.json`, and is returned by Session API responses. Do not put credentials or any other value in `launchEnvironment` that you do not want stored on disk. Session files remain private (`0600`), but that is not a substitute for secret storage.
+
 ### Model Enumeration
 
 Each built-in provider can report the models currently usable on this machine through its official interface — no provider session is created and nothing is written to provider configuration:
@@ -194,6 +200,22 @@ GET    /v1/sessions/{id}/events
 ```
 
 The events endpoint returns paginated JSON with an exclusive `after` cursor, `nextAfter`, `hasMore`, and the latest durable cursor. With `Accept: text/event-stream` or `?stream=true` it returns SSE and uses the same exclusive cursor through `Last-Event-ID`. The daemon subscribes before capturing a high-water mark, replays the entire durable backlog in pages, and then switches to live delivery; overflow closes the stream so reconnecting from the last contiguous id can recover from `events.jsonl`, including after a daemon restart. SSE frames use the default message channel (no per-type `event:` field), so unknown event envelopes are preserved.
+
+Clients may attach optional caller-defined correlation metadata when creating a session:
+
+```json
+{
+  "agentName": "Codex",
+  "cwd": "/path/to/project",
+  "source": {
+    "app": "forge",
+    "instanceId": "mac-mini",
+    "externalId": "project7.task26"
+  }
+}
+```
+
+The `source` object is persisted in `session.created`, rebuilt into `session.json` on replay, and returned by session GET/list responses. It is deliberately self-asserted metadata: AgentHub does not register applications, reserve names, authenticate values, enforce uniqueness, or isolate tenants. Any client may submit any values and duplicates are valid. `GET /v1/sessions` accepts exact, case-sensitive `sourceApp`, `sourceInstanceId`, and `sourceExternalId` filters in any combination; they also compose with `includeArchived`, `archived`, and `state`. Sessions created without source metadata remain compatible and do not match source filters. See the complete [HTTP API reference](http://127.0.0.1:4646/api.md) served by the daemon.
 
 ### Archiving Sessions
 

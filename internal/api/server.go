@@ -413,7 +413,18 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	archivedOnly := r.URL.Query().Get("archived") == "true"
 	includeArchived := archivedOnly || r.URL.Query().Get("includeArchived") == "true"
-	values := s.store.List(includeArchived)
+	query := r.URL.Query()
+	filter := session.ListFilter{IncludeArchived: includeArchived}
+	if query.Has("sourceApp") {
+		filter.SourceApp = stringPointer(query.Get("sourceApp"))
+	}
+	if query.Has("sourceInstanceId") {
+		filter.SourceInstanceID = stringPointer(query.Get("sourceInstanceId"))
+	}
+	if query.Has("sourceExternalId") {
+		filter.SourceExternalID = stringPointer(query.Get("sourceExternalId"))
+	}
+	values := s.store.Filter(filter)
 	if archivedOnly {
 		filtered := values[:0]
 		for _, value := range values {
@@ -441,15 +452,17 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title     string `json:"title"`
-		Cwd       string `json:"cwd"`
-		AgentName string `json:"agentName"`
+		Title     string          `json:"title"`
+		Cwd       string          `json:"cwd"`
+		AgentName string          `json:"agentName"`
+		Source    *session.Source `json:"source"`
 		// AgentID is the removed reference form. It is still accepted for one
 		// compatibility window: the daemon resolves it through the id → name
 		// mapping recorded when the legacy configuration was migrated, and
 		// rejects ids it cannot map. New clients must use agentName.
-		AgentID        string `json:"agentId"`
-		InitialMessage *struct {
+		AgentID           string            `json:"agentId"`
+		LaunchEnvironment map[string]string `json:"launchEnvironment"`
+		InitialMessage    *struct {
 			Text string `json:"text"`
 		} `json:"initialMessage"`
 	}
@@ -492,6 +505,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_cwd", err.Error(), nil)
 		return
 	}
+	if err := session.ValidateLaunchEnvironment(body.LaunchEnvironment); err != nil {
+		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_launch_environment", err.Error(), nil)
+		return
+	}
 	// Persist the canonical configured name, not the spelling the client
 	// sent, so the session always records the user's display form.
 	canonicalName := agentName
@@ -499,9 +516,11 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		canonicalName = agent.Name
 	}
 	value, err := s.store.Create(session.CreateInput{
-		Title:     strings.TrimSpace(body.Title),
-		Cwd:       cwd,
-		AgentName: canonicalName,
+		Title:             strings.TrimSpace(body.Title),
+		Cwd:               cwd,
+		AgentName:         canonicalName,
+		Source:            body.Source,
+		LaunchEnvironment: body.LaunchEnvironment,
 	})
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "session_create_failed", err.Error(), nil)
@@ -525,6 +544,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/v1/sessions/"+value.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{"session": value})
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 // sessionOp is one operation under /v1/sessions/{id}. suffix is the fixed

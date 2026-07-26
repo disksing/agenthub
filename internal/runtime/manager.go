@@ -241,6 +241,7 @@ func (m *Manager) ensure(id string) (*active, error) {
 	run := &active{turnID: value.CurrentTurnID, ready: make(chan struct{})}
 	adapter, err := m.factory(provider.Options{
 		ID: id, Cwd: value.Cwd, Title: value.Title, Agent: agent, Provider: providerConfig,
+		Environment: cloneEnvironment(value.LaunchEnvironment),
 		Hooks: provider.Hooks{
 			NativeID: func(nativeID string) {
 				_, _ = m.store.Append(id, "session.provider", "", marshal(session.ProviderEventData{
@@ -338,6 +339,17 @@ func (m *Manager) ResolveLegacyAgentName(id string) (string, bool) {
 func marshal(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
+}
+
+func cloneEnvironment(value map[string]string) map[string]string {
+	if value == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(value))
+	for key, entry := range value {
+		cloned[key] = entry
+	}
+	return cloned
 }
 
 func cloneConfig(value config.Config) config.Config {

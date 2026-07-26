@@ -98,7 +98,7 @@ func dedupeModels(models []Model) []Model {
 // codex app-server model/list ------------------------------------------------
 
 func listCodexModels(ctx context.Context, command string) ([]Model, error) {
-	rpc := newJSONRPC(command, []string{"app-server"}, "", Hooks{})
+	rpc := newJSONRPC(command, []string{"app-server"}, "", nil, Hooks{})
 	defer rpc.close()
 	if err := rpc.start(); err != nil {
 		return nil, modelError(ModelErrUnavailable, "start Codex app-server: %s", err)

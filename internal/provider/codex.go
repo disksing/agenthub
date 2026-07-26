@@ -18,7 +18,7 @@ type codexSession struct {
 
 func newCodex(command string, options Options) *codexSession {
 	value := &codexSession{options: options}
-	value.rpc = newJSONRPC(command, []string{"app-server"}, options.Cwd, options.Hooks)
+	value.rpc = newJSONRPC(command, []string{"app-server"}, options.Cwd, options.Environment, options.Hooks)
 	value.rpc.inbound = value.inbound
 	value.rpc.notify = value.notification
 	return value
@@ -49,8 +49,15 @@ func (c *codexSession) Start(resumeID string) error {
 	if model := option(c.options.Agent, "model", ""); model != "" {
 		params["model"] = model
 	}
+	configOverrides := make(map[string]any, len(c.options.Environment)+1)
 	if effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": effort}
+		configOverrides["model_reasoning_effort"] = effort
+	}
+	for key, value := range c.options.Environment {
+		configOverrides["shell_environment_policy.set."+key] = value
+	}
+	if len(configOverrides) > 0 {
+		params["config"] = configOverrides
 	}
 	if resumeID != "" {
 		method = "thread/resume"

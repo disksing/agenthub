@@ -32,7 +32,7 @@ type acpSessionResult struct {
 func newACP(command string, options Options) *acpSession {
 	args := []string{"acp"}
 	value := &acpSession{options: options}
-	value.rpc = newJSONRPC(command, args, options.Cwd, options.Hooks)
+	value.rpc = newJSONRPC(command, args, options.Cwd, options.Environment, options.Hooks)
 	value.rpc.inbound = value.inbound
 	value.rpc.notify = value.notification
 	return value

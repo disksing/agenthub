@@ -50,6 +50,7 @@ func (p *piSession) Start(resumeID string) error {
 	}
 	cmd := exec.Command(p.command, args...)
 	cmd.Dir = p.options.Cwd
+	cmd.Env = processEnvironment(p.options.Environment)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

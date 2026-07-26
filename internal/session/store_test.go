@@ -81,6 +81,159 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 	}
 }
 
+func TestStorePersistsLaunchEnvironmentThroughReplayWithPrivateFiles(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]string{"FORGE_SESSION_ID": "forge-session-one", "EMPTY": ""}
+	created, err := store.Create(CreateInput{
+		Title:             "Environment",
+		Cwd:               t.TempDir(),
+		AgentName:         "Codex",
+		LaunchEnvironment: input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The store owns a deep copy: callers cannot change persisted session
+	// state by retaining and mutating their request map.
+	input["FORGE_SESSION_ID"] = "mutated"
+	if created.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+		t.Fatalf("created environment was aliased: %+v", created.LaunchEnvironment)
+	}
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+		t.Fatalf("launch environment did not survive event replay: %+v", replayed)
+	}
+	replayed.LaunchEnvironment["FORGE_SESSION_ID"] = "caller-mutation"
+	unchanged, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+		t.Fatalf("Get returned an aliased launch environment: %+v", unchanged)
+	}
+
+	for _, name := range []string{"events.jsonl", "session.json"} {
+		info, err := os.Stat(filepath.Join(root, created.ID, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s permissions = %o, want 600", name, info.Mode().Perm())
+		}
+	}
+}
+
+func TestStoreRejectsInvalidLaunchEnvironment(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, environment := range []map[string]string{
+		{"": "value"},
+		{"BAD=NAME": "value"},
+		{"BAD\x00NAME": "value"},
+		{"NAME": "bad\x00value"},
+	} {
+		if _, err := store.Create(CreateInput{Cwd: t.TempDir(), LaunchEnvironment: environment}); err == nil {
+			t.Fatalf("accepted invalid environment: %#v", environment)
+		}
+	}
+}
+
+func TestSessionSourcePersistsAndFilters(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(title string, source *Source) Session {
+		t.Helper()
+		value, err := store.Create(CreateInput{
+			Title: title, Cwd: t.TempDir(), AgentName: "Agent", Source: source,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	forgeOne := create("forge one", &Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"})
+	forgeDuplicate := create("forge duplicate", &Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"})
+	forgeTwo := create("forge two", &Source{App: "forge", InstanceID: "mac-2", ExternalID: "task-2"})
+	other := create("other app", &Source{App: "other", InstanceID: "mac-1", ExternalID: "task-1"})
+	_ = create("legacy", nil)
+
+	if _, err := store.Append(forgeTwo.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	app, instance, external := "forge", "mac-1", "task-1"
+	assertIDs := func(name string, filter ListFilter, want ...string) {
+		t.Helper()
+		values := store.Filter(filter)
+		got := make(map[string]bool, len(values))
+		for _, value := range values {
+			got[value.ID] = true
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: ids = %v, want %v", name, got, want)
+		}
+		for _, id := range want {
+			if !got[id] {
+				t.Fatalf("%s: missing %s in %v", name, id, got)
+			}
+		}
+	}
+	assertIDs("app", ListFilter{SourceApp: &app}, forgeOne.ID, forgeTwo.ID)
+	assertIDs("instance", ListFilter{SourceInstanceID: &instance}, forgeOne.ID, other.ID)
+	assertIDs("external", ListFilter{SourceExternalID: &external}, forgeOne.ID, other.ID)
+	assertIDs("combination", ListFilter{
+		SourceApp: &app, SourceInstanceID: &instance, SourceExternalID: &external,
+	}, forgeOne.ID)
+	assertIDs("combination including archived", ListFilter{
+		IncludeArchived: true, SourceApp: &app, SourceInstanceID: &instance, SourceExternalID: &external,
+	}, forgeOne.ID, forgeDuplicate.ID)
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{forgeOne.ID, forgeDuplicate.ID} {
+		value, err := reopened.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value.Source == nil || *value.Source != (Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+			t.Fatalf("replayed source for %s = %+v", id, value.Source)
+		}
+	}
+	events, err := reopened.EventsAfter(forgeOne.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created Session
+	if err := json.Unmarshal(events[0].Data, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Source == nil || created.Source.App != "forge" {
+		t.Fatalf("session.created source = %+v", created.Source)
+	}
+}
+
 func TestStoreRepairsPartialTailAndRebuildsSnapshot(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)
