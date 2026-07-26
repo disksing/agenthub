@@ -19,7 +19,7 @@ export function App() {
   const [listArchivingIds, setListArchivingIds] = useState(() => new Set());
   const [agents, setAgents] = useState([]);
   const [providers, setProviders] = useState([]);
-  const [defaultAgentId, setDefaultAgentId] = useState("");
+  const [defaultAgentName, setDefaultAgentName] = useState("");
   const [activeId, setActiveId] = useState("");
   const [events, setEvents] = useState([]);
   const [draft, setDraft] = useState("");
@@ -75,7 +75,7 @@ export function App() {
     const available = (body.agents || []).filter((agent) => agent.available !== false);
     setAgents(available);
     setProviders(body.providers || []);
-    setDefaultAgentId(available[0]?.id || "");
+    setDefaultAgentName(available[0]?.name || "");
   };
 
   useEffect(() => {
@@ -258,7 +258,7 @@ export function App() {
         <header className="workspace-header">
           <div>
             <h1>{activeSession?.title || "AgentHub"}</h1>
-            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentId || "No agent"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "No session yet"}</strong></div>
+            <div className="running-state"><span className="status-dot" /><span>{activeSession?.agentName || "No agent"}</span><span className="separator-dot">·</span><strong>{activeSession?.state || "No session yet"}</strong></div>
           </div>
           <div className="header-actions">
             <button className="icon-button mobile-sidebar-toggle" aria-label="Toggle session list" onClick={() => setSidebarOpen((value) => !value)}><List size={20} /></button>
@@ -270,7 +270,7 @@ export function App() {
         <div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>
           {error && <div className="error-banner">{error}<button aria-label="Dismiss error" onClick={() => setError("")}><X size={15} /></button></div>}
           {timeline.length ? (
-            <Timeline items={timeline} agent={activeSession?.agentId || "Agent"} onApproval={resolveApproval} />
+            <Timeline items={timeline} agent={activeSession?.agentName || "Agent"} onApproval={resolveApproval} />
           ) : (
             <div className="empty-state"><span className="empty-icon"><Plus size={24} /></span><h2>Start a new Session</h2><p>Pick a local agent, set a working directory, and start the conversation.</p></div>
           )}
@@ -280,7 +280,7 @@ export function App() {
           <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopped" || isArchived(activeSession)} onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder={isArchived(activeSession) ? "Archived sessions are read-only" : "Type a message…"} />
           <div className="composer-footer">
-            <span className="composer-agent">{activeSession?.agentId || "Create a session to chat"}</span>
+            <span className="composer-agent">{activeSession?.agentName || "Create a session to chat"}</span>
             <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession}><PaperPlaneTilt size={20} weight="fill" /></button>
           </div>
         </div>
@@ -317,7 +317,7 @@ export function App() {
         <NewSessionModal
           agents={agents}
           providers={providers}
-          defaultAgentId={defaultAgentId}
+          defaultAgentName={defaultAgentName}
           defaultCwd={activeSession?.cwd || ""}
           submitting={creating}
           error={createError}

@@ -73,11 +73,11 @@ agenthub serve --help
 agenthub status
 agenthub agents
 
-agenthub run --agent pi-kimi --cwd . "Investigate why the tests fail"
-agenthub run --agent codex-default --cwd . "Implement this feature and run the tests"
+agenthub run --agent "Kimi K3" --cwd . "Investigate why the tests fail"
+agenthub run --agent "Codex" --cwd . "Implement this feature and run the tests"
 
-agenthub chat --agent gpt-5-6-sol --cwd .
-agenthub session create --agent pi-kimi --title "bug hunt"
+agenthub chat --agent "Codex GPT" --cwd .
+agenthub session create --agent "Kimi K3" --title "bug hunt"
 agenthub session attach <session-id>
 agenthub session list
 agenthub session list --archived
@@ -112,8 +112,7 @@ On first startup, if the config does not exist, AgentHub generates its own minim
   ],
   "agents": [
     {
-      "id": "pi-kimi",
-      "name": "pi-kimi",
+      "name": "Kimi K3",
       "providerId": "pi",
       "options": { "mode": "build", "model": "kimi-coding/k3" }
     }
@@ -121,7 +120,9 @@ On first startup, if the config does not exist, AgentHub generates its own minim
 }
 ```
 
-A provider wraps a local agent runtime or protocol; an agent references one provider and holds its concrete launch options. Every session is created with an explicit agent ID (`POST /v1/sessions` requires `agentId`, and the CLI requires `--agent`); an unknown, missing, or disabled-provider agent fails with a clear error instead of being routed elsewhere.
+A provider wraps a local agent runtime or protocol; an agent references one provider and holds its concrete launch options. An agent has no separate id: its `name` is required (up to 80 characters), is unique case-insensitively after trimming surrounding whitespace, and is the only reference key — the config, the API, the CLI and session records all use it. Every session is created with an explicit agent name (`POST /v1/sessions` requires `agentName`, and the CLI requires `--agent`); name matching is case-insensitive and sessions record the canonical configured spelling. An unknown, missing, or disabled-provider agent fails with a clear error instead of being routed elsewhere.
+
+Renaming an agent is safe: when a config save replaces a name with exactly one otherwise identical agent, the daemon appends a `session.agent` event to every active session that referenced the old name, so those sessions follow the rename. An ambiguous rename (several identical candidates) is rejected with an actionable error, and deleting or renaming so that no unique target exists leaves old sessions failing with a clear "unknown agent" error rather than guessing.
 
 Codex agents accept the options `model`, `sandbox`, `approval`, and `reasoning_effort`. `reasoning_effort` controls the Codex reasoning ("thinking") effort: it is sent as the `model_reasoning_effort` config override on `thread/start` and `thread/resume`, and the daemon validates the value against the efforts the selected model advertises via `model/list` (for example `low`, `medium`, `high`, `xhigh`; some models add `max` and `ultra`). An unsupported value fails session creation with the list of valid values; an empty value inherits the Codex default.
 
@@ -132,6 +133,8 @@ A disabled provider's agents are reported as unavailable (`available: false` wit
 ### Migrating Older Configs
 
 Earlier versions supported agent profiles, tag-based routing, and a `defaultChatAgentId` fallback. These were removed: sessions now always name an explicit agent. Config files that still contain the legacy `agentProfiles` or `defaultChatAgentId` keys keep working — the keys are ignored on read, and the daemon rewrites the file once without them on startup. Providers and agents are preserved untouched. Sessions recorded before this change remain readable and resumable as long as they have a determined agent; a legacy session that never started (and therefore has no agent) fails with a clear error instead of being guessed onto a configured agent.
+
+Earlier versions also gave every agent a separate `id` next to its `name`. The id is removed: the unique name is now the only reference key. A config file that still contains agent `id` fields is migrated once on startup — the ids are dropped from the file and the id → name mapping is recorded in `legacy-agent-names.json` next to the config, so sessions recorded with an agent id stay readable and resumable through that mapping. Migration refuses to guess: a legacy agent without a name, or names that collide case-insensitively, stop the daemon with an actionable error and leave the original file untouched. Session event logs are never rewritten; the projection reads both the current `agentName` and the legacy `agentId` fields. For one compatibility window, `POST /v1/sessions` still accepts a deprecated `agentId` and resolves it through the recorded mapping (unresolvable ids fail with a clear error); new clients must use `agentName`.
 
 Command discovery order: the provider's `command`, `AGENTHUB_*_CLI`, then `PATH`. Supported:
 

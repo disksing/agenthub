@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type Provider struct {
@@ -21,10 +23,22 @@ type Provider struct {
 }
 
 type Agent struct {
-	ID         string            `json:"id"`
 	Name       string            `json:"name"`
 	ProviderID string            `json:"providerId"`
 	Options    map[string]string `json:"options,omitempty"`
+}
+
+// AgentNameMaxLength bounds the length of an agent name (counted in runes
+// after trimming).
+const AgentNameMaxLength = 80
+
+// NormalizeAgentName returns the comparison key of an agent name: leading
+// and trailing whitespace removed and the rest Unicode lower-cased. Agent
+// names are unique under this normalization, so "Codex" and " codex " refer
+// to the same agent. The user-provided display form is always preserved; the
+// normalized form is only used for uniqueness checks and lookups.
+func NormalizeAgentName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 type Config struct {
@@ -40,6 +54,23 @@ type legacyFields struct {
 	DefaultChatAgentID string          `json:"defaultChatAgentId"`
 	AgentProfiles      json.RawMessage `json:"agentProfiles"`
 }
+
+// legacyAgentIDs detects agents that still carry the removed id field. Agent
+// IDs were dropped in favor of the unique name as the single reference key;
+// Load migrates such files once, recording the id → name mapping in a
+// sidecar file so sessions persisted with an agent id stay resumable.
+type legacyAgentIDs struct {
+	Agents []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"agents"`
+}
+
+// LegacyAgentMapFile is the name of the sidecar file, written next to the
+// config file, that preserves the id → name mapping of a migrated legacy
+// configuration. It is written once during migration and read afterwards to
+// resolve sessions recorded with an agent id.
+const LegacyAgentMapFile = "legacy-agent-names.json"
 
 type Probe struct {
 	ProviderID string `json:"providerId"`
@@ -65,18 +96,101 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+	var legacyAgents legacyAgentIDs
+	idMap := map[string]string{}
+	if err := json.Unmarshal(data, &legacyAgents); err == nil {
+		for _, agent := range legacyAgents.Agents {
+			if id := strings.TrimSpace(agent.ID); id != "" {
+				name := strings.TrimSpace(agent.Name)
+				if name == "" {
+					return Config{}, fmt.Errorf("cannot migrate legacy agent id %q: the agent has no name; add a unique name to every agent in %s", id, path)
+				}
+				idMap[id] = name
+			}
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
+	}
+	rewrite := false
+	if len(idMap) > 0 {
+		// One-time migration from agent ids to name-only agents: record the
+		// id → name mapping first so existing sessions recorded with an id
+		// stay resumable, then rewrite the config without the id fields.
+		if err := SaveLegacyAgentIDs(path, idMap); err != nil {
+			return Config{}, fmt.Errorf("migrate legacy agent ids: %w", err)
+		}
+		rewrite = true
 	}
 	var legacy legacyFields
 	if err := json.Unmarshal(data, &legacy); err == nil && legacy.hasLegacy() {
 		// One-time migration: rewrite the file without the removed profile
 		// routing fields. Providers and agents are kept untouched.
+		rewrite = true
+	}
+	if rewrite {
 		if err := Save(path, cfg); err != nil {
-			return Config{}, fmt.Errorf("migrate legacy profile fields: %w", err)
+			return Config{}, fmt.Errorf("migrate legacy config fields: %w", err)
 		}
 	}
 	return cfg, nil
+}
+
+// SaveLegacyAgentIDs atomically writes the id → name mapping recorded while
+// migrating a legacy configuration. The file is only written once, during
+// migration; afterwards it is read-only compatibility data.
+func SaveLegacyAgentIDs(configPath string, mapping map[string]string) error {
+	if len(mapping) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(map[string]any{"version": 1, "agentIds": mapping}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	target := filepath.Join(filepath.Dir(configPath), LegacyAgentMapFile)
+	tmp, err := os.CreateTemp(filepath.Dir(configPath), ".legacy-agents-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, target)
+}
+
+// LoadLegacyAgentIDs reads the id → name mapping recorded by a legacy config
+// migration. A missing file is not an error: it simply means the config was
+// never migrated and no session can reference an agent id.
+func LoadLegacyAgentIDs(configPath string) (map[string]string, error) {
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), LegacyAgentMapFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		AgentIDs map[string]string `json:"agentIds"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", LegacyAgentMapFile, err)
+	}
+	return payload.AgentIDs, nil
 }
 
 func (l legacyFields) hasLegacy() bool {
@@ -138,22 +252,26 @@ func (c Config) Validate() error {
 		}
 		providers[value.ID] = value
 	}
-	agents := make(map[string]Agent)
-	for _, value := range c.Agents {
-		if value.ID == "" || value.ProviderID == "" {
-			return errors.New("agent id and providerId are required")
+	agents := make(map[string]int)
+	for index, value := range c.Agents {
+		name := strings.TrimSpace(value.Name)
+		if name == "" {
+			return fmt.Errorf("agents[%d]: agent name is required", index)
 		}
-		if _, exists := agents[value.ID]; exists {
-			return fmt.Errorf("duplicate agent %q", value.ID)
+		if utf8.RuneCountInString(name) > AgentNameMaxLength {
+			return fmt.Errorf("agents[%d]: agent name %q exceeds %d characters", index, name, AgentNameMaxLength)
 		}
-		provider, exists := providers[value.ProviderID]
-		if !exists {
-			return fmt.Errorf("agent %q references unknown provider %q", value.ID, value.ProviderID)
+		if value.ProviderID == "" {
+			return fmt.Errorf("agents[%d] (%q): providerId is required", index, name)
 		}
-		if !provider.Enabled {
-			continue
+		key := NormalizeAgentName(name)
+		if previous, exists := agents[key]; exists {
+			return fmt.Errorf("agents[%d] (%q): duplicate agent name, already used by agents[%d] (%q); names must be unique case-insensitively", index, name, previous, strings.TrimSpace(c.Agents[previous].Name))
 		}
-		agents[value.ID] = value
+		agents[key] = index
+		if _, exists := providers[value.ProviderID]; !exists {
+			return fmt.Errorf("agent %q references unknown provider %q", name, value.ProviderID)
+		}
 	}
 	return nil
 }
@@ -227,13 +345,17 @@ func Defaults() Config {
 	return Config{
 		Version:        1,
 		AgentProviders: providers,
-		Agents:         []Agent{{ID: "codex-default", Name: "Codex", ProviderID: "codex", Options: map[string]string{"approval": "never", "sandbox": "danger-full-access"}}},
+		Agents:         []Agent{{Name: "Codex", ProviderID: "codex", Options: map[string]string{"approval": "never", "sandbox": "danger-full-access"}}},
 	}
 }
 
-func (c Config) Agent(id string) (Agent, Provider, error) {
+// Agent resolves an agent by name. Matching is case-insensitive and ignores
+// surrounding whitespace, consistent with the uniqueness rule; the returned
+// agent always carries the canonical configured display name.
+func (c Config) Agent(name string) (Agent, Provider, error) {
+	key := NormalizeAgentName(name)
 	for _, agent := range c.Agents {
-		if agent.ID != id {
+		if NormalizeAgentName(agent.Name) != key {
 			continue
 		}
 		for _, provider := range c.AgentProviders {
@@ -241,9 +363,79 @@ func (c Config) Agent(id string) (Agent, Provider, error) {
 				return agent, provider, nil
 			}
 		}
-		return Agent{}, Provider{}, fmt.Errorf("provider for agent %q is disabled", id)
+		return Agent{}, Provider{}, fmt.Errorf("provider for agent %q is disabled", agent.Name)
 	}
-	return Agent{}, Provider{}, fmt.Errorf("unknown agent %q", id)
+	return Agent{}, Provider{}, fmt.Errorf("unknown agent %q", strings.TrimSpace(name))
+}
+
+// DetectRenames compares the agents of two configurations and reports
+// renames as old name → new name pairs. A rename is a name that disappeared
+// while exactly one new agent appeared with an identical configuration
+// (provider and options) and no other removed agent claims it. A removed
+// name with several identical candidates is ambiguous and reported as an
+// error so the caller can reject the change instead of guessing; a removed
+// name without candidates is a deletion, not a rename.
+func DetectRenames(oldConfig, newConfig Config) (map[string]string, error) {
+	removed := map[string]Agent{}
+	for _, agent := range oldConfig.Agents {
+		removed[NormalizeAgentName(agent.Name)] = agent
+	}
+	added := map[string]Agent{}
+	for _, agent := range newConfig.Agents {
+		key := NormalizeAgentName(agent.Name)
+		added[key] = agent
+		delete(removed, key)
+	}
+	for key := range added {
+		for _, agent := range oldConfig.Agents {
+			if NormalizeAgentName(agent.Name) == key {
+				delete(added, key)
+				break
+			}
+		}
+	}
+	if len(removed) == 0 || len(added) == 0 {
+		return nil, nil
+	}
+	renames := map[string]string{}
+	claimed := map[string]string{}
+	for _, oldAgent := range removed {
+		var candidates []Agent
+		for _, newAgent := range added {
+			if agentConfigEqual(oldAgent, newAgent) {
+				candidates = append(candidates, newAgent)
+			}
+		}
+		if len(candidates) > 1 {
+			names := make([]string, 0, len(candidates))
+			for _, candidate := range candidates {
+				names = append(names, strconv.Quote(candidate.Name))
+			}
+			sort.Strings(names)
+			return nil, fmt.Errorf("renaming agent %q is ambiguous: new agents %s have identical configurations; give the renamed agent a distinct provider or options, or apply the changes in two saves", oldAgent.Name, strings.Join(names, ", "))
+		}
+		if len(candidates) == 1 {
+			newKey := NormalizeAgentName(candidates[0].Name)
+			if other, taken := claimed[newKey]; taken {
+				return nil, fmt.Errorf("renaming agents %q and %q both match the new agent %q; apply the changes in two saves", other, oldAgent.Name, candidates[0].Name)
+			}
+			claimed[newKey] = oldAgent.Name
+			renames[oldAgent.Name] = candidates[0].Name
+		}
+	}
+	return renames, nil
+}
+
+func agentConfigEqual(a, b Agent) bool {
+	if a.ProviderID != b.ProviderID || len(a.Options) != len(b.Options) {
+		return false
+	}
+	for key, value := range a.Options {
+		if b.Options[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Config) Probes() []Probe {

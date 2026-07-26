@@ -8,7 +8,7 @@ import { TITLE_MAX_LENGTH, buildCreatePayload } from "./newSession.js";
 export function NewSessionModal({
   agents,
   providers,
-  defaultAgentId,
+  defaultAgentName,
   defaultCwd,
   submitting,
   error,
@@ -20,7 +20,7 @@ export function NewSessionModal({
   const cwdRef = useRef(null);
   const [title, setTitle] = useState("");
   const [cwd, setCwd] = useState(defaultCwd || "");
-  const [agentId, setAgentId] = useState(defaultAgentId || "");
+  const [agentName, setAgentName] = useState(defaultAgentName || "");
   const [showErrors, setShowErrors] = useState(false);
 
   const providerName = useMemo(() => {
@@ -30,14 +30,14 @@ export function NewSessionModal({
 
   // Effective agent: the explicit choice while it still exists, otherwise the
   // daemon default or the first available agent.
-  const effectiveAgentId = agents.some((agent) => agent.id === agentId)
-    ? agentId
-    : defaultAgentId || agents[0]?.id || "";
+  const effectiveAgentName = agents.some((agent) => agent.name === agentName)
+    ? agentName
+    : defaultAgentName || agents[0]?.name || "";
 
   const { errors, payload } = buildCreatePayload({
     title,
     cwd,
-    agentId: effectiveAgentId,
+    agentName: effectiveAgentName,
     agents,
   });
 
@@ -117,15 +117,15 @@ export function NewSessionModal({
             <span className="new-session-label"><Robot size={16} />Agent</span>
             {agents.length ? (
               <select
-                value={effectiveAgentId}
-                onChange={(event) => setAgentId(event.target.value)}
+                value={effectiveAgentName}
+                onChange={(event) => setAgentName(event.target.value)}
                 aria-label="Agent"
                 aria-invalid={Boolean(fieldError("agent"))}
                 disabled={submitting}
               >
                 {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name || agent.id}{providerName(agent) ? ` · ${providerName(agent)}` : ""}
+                  <option key={agent.name} value={agent.name}>
+                    {agent.name}{providerName(agent) ? ` · ${providerName(agent)}` : ""}
                   </option>
                 ))}
               </select>

@@ -134,12 +134,52 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
+	previous := s.runtime.Config()
+	renames, err := config.DetectRenames(previous, body.Config)
+	if err != nil {
+		writeAPIError(w, http.StatusUnprocessableEntity, "ambiguous_rename", err.Error(), nil)
+		return
+	}
 	if err := config.Save(s.config, body.Config); err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_config", err.Error(), nil)
 		return
 	}
 	_ = s.runtime.SetConfig(body.Config)
+	if err := s.migrateSessionAgentReferences(renames); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "agent_rename_failed", err.Error(), nil)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"config": body.Config})
+}
+
+// migrateSessionAgentReferences re-points sessions at renamed agents by
+// appending a session.agent event. Only active sessions are migrated:
+// archived sessions are read-only, and their stored name stays a historical
+// record that remains readable. Config validation guarantees names are
+// unique case-insensitively, so matching the old name case-insensitively
+// cannot hit the wrong session.
+func (s *Server) migrateSessionAgentReferences(renames map[string]string) error {
+	if len(renames) == 0 {
+		return nil
+	}
+	lookup := make(map[string]string, len(renames))
+	for oldName, newName := range renames {
+		lookup[config.NormalizeAgentName(oldName)] = newName
+	}
+	for _, value := range s.store.List(false) {
+		newName, ok := lookup[config.NormalizeAgentName(value.AgentName)]
+		if !ok {
+			continue
+		}
+		data, err := json.Marshal(session.AgentRenameEventData{AgentName: newName})
+		if err != nil {
+			return err
+		}
+		if _, err := s.store.Append(value.ID, "session.agent", "", data); err != nil {
+			return fmt.Errorf("migrate session %s to renamed agent %q: %w", value.ID, newName, err)
+		}
+	}
+	return nil
 }
 
 // putProviderEnabled flips the enabled flag of one built-in provider without
@@ -251,9 +291,14 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title          string `json:"title"`
-		Cwd            string `json:"cwd"`
-		AgentID        string `json:"agentId"`
+		Title    string `json:"title"`
+		Cwd      string `json:"cwd"`
+		AgentName string `json:"agentName"`
+		// AgentID is the removed reference form. It is still accepted for one
+		// compatibility window: the daemon resolves it through the id → name
+		// mapping recorded when the legacy configuration was migrated, and
+		// rejects ids it cannot map. New clients must use agentName.
+		AgentID  string `json:"agentId"`
 		InitialMessage *struct {
 			Text string `json:"text"`
 		} `json:"initialMessage"`
@@ -262,43 +307,70 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	agentID := strings.TrimSpace(body.AgentID)
-	if agentID == "" {
-		writeAPIError(w, http.StatusUnprocessableEntity, "agent_required", "agentId is required: sessions are always created with an explicit agent", nil)
+	agentName := strings.TrimSpace(body.AgentName)
+	if id := strings.TrimSpace(body.AgentID); id != "" {
+		if agentName != "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "send agentName or the deprecated agentId, not both", nil)
+			return
+		}
+		if s.runtime == nil {
+			writeAPIError(w, http.StatusUnprocessableEntity, "agent_id_removed", "agentId is no longer supported: agents are referenced by their unique name; send agentName instead", nil)
+			return
+		}
+		mapped, ok := s.runtime.ResolveLegacyAgentName(id)
+		if !ok {
+			writeAPIError(w, http.StatusUnprocessableEntity, "agent_id_removed", fmt.Sprintf("agentId %q cannot be resolved: agents are now referenced by their unique name; send agentName instead (list names with GET /v1/agents or 'agenthub agents')", id), nil)
+			return
+		}
+		agentName = mapped
+	}
+	if agentName == "" {
+		writeAPIError(w, http.StatusUnprocessableEntity, "agent_required", "agentName is required: sessions are always created with an explicit agent", nil)
 		return
 	}
+	var agent config.Agent
 	if s.runtime != nil {
-		if _, _, err := s.runtime.Config().Agent(agentID); err != nil {
+		resolved, _, err := s.runtime.Config().Agent(agentName)
+		if err != nil {
 			writeAPIError(w, http.StatusUnprocessableEntity, "invalid_agent", err.Error(), nil)
 			return
 		}
+		agent = resolved
 	}
 	cwd, err := canonicalDirectory(body.Cwd)
 	if err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_cwd", err.Error(), nil)
 		return
 	}
+	// Persist the canonical configured name, not the spelling the client
+	// sent, so the session always records the user's display form.
+	canonicalName := agentName
+	if agent.Name != "" {
+		canonicalName = agent.Name
+	}
 	value, err := s.store.Create(session.CreateInput{
-		Title:   strings.TrimSpace(body.Title),
-		Cwd:     cwd,
-		AgentID: agentID,
+		Title:     strings.TrimSpace(body.Title),
+		Cwd:       cwd,
+		AgentName: canonicalName,
 	})
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "session_create_failed", err.Error(), nil)
 		return
 	}
 	if s.runtime != nil {
-		value, err = s.runtime.Start(value.ID)
+		started, err := s.runtime.Start(value.ID)
 		if err != nil {
 			writeAPIError(w, http.StatusBadGateway, "provider_start_failed", err.Error(), map[string]any{"sessionId": value.ID})
 			return
 		}
+		value = started
 		if body.InitialMessage != nil && strings.TrimSpace(body.InitialMessage.Text) != "" {
-			value, err = s.runtime.Send(value.ID, body.InitialMessage.Text, false)
+			sent, err := s.runtime.Send(value.ID, body.InitialMessage.Text, false)
 			if err != nil {
 				writeAPIError(w, http.StatusBadGateway, "turn_start_failed", err.Error(), map[string]any{"sessionId": value.ID})
 				return
 			}
+			value = sent
 		}
 	}
 	w.Header().Set("Location", "/v1/sessions/"+value.ID)

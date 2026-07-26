@@ -73,11 +73,11 @@ agenthub serve --help
 agenthub status
 agenthub agents
 
-agenthub run --agent pi-kimi --cwd . "检查测试失败原因"
-agenthub run --agent codex-default --cwd . "实现这个功能并运行测试"
+agenthub run --agent "Kimi K3" --cwd . "检查测试失败原因"
+agenthub run --agent "Codex" --cwd . "实现这个功能并运行测试"
 
-agenthub chat --agent gpt-5-6-sol --cwd .
-agenthub session create --agent pi-kimi --title "bug hunt"
+agenthub chat --agent "Codex GPT" --cwd .
+agenthub session create --agent "Kimi K3" --title "bug hunt"
 agenthub session attach <session-id>
 agenthub session list
 agenthub session list --archived
@@ -112,8 +112,7 @@ $HOME/.agenthub/config.json
   ],
   "agents": [
     {
-      "id": "pi-kimi",
-      "name": "pi-kimi",
+      "name": "Kimi K3",
       "providerId": "pi",
       "options": { "mode": "build", "model": "kimi-coding/k3" }
     }
@@ -121,7 +120,9 @@ $HOME/.agenthub/config.json
 }
 ```
 
-Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provider 并保存具体启动参数。每个 Session 都用显式 Agent ID 创建（`POST /v1/sessions` 要求 `agentId`，CLI 要求 `--agent`）；未知、缺失或 Provider 被禁用的 Agent 会直接返回明确错误，不会被路由到其他 Agent。
+Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provider 并保存具体启动参数。Agent 没有独立的 id：它的 `name` 必填（最长 80 个字符），在去除首尾空白后大小写不敏感地唯一，并且是唯一引用键——配置、API、CLI 和 Session 记录都使用它。每个 Session 都用显式 Agent 名称创建（`POST /v1/sessions` 要求 `agentName`，CLI 要求 `--agent`）；名称匹配不区分大小写，Session 记录的是配置中的规范拼写。未知、缺失或 Provider 被禁用的 Agent 会直接返回明确错误，不会被路由到其他 Agent。
+
+重命名 Agent 是安全的：当一次配置保存把某个名称替换为唯一一个其余字段完全相同的 Agent 时，daemon 会向每个引用旧名称的活动 Session 追加 `session.agent` 事件，使这些 Session 跟随重命名。歧义重命名（存在多个字段相同的候选）会被拒绝并给出可操作错误；删除 Agent 或重命名到不存在唯一目标时，旧 Session 会以清晰的“unknown agent”错误失败，而不会猜测到其他 Agent。
 
 推荐使用 Web UI 的 **Settings** 界面管理配置。**Providers** 区块刻意保持极简：只有四个开关用于启用或停用内置 Provider（Codex、Kimi、Grok/Pi、OpenCode），不提供 Provider 增删，也不提供命令、参数、环境变量或其他高级字段的编辑。开关只通过 `PUT /v1/config/providers/{id}` 翻转 `enabled` 标志，底层配置在停用/重新启用后完整保留；旧配置中缺失的内置 Provider 会在首次启用时由 daemon 以规范默认值创建。**Agents** 区块保留结构化、带校验的表单，Provider 命令可用性探测会区分“已启用”与“CLI 可用”。所有修改都通过 daemon API 提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
 
@@ -130,6 +131,8 @@ Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` �
 ### 旧配置迁移
 
 早期版本支持 agent profile、基于 tag 的路由和 `defaultChatAgentId` 回退，这些能力已移除：Session 现在始终显式指定 Agent。仍含有遗留 `agentProfiles` 或 `defaultChatAgentId` 键的配置文件可以继续使用——这些键在读取时被忽略，daemon 启动时会把配置文件一次性重写为不含这些键的形式。Provider 和 Agent 数据原样保留。在此变更之前记录的 Session 只要已确定 Agent 就仍可查看和恢复；从未启动过（因而没有 Agent）的旧 Session 会返回明确错误，而不会猜测到某个已配置的 Agent 上。
+
+早期版本还在 `name` 之外为每个 Agent 提供独立的 `id`。id 已被移除：唯一名称现在是唯一引用键。仍含 Agent `id` 字段的配置文件会在启动时迁移一次——id 从文件中删除，id → name 映射记录到配置旁边的 `legacy-agent-names.json`，因此用 Agent id 记录的 Session 仍可通过该映射读取和恢复。迁移绝不猜测：旧 Agent 缺少 name，或名称在大小写不敏感比较下冲突时，daemon 会停止并给出可操作错误，原文件保持不动。Session 事件日志从不在原地改写；投影同时读取现行的 `agentName` 和遗留的 `agentId` 字段。在一个兼容窗口内，`POST /v1/sessions` 仍接受已弃用的 `agentId` 并通过记录的映射解析（无法映射的 id 会明确失败）；新客户端必须使用 `agentName`。
 
 命令发现顺序为：provider 的 `command`、`AGENTHUB_*_CLI`、`PATH`。支持：
 

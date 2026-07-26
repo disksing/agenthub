@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,9 +18,9 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := store.Create(CreateInput{
-		Title:   "Fix login",
-		Cwd:     t.TempDir(),
-		AgentID: "codex-build",
+		Title:     "Fix login",
+		Cwd:       t.TempDir(),
+		AgentName: "Codex Build",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,12 +180,12 @@ func TestProviderMappingIsProjectedAndRebuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := store.Create(CreateInput{Title: "Mapped", Cwd: t.TempDir(), AgentID: "codex-fast"})
+	created, err := store.Create(CreateInput{Title: "Mapped", Cwd: t.TempDir(), AgentName: "Codex Fast"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	data := ProviderEventData{
-		AgentID: "codex-fast", Provider: "codex", ProviderSessionID: "native-1",
+		AgentName: "Codex Fast", Provider: "codex", ProviderSessionID: "native-1",
 	}
 	if _, err := store.Append(created.ID, "session.provider", "", mustJSON(t, data)); err != nil {
 		t.Fatal(err)
@@ -197,7 +198,7 @@ func TestProviderMappingIsProjectedAndRebuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.AgentID != "codex-fast" || value.ProviderSessionID != "native-1" {
+	if value.AgentName != "Codex Fast" || value.ProviderSessionID != "native-1" {
 		t.Fatalf("unexpected projection: %+v", value)
 	}
 }
@@ -243,7 +244,7 @@ func TestLegacySelectionEventsStillReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.AgentID != "codex-fast" || value.Provider != "codex" || value.ProviderSessionID != "native-9" {
+	if value.AgentName != "codex-fast" || value.Provider != "codex" || value.ProviderSessionID != "native-9" {
 		t.Fatalf("legacy agent mapping was not preserved: %+v", value)
 	}
 }
@@ -259,7 +260,7 @@ func mustJSON(t *testing.T, value any) []byte {
 
 func archiveTestSession(t *testing.T, store *Store) Session {
 	t.Helper()
-	created, err := store.Create(CreateInput{Title: "Archive me", Cwd: t.TempDir(), AgentID: "agent"})
+	created, err := store.Create(CreateInput{Title: "Archive me", Cwd: t.TempDir(), AgentName: "Agent"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,5 +588,84 @@ func copyDir(t *testing.T, src, dst string) {
 		if err := os.WriteFile(filepath.Join(dst, entry.Name()), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// Events recorded before agent ids were removed carry agentId inside
+// session.created. The projection keeps that reference verbatim so the
+// runtime can resolve it through the recorded id → name mapping.
+func TestLegacyCreatedAgentIDFallsBackIntoAgentName(t *testing.T) {
+	root := t.TempDir()
+	id := "ses_legacycreated"
+	dir := filepath.Join(root, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	created := mustJSON(t, map[string]any{
+		"id": id, "title": "Legacy", "cwd": t.TempDir(), "state": StateReady,
+		"agentId": "codex-default",
+	})
+	log := fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 1, Time: time.Now().UTC(), Type: "session.created", SessionID: id, Data: created}))
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.AgentName != "codex-default" {
+		t.Fatalf("legacy agentId was not preserved in the projection: %+v", value)
+	}
+}
+
+// A session.agent event (appended when a configured agent is renamed)
+// re-points the projection at the new name.
+func TestAgentRenameEventUpdatesProjection(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Title: "Rename me", Cwd: t.TempDir(), AgentName: "Codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "session.agent", "", mustJSON(t, AgentRenameEventData{AgentName: "Codex X"})); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.AgentName != "Codex X" {
+		t.Fatalf("rename event did not update the projection: %+v", value)
+	}
+}
+
+// New session.created snapshots write agentName and no legacy agentId key.
+func TestCreatedEventWritesAgentNameOnly(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Title: "Fresh", Cwd: t.TempDir(), AgentName: "Codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, created.ID, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"agentName":"Codex"`) || strings.Contains(string(data), "agentId") {
+		t.Fatalf("created event must write agentName only: %s", data)
 	}
 }

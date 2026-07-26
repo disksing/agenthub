@@ -111,7 +111,11 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	manager := runtime.New(store, cfg)
+	legacyAgentNames, err := config.LoadLegacyAgentIDs(resolved.ConfigFile)
+	if err != nil {
+		return err
+	}
+	manager := runtime.New(store, cfg, legacyAgentNames)
 	defer manager.Close()
 	if *webDir == "" {
 		if absolute, statErr := filepath.Abs(filepath.Join("frontend", "dist", "client")); statErr == nil {
@@ -219,15 +223,15 @@ func runOneShot(args []string) error {
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", ".", "working directory")
 	title := flags.String("title", "", "session title")
-	agentID := flags.String("agent", "", "agent id from the configuration (required)")
+	agentName := flags.String("agent", "", "agent name from the configuration (required)")
 	if err := flags.Parse(args); err != nil {
 		return flagParseError(err, "run")
 	}
 	message := strings.TrimSpace(strings.Join(flags.Args(), " "))
 	if message == "" {
-		return usageError("agenthub run [--cwd dir] [--title title] --agent id <message>", "run")
+		return usageError("agenthub run [--cwd dir] [--title title] --agent name <message>", "run")
 	}
-	if strings.TrimSpace(*agentID) == "" {
+	if strings.TrimSpace(*agentName) == "" {
 		return errors.New("--agent is required: sessions always run with an explicit agent")
 	}
 	absolute, err := filepath.Abs(*cwd)
@@ -238,11 +242,11 @@ func runOneShot(args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := apiClient.CreateSessionWithMessage(*title, absolute, *agentID, message)
+	value, err := apiClient.CreateSessionWithMessage(*title, absolute, *agentName, message)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "session %s (%s)\n", value.ID, value.AgentID)
+	fmt.Fprintf(os.Stderr, "session %s (%s)\n", value.ID, value.AgentName)
 	return printUntilTurnEnds(apiClient, value.ID, 0)
 }
 
@@ -251,13 +255,13 @@ func runChat(args []string) error {
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", ".", "working directory")
 	title := flags.String("title", "", "session title")
-	agentID := flags.String("agent", "", "agent id from the configuration (required when creating a session)")
+	agentName := flags.String("agent", "", "agent name from the configuration (required when creating a session)")
 	sessionID := flags.String("session", "", "attach existing session")
 	if err := flags.Parse(args); err != nil {
 		return flagParseError(err, "chat")
 	}
 	if flags.NArg() != 0 {
-		return usageError("agenthub chat [--session id | --cwd dir --title title --agent id]", "chat")
+		return usageError("agenthub chat [--session id | --cwd dir --title title --agent name]", "chat")
 	}
 	apiClient, err := client.Discover()
 	if err != nil {
@@ -265,14 +269,14 @@ func runChat(args []string) error {
 	}
 	id := *sessionID
 	if id == "" {
-		if strings.TrimSpace(*agentID) == "" {
+		if strings.TrimSpace(*agentName) == "" {
 			return errors.New("--agent is required when creating a session")
 		}
 		absolute, err := filepath.Abs(*cwd)
 		if err != nil {
 			return err
 		}
-		value, err := apiClient.CreateSession(*title, absolute, *agentID)
+		value, err := apiClient.CreateSession(*title, absolute, *agentName)
 		if err != nil {
 			return err
 		}
@@ -463,14 +467,14 @@ func runSessionCreate(args []string) error {
 	flags.SetOutput(io.Discard)
 	title := flags.String("title", "", "session title")
 	cwd := flags.String("cwd", ".", "working directory")
-	agentID := flags.String("agent", "", "agent id from the configuration (required)")
+	agentName := flags.String("agent", "", "agent name from the configuration (required)")
 	if err := flags.Parse(args); err != nil {
 		return flagParseError(err, "session create")
 	}
 	if flags.NArg() != 0 {
-		return usageError("agenthub session create [--cwd dir] [--title title] --agent id", "session create")
+		return usageError("agenthub session create [--cwd dir] [--title title] --agent name", "session create")
 	}
-	if strings.TrimSpace(*agentID) == "" {
+	if strings.TrimSpace(*agentName) == "" {
 		return errors.New("--agent is required: sessions always run with an explicit agent")
 	}
 	absoluteCwd, err := filepath.Abs(*cwd)
@@ -481,7 +485,7 @@ func runSessionCreate(args []string) error {
 	if err != nil {
 		return err
 	}
-	value, err := apiClient.CreateSession(*title, absoluteCwd, *agentID)
+	value, err := apiClient.CreateSession(*title, absoluteCwd, *agentName)
 	if err != nil {
 		return err
 	}
@@ -525,7 +529,7 @@ func runSessionList(args []string) error {
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
 			value.ID,
 			value.State,
-			value.AgentID,
+			value.AgentName,
 			value.Title,
 			value.UpdatedAt.Local().Format(time.RFC3339),
 		)
