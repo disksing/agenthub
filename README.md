@@ -196,6 +196,15 @@ The events endpoint returns JSON for plain requests; with `Accept: text/event-st
 
 The CLI equivalents are `agenthub session archive <id>`, `agenthub session list --all` and `agenthub session list --archived`; the Web UI offers an Archive action with an in-app confirmation and an "Archived Sessions" view.
 
+### Provider Startup Failures
+
+Session creation starts the provider synchronously: the handshake requests (`initialize`, `session/new` / `thread/start`, and their resume/load variants) must answer within a 2-minute startup timeout. A provider that cannot answer — for example a process stuck reading the session working directory because the operating system is holding a privacy permission prompt — fails the request instead of hanging it:
+
+- The API returns `502 provider_start_failed` with the provider's real error and, on timeout, an actionable hint (on macOS this points at System Settings > Privacy & Security prompts, e.g. the Downloads folder or Full Disk Access). The Web New Session dialog shows this message.
+- The session is kept for diagnostics in the terminal `failed` state with a `provider.error` event; it can be inspected, archived, or left alone, but it never stays in `starting` and never leaves an orphaned provider process behind.
+
+Long-running requests such as `session/prompt` keep a separate 15-minute bound, since turns may legitimately run for many minutes.
+
 ## Data and Security
 
 The config lives at `$HOME/.agenthub/config.json` by default; session data and runtime state follow the operating system's user data directory. For each session:

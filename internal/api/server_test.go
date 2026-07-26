@@ -924,6 +924,46 @@ func TestCreateSessionPersistsCanonicalAgentName(t *testing.T) {
 	}
 }
 
+// When session creation fails at the provider, the API must surface the
+// real provider error and the session must end in a terminal failed state —
+// never stuck in starting.
+func TestCreateSessionProviderFailureSurfacesError(t *testing.T) {
+	server := newConfigTestServer(t)
+	body, _ := json.Marshal(map[string]any{"cwd": t.TempDir(), "agentName": "Pi Agent"})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+	var parsed struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details struct {
+				SessionID string `json:"sessionId"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Error.Code != "provider_start_failed" {
+		t.Fatalf("error code = %q", parsed.Error.Code)
+	}
+	if parsed.Error.Message == "" || parsed.Error.Message == "failed" {
+		t.Fatalf("error message must carry the provider cause: %q", parsed.Error.Message)
+	}
+	value := getSession(t, server, parsed.Error.Details.SessionID)
+	if value.State != session.StateFailed {
+		t.Fatalf("session state = %q, want failed", value.State)
+	}
+}
+
 // A deprecated agentId still resolves through the id → name mapping recorded
 // by the legacy config migration; the session is created with the name.
 func TestCreateSessionResolvesLegacyAgentID(t *testing.T) {

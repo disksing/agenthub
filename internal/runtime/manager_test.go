@@ -16,11 +16,16 @@ type fakeSession struct {
 	hooks    provider.Hooks
 	resumeID string
 	prompts  []string
+	startErr error
+	onClose  func()
 	mu       sync.Mutex
 }
 
 func (f *fakeSession) Start(resumeID string) error {
 	f.resumeID = resumeID
+	if f.startErr != nil {
+		return f.startErr
+	}
 	f.hooks.NativeID("native-session")
 	return nil
 }
@@ -34,7 +39,12 @@ func (f *fakeSession) Prompt(text string, _ bool) error {
 }
 func (f *fakeSession) Interrupt() error          { return nil }
 func (f *fakeSession) Approve(_, _ string) error { return nil }
-func (f *fakeSession) Close() error              { return nil }
+func (f *fakeSession) Close() error {
+	if f.onClose != nil {
+		f.onClose()
+	}
+	return nil
+}
 
 func testConfig() config.Config {
 	return config.Config{
@@ -119,6 +129,59 @@ func TestManagerRejectsUnknownAgent(t *testing.T) {
 	}
 	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "unknown agent") {
 		t.Fatalf("expected an unknown agent error, got %v", err)
+	}
+}
+
+// When the provider fails to start, the session must end in a terminal
+// failed state with a visible error event, the adapter must be closed (no
+// orphaned provider process), and the session must not stay registered as
+// running.
+func TestManagerStartFailureCleansUp(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	closed := false
+	startErr := errors.New("start Kimi Code ACP: session/new timed out after 2m0s waiting for the provider to respond")
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		return &fakeSession{hooks: options.Hooks, startErr: startErr, onClose: func() { closed = true }}, nil
+	}
+	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "session/new timed out") {
+		t.Fatalf("expected the provider start error, got %v", err)
+	}
+	if !closed {
+		t.Fatal("adapter was not closed after the failed start")
+	}
+	if manager.IsRunning(value.ID) {
+		t.Fatal("session is still registered as running")
+	}
+	got, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != session.StateFailed {
+		t.Fatalf("session state = %q, want failed", got.State)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	expected := []string{"session.created", "session.state", "session.state", "provider.error"}
+	if string(mustJSON(types)) != string(mustJSON(expected)) {
+		t.Fatalf("event types = %v", types)
+	}
+	// A failed session carries no active work and stays archivable.
+	if _, err := store.Archive(value.ID); err != nil {
+		t.Fatalf("failed session should be archivable: %v", err)
 	}
 }
 

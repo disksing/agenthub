@@ -64,6 +64,35 @@ func TestHelperProcess(t *testing.T) {
 			}
 			fmt.Printf(`{"id":%s,"type":"response","command":%q,"success":true,"data":%s}`+"\n", request.ID, request.Type, data)
 		}
+	case "acp", "acp-hang-session-new", "acp-init-error":
+		for scanner.Scan() {
+			var request struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &request) != nil || request.Method == "" || len(request.ID) == 0 {
+				continue
+			}
+			if mode == "acp-hang-session-new" && request.Method == "session/new" {
+				// Never respond: simulates a provider stuck inside session/new
+				// (the Kimi Code failure mode behind the session creation hang).
+				continue
+			}
+			if mode == "acp-init-error" && request.Method == "initialize" {
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"auth required: run the provider login flow"}}`+"\n", request.ID)
+				continue
+			}
+			var result json.RawMessage
+			switch request.Method {
+			case "initialize":
+				result = json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{}}}`)
+			case "session/new":
+				result = json.RawMessage(`{"sessionId":"session-test","configOptions":[{"id":"model","category":"model","currentValue":"kimi-code/k3","options":[{"value":"kimi-code/k3"}]},{"id":"mode","category":"mode","currentValue":"yolo","options":[{"value":"yolo"}]}]}`)
+			default:
+				result = json.RawMessage(`{}`)
+			}
+			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", request.ID, result)
+		}
 	case "sleep":
 		time.Sleep(time.Minute)
 	}

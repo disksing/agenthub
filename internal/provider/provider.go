@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +69,43 @@ func New(options Options) (Session, error) {
 type rpcResult struct {
 	data json.RawMessage
 	err  error
+}
+
+// defaultRequestTimeout bounds long-running provider requests such as
+// session/prompt, which may legitimately run for many minutes.
+const defaultRequestTimeout = 15 * time.Minute
+
+// startupRequestTimeout bounds the handshake requests that must complete
+// before a session becomes ready (initialize, session/new, thread/start,
+// and friends). A provider that cannot answer these is stuck — for example
+// blocked on an operating-system permission prompt while reading the
+// session working directory — and the session must fail fast with an
+// actionable error instead of hanging the create request.
+var startupRequestTimeout = 2 * time.Minute
+
+// RequestTimeoutError reports a provider that did not answer a JSON-RPC
+// request within the allowed time.
+type RequestTimeoutError struct {
+	Method  string
+	Timeout time.Duration
+}
+
+func (e *RequestTimeoutError) Error() string {
+	return fmt.Sprintf("%s timed out after %s waiting for the provider to respond", e.Method, e.Timeout)
+}
+
+// startRequestError wraps a handshake failure with the provider name and,
+// for timeouts, an actionable hint about the known stuck-provider causes.
+func startRequestError(providerName, method string, err error) error {
+	var timeoutErr *RequestTimeoutError
+	if errors.As(err, &timeoutErr) {
+		hint := "the provider process is running but did not respond; it may be stuck reading the session working directory"
+		if goruntime.GOOS == "darwin" {
+			hint += " — on macOS this happens when a privacy permission prompt (System Settings > Privacy & Security, e.g. the Downloads folder or Full Disk Access) is waiting for user approval"
+		}
+		return fmt.Errorf("start %s: %w: %s", providerName, err, hint)
+	}
+	return fmt.Errorf("start %s: %s failed: %w", providerName, method, err)
 }
 
 type jsonRPC struct {
@@ -138,6 +176,10 @@ func (r *jsonRPC) start() error {
 }
 
 func (r *jsonRPC) request(method string, params any) (json.RawMessage, error) {
+	return r.requestWithTimeout(method, params, defaultRequestTimeout)
+}
+
+func (r *jsonRPC) requestWithTimeout(method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -155,14 +197,19 @@ func (r *jsonRPC) request(method string, params any) (json.RawMessage, error) {
 		r.mu.Unlock()
 		return nil, err
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case result, ok := <-ch:
 		if !ok {
 			return nil, errors.New("provider exited before responding")
 		}
 		return result.data, result.err
-	case <-time.After(15 * time.Minute):
-		return nil, fmt.Errorf("%s timed out", method)
+	case <-timer.C:
+		r.mu.Lock()
+		delete(r.waiting, key)
+		r.mu.Unlock()
+		return nil, &RequestTimeoutError{Method: method, Timeout: timeout}
 	}
 }
 

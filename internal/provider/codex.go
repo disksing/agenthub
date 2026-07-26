@@ -28,7 +28,7 @@ func (c *codexSession) Start(resumeID string) error {
 	if err := c.rpc.start(); err != nil {
 		return fmt.Errorf("start Codex app-server: %w", err)
 	}
-	if _, err := c.rpc.request("initialize", map[string]any{
+	if _, err := c.startRequest("initialize", map[string]any{
 		"clientInfo":   map[string]any{"name": "agenthub", "title": "AgentHub", "version": "0.1.0"},
 		"capabilities": map[string]any{"experimentalApi": true},
 	}); err != nil {
@@ -56,7 +56,7 @@ func (c *codexSession) Start(resumeID string) error {
 		method = "thread/resume"
 		params["threadId"] = resumeID
 	}
-	result, err := c.rpc.request(method, params)
+	result, err := c.startRequest(method, params)
 	if err != nil {
 		return err
 	}
@@ -79,6 +79,16 @@ func (c *codexSession) Start(resumeID string) error {
 		c.options.Hooks.NativeID(c.thread)
 	}
 	return nil
+}
+
+// startRequest issues a handshake request bounded by the startup timeout,
+// so a stuck app-server fails session creation fast instead of hanging it.
+func (c *codexSession) startRequest(method string, params any) (json.RawMessage, error) {
+	raw, err := c.rpc.requestWithTimeout(method, params, startupRequestTimeout)
+	if err != nil {
+		return nil, startRequestError("Codex app-server", method, err)
+	}
+	return raw, nil
 }
 
 func (c *codexSession) Prompt(text string, steer bool) error {
@@ -141,7 +151,7 @@ type codexModel struct {
 // When the model catalog is unavailable or the target model is not listed,
 // the value is passed through untouched.
 func (c *codexSession) validateReasoningEffort(effort string) error {
-	raw, err := c.rpc.request("model/list", map[string]any{})
+	raw, err := c.startRequest("model/list", map[string]any{})
 	if err != nil {
 		c.rpc.emit("provider.warning", map[string]any{"message": "model/list unavailable, skipping reasoning_effort validation", "error": err.Error()})
 		return nil

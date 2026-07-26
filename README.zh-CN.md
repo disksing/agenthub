@@ -193,6 +193,15 @@ GET    /v1/sessions/{id}/events
 
 CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --all` 和 `agenthub session list --archived`；Web UI 提供带应用内确认框的 Archive 操作和“Archived Sessions”视图。
 
+### Provider 启动失败
+
+创建 Session 会同步启动 Provider：握手请求（`initialize`、`session/new` / `thread/start` 及其 resume/load 变体）必须在 2 分钟启动超时内应答。无法应答的 Provider——例如进程因操作系统挂起隐私授权弹窗而卡在读取 Session 工作目录上——会让创建请求快速失败而不是一直挂起：
+
+- API 返回 `502 provider_start_failed`，携带 Provider 的真实错误；超时时附带可操作的提示（在 macOS 上指向“系统设置 > 隐私与安全性”弹窗，例如“下载”文件夹或完全磁盘访问权限）。Web 新建 Session 窗口会显示该信息。
+- 失败 Session 保留用于诊断，进入终态 `failed` 并记录 `provider.error` 事件；可以查看、归档或忽略，但不会停留在 `starting`，也不会遗留孤儿 Provider 进程。
+
+`session/prompt` 等长请求使用单独的 15 分钟上限，因为一个 Turn 可能合理运行很久。
+
 ## 数据与安全
 
 配置默认位于 `$HOME/.agenthub/config.json`；Session 数据与运行状态仍遵循操作系统用户数据目录。每个 Session：

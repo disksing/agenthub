@@ -73,7 +73,7 @@ func (p *piSession) Start(resumeID string) error {
 		err := cmd.Wait()
 		p.finish(err)
 	}()
-	response, err := p.request("get_state", nil)
+	response, err := p.startRequest("get_state", nil)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,21 @@ func (p *piSession) Close() error {
 	return nil
 }
 
+// startRequest issues a handshake request bounded by the startup timeout,
+// so a stuck Pi process fails session creation fast instead of hanging it.
+func (p *piSession) startRequest(command string, fields map[string]any) (piResponse, error) {
+	response, err := p.requestWithTimeout(command, fields, startupRequestTimeout)
+	if err != nil {
+		return response, startRequestError("Pi Coding Agent", command, err)
+	}
+	return response, nil
+}
+
 func (p *piSession) request(command string, fields map[string]any) (piResponse, error) {
+	return p.requestWithTimeout(command, fields, defaultRequestTimeout)
+}
+
+func (p *piSession) requestWithTimeout(command string, fields map[string]any, timeout time.Duration) (piResponse, error) {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -142,17 +156,19 @@ func (p *piSession) request(command string, fields map[string]any) (piResponse, 
 		return piResponse{}, err
 	}
 	var response piResponse
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case value, ok := <-ch:
 		if !ok {
 			return piResponse{}, errors.New("Pi exited before responding")
 		}
 		response = value
-	case <-time.After(15 * time.Minute):
+	case <-timer.C:
 		p.mu.Lock()
 		delete(p.waiting, key)
 		p.mu.Unlock()
-		return piResponse{}, fmt.Errorf("Pi %s timed out", command)
+		return piResponse{}, &RequestTimeoutError{Method: command, Timeout: timeout}
 	}
 	if !response.Success {
 		return response, fmt.Errorf("Pi %s: %s", command, response.Error)

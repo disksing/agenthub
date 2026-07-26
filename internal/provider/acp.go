@@ -42,7 +42,7 @@ func (a *acpSession) Start(resumeID string) error {
 	if err := a.rpc.start(); err != nil {
 		return fmt.Errorf("start %s ACP: %w", a.options.Provider.Name, err)
 	}
-	result, err := a.rpc.request("initialize", map[string]any{
+	result, err := a.startRequest("initialize", map[string]any{
 		"protocolVersion": 1,
 		"clientCapabilities": map[string]any{
 			"fs":       map[string]any{"readTextFile": false, "writeTextFile": false},
@@ -80,7 +80,7 @@ func (a *acpSession) Start(resumeID string) error {
 			params["mcpServers"] = []any{}
 		}
 	}
-	raw, err := a.rpc.request(method, params)
+	raw, err := a.startRequest(method, params)
 	if err != nil {
 		return err
 	}
@@ -126,11 +126,25 @@ func (a *acpSession) configure(session acpSessionResult) error {
 		if !available {
 			return fmt.Errorf("%s %s %q is unavailable", a.options.Provider.Name, option.Category, value)
 		}
-		if _, err := a.rpc.request("session/set_config_option", map[string]any{"sessionId": session.SessionID, "configId": option.ID, "value": value}); err != nil {
+		if _, err := a.startRequest("session/set_config_option", map[string]any{"sessionId": session.SessionID, "configId": option.ID, "value": value}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// startRequest issues a handshake request that must complete before the
+// session can become ready. These requests use the bounded startup timeout:
+// a provider that never answers (observed with Kimi Code when the operating
+// system blocks its read of the session working directory on a pending
+// privacy permission prompt) must fail the session creation quickly with an
+// actionable error instead of hanging the API call.
+func (a *acpSession) startRequest(method string, params any) (json.RawMessage, error) {
+	raw, err := a.rpc.requestWithTimeout(method, params, startupRequestTimeout)
+	if err != nil {
+		return nil, startRequestError(a.options.Provider.Name+" ACP", method, err)
+	}
+	return raw, nil
 }
 
 func (a *acpSession) Prompt(text string, steer bool) error {
