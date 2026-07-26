@@ -45,6 +45,56 @@ func TestCodexTranslatesStreamingTurnAndApproval(t *testing.T) {
 	}
 }
 
+func TestCodexParsesModelList(t *testing.T) {
+	raw := json.RawMessage(`{"data":[{"id":"gpt-5.6-sol","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},{"id":"gpt-5.5","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}`)
+	models := parseCodexModels(raw)
+	if len(models) != 2 || !models[0].isDefault || models[0].id != "gpt-5.6-sol" {
+		t.Fatalf("unexpected models: %+v", models)
+	}
+	if len(models[0].efforts) != 2 || models[0].efforts[1] != "high" {
+		t.Fatalf("unexpected efforts: %+v", models[0].efforts)
+	}
+	if got := parseCodexModels(json.RawMessage(`null`)); len(got) != 0 {
+		t.Fatalf("expected no models, got %+v", got)
+	}
+}
+
+func TestCodexChecksReasoningEffort(t *testing.T) {
+	models := []codexModel{
+		{id: "gpt-5.6-sol", isDefault: true, efforts: []string{"low", "medium", "high"}},
+		{id: "gpt-5.5", efforts: []string{"medium"}},
+	}
+	if err := checkReasoningEffort("high", "", models); err != nil {
+		t.Fatalf("default model should accept high: %v", err)
+	}
+	if err := checkReasoningEffort("medium", "gpt-5.5", models); err != nil {
+		t.Fatalf("requested model should accept medium: %v", err)
+	}
+	err := checkReasoningEffort("bogus", "gpt-5.6-sol", models)
+	if err == nil || !strings.Contains(err.Error(), "low, medium, high") {
+		t.Fatalf("expected supported values in error, got %v", err)
+	}
+	if err := checkReasoningEffort("bogus", "unknown-model", models); err != nil {
+		t.Fatalf("unknown model should pass through: %v", err)
+	}
+	if err := checkReasoningEffort("bogus", "", nil); err != nil {
+		t.Fatalf("empty catalog should pass through: %v", err)
+	}
+}
+
+func TestCodexChecksReasoningEffortEcho(t *testing.T) {
+	if err := checkReasoningEffortEcho(json.RawMessage(`{"reasoningEffort":"high"}`), "high"); err != nil {
+		t.Fatalf("matching echo should pass: %v", err)
+	}
+	if err := checkReasoningEffortEcho(json.RawMessage(`{"model":"gpt-5.6-sol"}`), "high"); err != nil {
+		t.Fatalf("missing echo should pass: %v", err)
+	}
+	err := checkReasoningEffortEcho(json.RawMessage(`{"reasoningEffort":"medium"}`), "high")
+	if err == nil || !strings.Contains(err.Error(), "medium") {
+		t.Fatalf("expected echo mismatch error, got %v", err)
+	}
+}
+
 func TestACPTranslatesMessageAndPermission(t *testing.T) {
 	var events []Event
 	var approvalID string

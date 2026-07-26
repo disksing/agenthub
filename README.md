@@ -123,6 +123,8 @@ On first startup, if the config does not exist, AgentHub generates its own minim
 
 A provider wraps a local agent runtime or protocol; an agent references one provider and holds its concrete launch options. Every session is created with an explicit agent ID (`POST /v1/sessions` requires `agentId`, and the CLI requires `--agent`); an unknown, missing, or disabled-provider agent fails with a clear error instead of being routed elsewhere.
 
+Codex agents accept the options `model`, `sandbox`, `approval`, and `reasoning_effort`. `reasoning_effort` controls the Codex reasoning ("thinking") effort: it is sent as the `model_reasoning_effort` config override on `thread/start` and `thread/resume`, and the daemon validates the value against the efforts the selected model advertises via `model/list` (for example `low`, `medium`, `high`, `xhigh`; some models add `max` and `ultra`). An unsupported value fails session creation with the list of valid values; an empty value inherits the Codex default.
+
 The Web UI's **Settings** panel is the recommended way to edit this configuration. It provides structured, validated forms for providers and agents, along with provider command availability probes. All changes go through the daemon API (`PUT /v1/config`), which remains the only writer of the config file — no manual JSON editing is required.
 
 ### Migrating Older Configs
