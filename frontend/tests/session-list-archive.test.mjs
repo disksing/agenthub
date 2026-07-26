@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -68,4 +68,39 @@ test("list archive button is hover/focus revealed without layout shifts", async 
   assert.match(css, /\.session-row-archive:focus-visible/);
   // Hover-less devices keep a visible entry point on the selected row.
   assert.match(css, /@media \(hover: none\) \{\s*\.session-row\.active \.session-row-archive/);
+});
+
+// Regression guards: the details panel must not offer a second archive entry
+// point. The hover/focus list button is the only archive action in the UI.
+test("details panel has no archive button, dialog or dedicated handler", async () => {
+  const app = await readFile(path.join(srcRoot, "App.jsx"), "utf8");
+  // No details-panel archive button, confirm dialog or modal import.
+  assert.equal(app.includes("ArchiveConfirmModal"), false, "App.jsx still wires the archive confirm dialog");
+  assert.equal(app.includes("openArchiveConfirm"), false, "App.jsx still has the details archive handler");
+  assert.equal(app.includes("archive-button"), false, "details panel still renders an archive button");
+  assert.equal(app.includes("Archive Session"), false, "details panel still shows an Archive Session label");
+  // The details aside keeps only the informational read-only note for
+  // already-archived sessions; it is not an action.
+  const details = app.slice(app.indexOf('<aside className="details">'));
+  assert.equal(/aria-label="[^"]*[Aa]rchive/.test(details), false, "details panel still exposes an archive action");
+  const archiveRow = details.slice(details.indexOf("archive-row"));
+  assert.equal(archiveRow.includes("<button"), false, "archive row should only hold the read-only note");
+  assert.match(details, /className="archived-note"/);
+});
+
+test("archive confirm dialog component is deleted", async () => {
+  await assert.rejects(
+    access(path.join(srcRoot, "ArchiveConfirmModal.jsx")),
+    (error) => error?.code === "ENOENT",
+    "ArchiveConfirmModal.jsx should be removed",
+  );
+});
+
+test("details-only archive styles are removed, shared note styles stay", async () => {
+  const css = await readFile(path.join(srcRoot, "styles.css"), "utf8");
+  for (const removed of [".archive-button", ".archive-hint", ".confirm-dialog"]) {
+    assert.equal(css.includes(removed), false, `styles.css still defines ${removed}`);
+  }
+  assert.match(css, /\.archived-note \{/);
+  assert.match(css, /\.session-row-archive \{/);
 });
