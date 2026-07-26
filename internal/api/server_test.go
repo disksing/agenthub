@@ -747,6 +747,25 @@ func TestSSEStopsImmediatelyAfterSubscriberOverflow(t *testing.T) {
 	if len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
 		t.Fatalf("overflowed connection continued sending buffered events: %v", ids)
 	}
+
+	// Reconnect from the last contiguous id. The missing tail comes from the
+	// durable log, not the discarded in-memory subscriber queue.
+	resume := newSSERecorder(257, 0)
+	resumeCtx, resumeCancel := context.WithCancel(context.Background())
+	resumeRequest := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/sessions/"+created.ID+"/events?stream=true&after=2",
+		nil,
+	).WithContext(resumeCtx)
+	resumeDone := make(chan struct{})
+	go func() {
+		New(store, "test", time.Now()).events(resume, resumeRequest, created.ID)
+		close(resumeDone)
+	}()
+	waitClosed(t, resume.reached, "overflow reconnect replay")
+	resumeCancel()
+	waitClosed(t, resumeDone, "overflow reconnect handler")
+	assertContiguousIDs(t, resume.IDs(), 3, 259)
 }
 
 func TestEventsRecoverAfterStoreRestart(t *testing.T) {
