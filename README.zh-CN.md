@@ -15,7 +15,8 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
   - Pi JSONL RPC，包括 Kimi K3 与 Grok 等模型
 - Session 创建、聊天、steer、interrupt、stop、resume、archive 和 approval。
 - daemon 重启后按需恢复 provider 原生 session/thread。
-- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及包含四个内置 Provider 开关和结构化 Agent 表单的设置界面。
+- 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及包含四个内置 Provider 开关、结构化 Agent 表单和按 Provider 加载的模型下拉框的设置界面。
+- Provider 模型枚举：每个内置 Provider 都能通过各自的官方接口报告当前可用模型，统一为一个只读 API。
 - CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
 - 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
 
@@ -128,6 +129,19 @@ Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provid
 
 Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` 中 `available: false` 并附原因），不会出现在新建 Session 的选择中；即使绕过 Web UI 直接调用 API，daemon 也会拒绝用这些 Agent 创建或恢复 Session。停用不会中断已经在运行的 Session，既有 Session 历史仍可查看。
 
+### 模型枚举
+
+每个内置 Provider 都可以通过各自的官方接口报告本机当前可用的模型——不创建 Provider Session，也不写入 Provider 配置：
+
+- Codex：app-server 的 `model/list` 请求（按账号过滤，含展示名、默认标记和隐藏模型过滤）。
+- Kimi：`kimi provider list --json`（已配置的模型注册表，含展示名）。
+- Pi：`--no-session` 模式下的 RPC `get_available_models` 命令（覆盖所有已配置上游；会标记 Pi 默认使用的模型）。
+- OpenCode：`opencode models --verbose`（已配置 Provider 及 OpenCode Zen 免费模型，含展示名）。
+
+`GET /v1/providers/{id}/models` 把四方统一为 `{ "provider": {...}, "models": [{ "id", "label", "default" }] }`，其中 `id` 就是可直接写入 Agent `model` 选项的值。结果按 ID 去重、保持 Provider 原有顺序，带短期缓存（成功 5 分钟、失败 15 秒）与并发去重，并在每次配置变更（整体保存或 Provider 开关）时失效。失败按类别区分，便于客户端分别展示：`404 unknown_provider`、`409 provider_disabled`、`503 provider_unavailable`（CLI 缺失或无法启动）、`504 provider_timeout`、`502 provider_error`（上游或解析失败）；空列表是成功的 `200` 并返回 `"models": []`。该端点是只读的：不创建 Provider Session，也不修改配置。
+
+在 Web 设置中，Agent 的 **Model** 字段是由该端点加载的下拉框，不再是自由文本输入：先选择 Provider，再选择模型。空的“Provider default”选项表示不设置 `model` 选项。已保存但当前列表中不存在的模型会保留为明确的“saved, not currently listed”选项，直到用户主动更换；加载、重试、空列表和 Provider 停用状态都会内联展示。
+
 ### 旧配置迁移
 
 早期版本支持 agent profile、基于 tag 的路由和 `defaultChatAgentId` 回退，这些能力已移除：Session 现在始终显式指定 Agent。仍含有遗留 `agentProfiles` 或 `defaultChatAgentId` 键的配置文件可以继续使用——这些键在读取时被忽略，daemon 启动时会把配置文件一次性重写为不含这些键的形式。Provider 和 Agent 数据原样保留。在此变更之前记录的 Session 只要已确定 Agent 就仍可查看和恢复；从未启动过（因而没有 Agent）的旧 Session 会返回明确错误，而不会猜测到某个已配置的 Agent 上。
@@ -152,6 +166,7 @@ GET    /v1/status
 GET    /v1/config
 PUT    /v1/config
 GET    /v1/agents
+GET    /v1/providers/{id}/models
 
 POST   /v1/sessions
 GET    /v1/sessions

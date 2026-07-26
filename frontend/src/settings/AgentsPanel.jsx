@@ -4,6 +4,7 @@ import {
   normalizeAgentOptions, providerOptionSchema, summarizeOptions, uniqueAgentName,
 } from "./configModel";
 import { Field, fieldError } from "./fields";
+import { ModelSelect } from "./ModelSelect";
 
 // AgentsPanel edits the agents of the settings draft. Agents are identified
 // by their unique name only; there is no separate id field. React list keys
@@ -145,7 +146,15 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
                 </Field>
                 {providerOptionSchema(provider?.type || "").map((field) => (
                   <Field key={field.key} label={field.label} htmlFor={`${base}-option-${field.key}`}>
-                    {field.kind === "enum" ? (
+                    {field.kind === "model" ? (
+                      <ModelSelect
+                        id={`${base}-option-${field.key}`}
+                        providerId={agent.providerId}
+                        providerEnabled={Boolean(provider?.enabled)}
+                        value={agent.options?.[field.key] || ""}
+                        onChange={(next) => changeOption(index, field.key, next)}
+                      />
+                    ) : field.kind === "enum" ? (
                       <select
                         id={`${base}-option-${field.key}`}
                         className="settings-select"

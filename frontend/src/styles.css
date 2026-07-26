@@ -590,6 +590,36 @@ select {
   border-color: var(--teal);
 }
 
+.settings-model {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-model-row .settings-select {
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.settings-model-status {
+  margin: 0;
+  color: #5a6365;
+  font-size: 12px;
+}
+
+.settings-model-status-error {
+  color: #8f2f24;
+}
+
 .settings-switch {
   display: flex;
   align-items: center;
