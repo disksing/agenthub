@@ -83,6 +83,11 @@ A session object looks like:
   "cwd": "/path/to/project",
   "agentName": "Codex",
   "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
+  "source": {
+    "app": "forge",
+    "instanceId": "mac-mini",
+    "externalId": "project7.task26"
+  },
   "provider": "codex",
   "providerSessionId": "thread_abc123",
   "state": "ready",
@@ -95,12 +100,15 @@ A session object looks like:
 ```
 
 `state` is one of `starting`, `ready`, `busy`, `waiting_approval`,
-`stopped`, `failed` or `archived`. Optional fields (`agentName`, `provider`,
-`launchEnvironment`, `providerSessionId`, `currentTurnId`,
-`pendingApprovalIds`) are omitted when empty. `launchEnvironment` is durable
-session data and may be visible to any client that can read the session or
-its events. `lastEventId` is the id of the newest event in the session log and
-doubles as the resume cursor for the events endpoint.
+`stopped`, `failed` or `archived`. Optional fields (`agentName`, `source`,
+`launchEnvironment`, `provider`, `providerSessionId`, `currentTurnId`,
+`pendingApprovalIds`) are omitted when absent. `source` is unverified,
+caller-supplied correlation metadata; AgentHub does not register source
+applications, reserve names, authenticate the values, or require them to be
+unique. `launchEnvironment` is durable session data and may be visible to any
+client that can read the session or its events. `lastEventId` is the id of the
+newest event in the session log and doubles as the resume cursor for the
+events endpoint.
 
 ### Agents and providers
 
@@ -134,6 +142,7 @@ present on events that belong to a turn. Core event types:
 
 | Type | `data` payload | Meaning |
 | --- | --- | --- |
+| `session.created` | session object | The initial session snapshot, including caller-supplied `source` when present. |
 | `session.state` | `{"state": "..."}` | Session state transition (see states above). |
 | `session.provider` | `{"agentName", "provider", "providerSessionId"}` | The provider-native session/thread id was established; used for resume. |
 | `session.agent` | `{"agentName"}` | The configured agent was renamed; the session now references the new name. |
@@ -333,12 +342,20 @@ default.
   - `archived=true` — list only archived sessions.
   - `state=<state>[,<state>...]` — keep only sessions in one of the given
     states (see [Sessions](#sessions)).
+  - `sourceApp=<value>` — exact, case-sensitive `source.app` match.
+  - `sourceInstanceId=<value>` — exact, case-sensitive
+    `source.instanceId` match.
+  - `sourceExternalId=<value>` — exact, case-sensitive
+    `source.externalId` match.
+    Source filters can be combined with each other and with archive and state
+    filters. Sessions created without `source` never match a source filter.
 - **Success `200`:** `{"sessions": [...]}` — an array of session objects.
 
 ```bash
 curl -s "$BASE/v1/sessions"
 curl -s "$BASE/v1/sessions?archived=true"
 curl -s "$BASE/v1/sessions?state=busy,waiting_approval"
+curl -s "$BASE/v1/sessions?sourceApp=forge&sourceInstanceId=mac-mini&state=ready"
 ```
 
 ### POST /v1/sessions
@@ -355,6 +372,11 @@ turn before the response returns.
   "cwd": "/path/to/project",
   "agentName": "Codex",
   "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
+  "source": {
+    "app": "forge",
+    "instanceId": "mac-mini",
+    "externalId": "project7.task26"
+  },
   "initialMessage": {"text": "Reproduce the failure first."}
 }
 ```
@@ -366,6 +388,12 @@ turn before the response returns.
   - `cwd` (required) — working directory for the agent; must exist and be a
     directory (symlinks are resolved).
   - `title` (optional) — display title.
+  - `source` (optional) — caller-supplied correlation metadata containing
+    optional string fields `app`, `instanceId`, and `externalId`. The values
+    are stored verbatim in `session.created`, survive event replay, and are
+    returned by session GET/list responses. They are not authenticated or
+    unique: any client may submit any values, and duplicate values are
+    allowed.
   - `launchEnvironment` (optional) — string-to-string environment overrides
     for this session's provider process. Session values override daemon
     variables with the same name. Codex also receives every entry as a
@@ -404,6 +432,11 @@ curl -s -X POST "$BASE/v1/sessions" \
     "cwd": "/path/to/project",
     "agentName": "Codex",
     "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
+    "source": {
+      "app": "forge",
+      "instanceId": "mac-mini",
+      "externalId": "project7.task26"
+    },
     "initialMessage": {"text": "Reproduce the failure first."}
   }'
 ```
