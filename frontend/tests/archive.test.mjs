@@ -48,10 +48,10 @@ test("sessionsQuery hides archived sessions by default", () => {
   assert.equal(sessionsQuery(true), "/v1/sessions?archived=true");
 });
 
-// The archive confirmation must be an in-app dialog; browser-native
-// confirm()/prompt() are banned from the production UI sources.
+// Archiving a session requires no confirmation, so browser-native
+// confirm()/prompt() stay banned from the production UI sources.
 test("UI sources use no browser-native confirm or prompt", async () => {
-  for (const file of ["App.jsx", "ArchiveConfirmModal.jsx"]) {
+  for (const file of ["App.jsx"]) {
     const content = await readFile(path.join(srcRoot, file), "utf8");
     assert.equal(/\bwindow\.(confirm|prompt|alert)\s*\(/.test(content), false, `${file} uses a native dialog`);
     assert.equal(/[^.\w](confirm|prompt|alert)\s*\(/.test(content), false, `${file} calls a native dialog`);

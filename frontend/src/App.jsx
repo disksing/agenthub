@@ -8,17 +8,12 @@ import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pick
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
-import { ArchiveConfirmModal } from "./ArchiveConfirmModal.jsx";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
 
 export function App() {
   const [sessions, setSessions] = useState([]);
   const [archivedSessions, setArchivedSessions] = useState([]);
   const [archivedView, setArchivedView] = useState(false);
-  const [archiveTarget, setArchiveTarget] = useState(null);
-  const [archiving, setArchiving] = useState(false);
-  const [archiveError, setArchiveError] = useState("");
-  const archiveTriggerRef = useRef(null);
   // Per-session pending set for the inline list archive button: only the
   // clicked row is busy/disabled, and duplicate submissions are blocked.
   const [listArchivingIds, setListArchivingIds] = useState(() => new Set());
@@ -163,32 +158,9 @@ export function App() {
     } catch (value) { setError(value.message); }
   };
 
-  const openArchiveConfirm = () => {
-    if (!activeSession || !isArchivable(activeSession)) return;
-    setArchiveError("");
-    setArchiveTarget(activeSession);
-  };
-
-  const confirmArchive = async () => {
-    if (!archiveTarget || archiving) return;
-    setArchiving(true);
-    setArchiveError("");
-    try {
-      await api(`/v1/sessions/${archiveTarget.id}`, { method: "DELETE", body: "{}" });
-      setArchiveTarget(null);
-      // Refresh both lists: the session leaves the default list and appears
-      // in the archived view.
-      await Promise.all([refreshSessions(), refreshArchivedSessions()]);
-    } catch (value) {
-      setArchiveError(value.message || "Failed to archive the session");
-    } finally {
-      setArchiving(false);
-    }
-  };
-
   // archiveFromList is the one-click archive offered on hover/focus inside
-  // the default session list. It uses the same daemon archive API as the
-  // details panel but skips the confirmation dialog by design.
+  // the default session list; it is the only archive entry point in the UI.
+  // It calls the daemon archive API directly, with no confirmation dialog.
   const archiveFromList = async (session) => {
     if (!session || archivedView || !isArchivable(session)) return;
     if (listArchivingIds.has(session.id)) return;
@@ -323,30 +295,12 @@ export function App() {
           <button className="icon-button" aria-label="Copy session ID" title="Copy session ID" onClick={async () => { await navigator.clipboard?.writeText(activeSession?.id || ""); setCopied(true); setTimeout(() => setCopied(false), 1000); }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button>
         </div>
         <div className="detail-row"><div><span className="detail-label">Provider session ID</span><code>{activeSession?.providerSessionId || "—"}</code></div></div>
-        {activeSession && (
+        {activeSession && isArchived(activeSession) && (
           <div className="detail-row archive-row">
-            {isArchived(activeSession) ? (
-              <p className="archived-note">
-                <Archive size={16} />This session is archived and read-only. Its files live in{" "}
-                <code>sessions/Archive/{activeSession.id}/</code>.
-              </p>
-            ) : (
-              <>
-                <button
-                  className="settings-button archive-button"
-                  ref={archiveTriggerRef}
-                  onClick={openArchiveConfirm}
-                  disabled={!isArchivable(activeSession)}
-                  title={archiveDisabledReason(activeSession) || "Move this session to the archive"}
-                  aria-disabled={!isArchivable(activeSession)}
-                >
-                  <Archive size={17} />Archive Session
-                </button>
-                {!isArchivable(activeSession) && (
-                  <span className="archive-hint">{archiveDisabledReason(activeSession)}</span>
-                )}
-              </>
-            )}
+            <p className="archived-note">
+              <Archive size={16} />This session is archived and read-only. Its files live in{" "}
+              <code>sessions/Archive/{activeSession.id}/</code>.
+            </p>
           </div>
         )}
       </aside>
@@ -356,17 +310,6 @@ export function App() {
           triggerRef={settingsTriggerRef}
           onClose={() => setSettingsOpen(false)}
           onSaved={() => loadAgents().catch(() => {})}
-        />
-      )}
-
-      {archiveTarget && (
-        <ArchiveConfirmModal
-          session={archiveTarget}
-          submitting={archiving}
-          error={archiveError}
-          onConfirm={confirmArchive}
-          onClose={() => { if (!archiving) setArchiveTarget(null); }}
-          triggerRef={archiveTriggerRef}
         />
       )}
 

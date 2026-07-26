@@ -1793,36 +1793,6 @@ details[open] > summary > .note-chevron {
   font-size: 13px;
 }
 
-.confirm-dialog {
-  display: flex;
-  flex-direction: column;
-  width: min(520px, 96vw);
-  max-height: min(720px, 92vh);
-  overflow: hidden;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 20px 70px rgb(0 0 0 / 20%);
-  outline: none;
-}
-
-.confirm-dialog :focus-visible {
-  outline: 2px solid var(--teal);
-  outline-offset: 1px;
-}
-
-.confirm-dialog-body {
-  padding: 14px 22px;
-  display: grid;
-  gap: 10px;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.confirm-dialog-body p {
-  margin: 0;
-}
-
-.confirm-dialog-body code,
 .archived-note code {
   padding: 1px 5px;
   border-radius: 5px;
@@ -1834,19 +1804,6 @@ details[open] > summary > .note-chevron {
 .archive-row {
   display: grid;
   gap: 8px;
-}
-
-.archive-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-}
-
-.archive-hint {
-  color: #7b8586;
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .archived-note {

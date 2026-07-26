@@ -1,6 +1,5 @@
-// Archive helpers shared by the session list, the details panel and the
-// archive confirmation dialog. Kept free of React so the node test runner
-// can exercise the rules directly.
+// Archive helpers shared by the session list and the details panel. Kept
+// free of React so the node test runner can exercise the rules directly.
 
 export const ARCHIVED_STATE = "archived";
 
