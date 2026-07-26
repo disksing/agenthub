@@ -157,7 +157,7 @@ Command discovery order: the provider's `command`, `AGENTHUB_*_CLI`, then `PATH`
 - `AGENTHUB_KIMI_CLI`
 - `AGENTHUB_PI_CLI`
 
-`AGENTHUB_HOME=/path` isolates all config, data, and runtime state into a single directory; the config file then lives at `/path/config/config.json`, which is useful for testing.
+`AGENTHUB_HOME=/path` isolates all config, data, and runtime state into a single directory; the config file then lives at `/path/config/config.json`, which is useful for testing. An isolated layout is explicit: it is never rewritten or migrated by the daemon.
 
 ## API
 
@@ -207,16 +207,37 @@ Long-running requests such as `session/prompt` keep a separate 15-minute bound, 
 
 ## Data and Security
 
-The config lives at `$HOME/.agenthub/config.json` by default; session data and runtime state follow the operating system's user data directory. For each session:
+All persistent user data lives under a single root, `$HOME/.agenthub`:
 
 ```text
-sessions/<session-id>/
-  session.json
-  events.jsonl
-sessions/Archive/<session-id>/   (archived sessions, same files)
+~/.agenthub/
+├── config.json                 (providers and agents)
+├── legacy-agent-names.json     (only after a legacy config migration)
+├── migration.json              (data-layout migration journal)
+├── sessions/<session-id>/
+│     session.json
+│     events.jsonl
+├── sessions/Archive/<session-id>/   (archived sessions, same files)
+├── logs/                       (service stdout/stderr when installed as a service)
+├── server.json                 (transient daemon endpoint discovery)
+└── server.lock                 (transient single-daemon lock)
 ```
 
-`events.jsonl` is the single source of truth, and `session.json` is a rebuildable projection. Writes use append + fsync; snapshots use a temporary file + fsync + rename. Truncated trailing log lines are repaired at startup. The archive is a plain directory move inside the same store: if the daemon stops between the archived event and the move, startup completes the move, so the physical location always matches the event log.
+`events.jsonl` is the single source of truth, and `session.json` is a rebuildable projection. Writes use append + fsync; snapshots use a temporary file + fsync + rename. Truncated trailing log lines are repaired at startup. The archive is a plain directory move inside the same store: if the daemon stops between the archived event and the move, startup completes the move, so the physical location always matches the event log. Directories are created `0700` and sensitive files `0600`.
+
+`agenthub status` (and `GET /v1/status`) reports the effective config, session store, archive and logs paths, so you can confirm the layout after an upgrade.
+
+### Data Layout Migration
+
+Versions before the unification stored sessions under the operating system's user data directory (`~/Library/Application Support/agenthub` on macOS) and service logs under `~/Library/Logs/AgentHub`. On first start, a current daemon automatically migrates that legacy data into `~/.agenthub` before opening the session store:
+
+- Session directories (active and archived) move with all files, permissions and hierarchy intact — provider-native session/thread ids and agent-name mappings keep working, so migrated sessions stay readable, resumable and archivable. Same-filesystem moves use atomic renames; cross-filesystem moves go through a verified staging copy and the old data is removed only after every entry is verified.
+- Service log files move into `~/.agenthub/logs/`; if a name is already taken there, the legacy file is kept as a `<name>.migrated-<timestamp>` backup instead of overwriting the live log.
+- A journal at `~/.agenthub/migration.json` records each phase (paths and counts only, never session contents), so an interrupted migration is completed or safely restarted on the next launch, and a finished migration is idempotent.
+- If both the legacy and the new session store contain sessions, the daemon refuses to start and reports the conflicting session ids. AgentHub never merges, overwrites or picks a winner: stop the daemon, inspect both directories, remove or move aside the side you do not need, then start again.
+- An explicit `AGENTHUB_HOME` layout is never migrated; it keeps its own `config/`, `data/`, `state/` subdirectories exactly as chosen.
+
+After a successful migration the legacy store is no longer a data source: stale `server.json`/`server.lock` there are removed and the emptied legacy directories are deleted. When a service manager (for example the macOS LaunchAgent) still points its `StandardOutPath`/`StandardErrorPath` at the old logs directory, update it to `~/.agenthub/logs/` so new daemon output lands in the unified location.
 
 The no-authentication mode is only suitable for the local machine and trusted networks: it listens on loopback only by default, sends no permissive CORS headers, rejects cross-origin browser write requests, and verifies that the request Host points to a local address.
 

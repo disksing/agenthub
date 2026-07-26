@@ -154,7 +154,7 @@ Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` �
 - `AGENTHUB_OPENCODE_CLI`
 - `AGENTHUB_KIMI_CLI`
 - `AGENTHUB_PI_CLI`
-`AGENTHUB_HOME=/path` 可把配置、数据和 runtime 状态全部隔离到一个目录，配置文件此时位于 `/path/config/config.json`，适合测试。
+`AGENTHUB_HOME=/path` 可把配置、数据和 runtime 状态全部隔离到一个目录，配置文件此时位于 `/path/config/config.json`，适合测试。隔离布局是显式选择，daemon 不会改写或迁移它。
 
 ## API
 
@@ -204,16 +204,37 @@ CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --a
 
 ## 数据与安全
 
-配置默认位于 `$HOME/.agenthub/config.json`；Session 数据与运行状态仍遵循操作系统用户数据目录。每个 Session：
+所有用户持久数据统一存放在 `$HOME/.agenthub`：
 
 ```text
-sessions/<session-id>/
-  session.json
-  events.jsonl
-sessions/Archive/<session-id>/   （归档 Session，文件相同）
+~/.agenthub/
+├── config.json                 （provider 与 agent 配置）
+├── legacy-agent-names.json     （仅在旧配置迁移后存在）
+├── migration.json              （数据布局迁移 journal）
+├── sessions/<session-id>/
+│     session.json
+│     events.jsonl
+├── sessions/Archive/<session-id>/   （归档 Session，文件相同）
+├── logs/                       （以服务方式安装后的 stdout/stderr 日志）
+├── server.json                 （临时 daemon 端点发现）
+└── server.lock                 （临时单 daemon 锁）
 ```
 
-`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。
+`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。目录默认 `0700`，敏感文件默认 `0600`。
+
+`agenthub status`（以及 `GET /v1/status`）会报告当前生效的配置、Session Store、归档与日志路径，便于升级后确认布局。
+
+### 数据布局迁移
+
+统一之前的版本把 Session 存放在操作系统用户数据目录（macOS 为 `~/Library/Application Support/agenthub`），服务日志存放在 `~/Library/Logs/AgentHub`。当前版本的 daemon 首次启动时会在打开 Session Store 之前自动完成迁移：
+
+- Session 目录（活动与归档）整体迁移，文件内容、权限与层级不变——provider 原生 session/thread id 与 agent 名称映射保持有效，迁移后的 Session 可读、可恢复、可归档。同一文件系统使用原子 rename；跨文件系统经过 staging 逐项校验复制，全部校验通过后才删除旧数据。
+- 服务日志迁入 `~/.agenthub/logs/`；目标名已被占用时，旧文件保留为 `<name>.migrated-<时间戳>` 备份，绝不覆盖仍在写入的日志。
+- `~/.agenthub/migration.json` journal 记录各迁移阶段（只含路径与计数，不含 Session 内容），中断的迁移可在下次启动时续跑或安全重来，已完成的迁移幂等。
+- 如果新旧 Session Store 同时含有 Session，daemon 拒绝启动并报告冲突的 Session id。AgentHub 绝不合并、覆盖或二选一：停止 daemon，人工检查两个目录，移除或移开不需要的一侧后再启动。
+- 显式的 `AGENTHUB_HOME` 隔离布局永不迁移，保持其自选的 `config/`、`data/`、`state/` 子目录结构。
+
+迁移成功后旧 Store 不再是数据来源：其中陈旧的 `server.json`/`server.lock` 会被删除，腾空的旧目录会被移除。如果服务管理器（例如 macOS LaunchAgent）的 `StandardOutPath`/`StandardErrorPath` 仍指向旧日志目录，请更新为 `~/.agenthub/logs/`，使新 daemon 输出落入统一位置。
 
 无鉴权模式只适合本机和可信网络：默认仅监听 loopback，不发送 CORS 许可，拒绝跨 origin 的浏览器写请求，并校验请求 Host 必须指向本机地址。
 

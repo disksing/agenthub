@@ -1119,3 +1119,46 @@ func getSession(t *testing.T, server *httptest.Server, id string) session.Sessio
 	}
 	return body.Session
 }
+
+func TestStatusReportsUnifiedDataPaths(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{
+		ConfigPath: filepath.Join(root, "config.json"),
+		LogsDir:    filepath.Join(root, "logs"),
+	}).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/v1/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+	var body struct {
+		Paths map[string]string `json:"paths"`
+		Store map[string]any    `json:"sessionStore"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"config":   filepath.Join(root, "config.json"),
+		"sessions": filepath.Join(root, "sessions"),
+		"archive":  filepath.Join(root, "sessions", "Archive"),
+		"logs":     filepath.Join(root, "logs"),
+	}
+	for key, value := range want {
+		if body.Paths[key] != value {
+			t.Errorf("paths.%s = %q, want %q", key, body.Paths[key], value)
+		}
+	}
+	if body.Store["path"] != want["sessions"] || body.Store["archivePath"] != want["archive"] {
+		t.Errorf("sessionStore = %+v", body.Store)
+	}
+}
