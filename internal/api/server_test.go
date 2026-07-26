@@ -721,3 +721,159 @@ func TestArchivedSessionRejectsWrites(t *testing.T) {
 		}
 	}
 }
+
+// newToggleTestServer starts a daemon whose config holds a single built-in
+// provider (pi) with a custom command and one agent bound to it.
+func newToggleTestServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := session.Open(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Version:        1,
+		AgentProviders: []config.Provider{{ID: "pi", Name: "Pi Coding Agent", Type: "pi", Enabled: true, Command: "missing-test-command"}},
+		Agents:         []config.Agent{{ID: "agent", Name: "Pi Agent", ProviderID: "pi"}},
+	}
+	configPath := filepath.Join(root, "config.json")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	manager := runtime.New(store, cfg)
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager, ConfigPath: configPath}).Handler())
+	t.Cleanup(server.Close)
+	return server, configPath
+}
+
+func toggleProvider(t *testing.T, server *httptest.Server, id, body string) (int, map[string]any) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPut, server.URL+"/v1/config/providers/"+id, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var parsed map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode, parsed
+}
+
+func getAgents(t *testing.T, server *httptest.Server) []map[string]any {
+	t.Helper()
+	response, err := http.Get(server.URL + "/v1/agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var body struct {
+		Agents []map[string]any `json:"agents"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Agents
+}
+
+func TestToggleProviderDisableEnableRoundTrip(t *testing.T) {
+	server, configPath := newToggleTestServer(t)
+
+	// Disable: only the flag flips, the custom command is preserved, and the
+	// change is persisted to disk.
+	status, body := toggleProvider(t, server, "pi", `{"enabled": false}`)
+	if status != http.StatusOK {
+		t.Fatalf("disable: status = %d, body = %v", status, body)
+	}
+	provider := body["provider"].(map[string]any)
+	if provider["enabled"] != false || provider["command"] != "missing-test-command" {
+		t.Fatalf("disable lost the underlying configuration: %v", provider)
+	}
+	onDisk, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.AgentProviders[0].Enabled || onDisk.AgentProviders[0].Command != "missing-test-command" {
+		t.Fatalf("toggle was not persisted: %+v", onDisk.AgentProviders[0])
+	}
+
+	// The agent of a disabled provider is reported unavailable and new
+	// sessions naming it are rejected even when the client bypasses the UI.
+	agents := getAgents(t, server)
+	if len(agents) != 1 || agents[0]["available"] != false || agents[0]["unavailableReason"] == nil {
+		t.Fatalf("agent of disabled provider should be unavailable: %v", agents)
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(
+		`{"cwd":"`+t.TempDir()+`","agentId":"agent"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var created map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusUnprocessableEntity || created["error"].(map[string]any)["code"] != "invalid_agent" {
+		t.Fatalf("session creation with a disabled provider: status = %d, body = %v", response.StatusCode, created)
+	}
+
+	// Re-enable restores availability without losing the command.
+	status, body = toggleProvider(t, server, "pi", `{"enabled": true}`)
+	if status != http.StatusOK {
+		t.Fatalf("enable: status = %d, body = %v", status, body)
+	}
+	provider = body["provider"].(map[string]any)
+	if provider["enabled"] != true || provider["command"] != "missing-test-command" {
+		t.Fatalf("enable lost the underlying configuration: %v", provider)
+	}
+	agents = getAgents(t, server)
+	if len(agents) != 1 || agents[0]["available"] != true {
+		t.Fatalf("agent of re-enabled provider should be available: %v", agents)
+	}
+}
+
+func TestToggleProviderCreatesBuiltinDefault(t *testing.T) {
+	server, _ := newToggleTestServer(t)
+	status, body := toggleProvider(t, server, "kimi", `{"enabled": true}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %v", status, body)
+	}
+	provider := body["provider"].(map[string]any)
+	if provider["id"] != "kimi" || provider["type"] != "kimi" || provider["enabled"] != true {
+		t.Fatalf("missing built-in provider was not created with defaults: %v", provider)
+	}
+}
+
+func TestToggleProviderRejectsBadRequests(t *testing.T) {
+	server, _ := newToggleTestServer(t)
+	cases := []struct {
+		name string
+		id   string
+		body string
+		want int
+		code string
+	}{
+		{"unknown provider", "ghost", `{"enabled": true}`, http.StatusNotFound, "unknown_provider"},
+		{"non-builtin custom provider", "provider", `{"enabled": false}`, http.StatusNotFound, "unknown_provider"},
+		{"missing enabled flag", "pi", `{}`, http.StatusBadRequest, "invalid_request"},
+		{"wrong enabled type", "pi", `{"enabled": "yes"}`, http.StatusBadRequest, "invalid_request"},
+		{"unknown field", "pi", `{"enabled": true, "command": "x"}`, http.StatusBadRequest, "invalid_request"},
+	}
+	for _, item := range cases {
+		status, body := toggleProvider(t, server, item.id, item.body)
+		code, _ := body["error"].(map[string]any)["code"].(string)
+		if status != item.want || code != item.code {
+			t.Errorf("%s: status = %d, code = %q, want %d %s", item.name, status, code, item.want, item.code)
+		}
+	}
+}

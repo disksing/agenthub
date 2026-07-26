@@ -74,9 +74,13 @@ export function App() {
 
   const loadAgents = async () => {
     const body = await api("/v1/agents");
-    setAgents(body.agents || []);
+    // Agents whose provider is disabled (or missing) are reported as
+    // unavailable by the daemon and must not be offered for new sessions;
+    // the daemon rejects them as well, this only keeps the choices honest.
+    const available = (body.agents || []).filter((agent) => agent.available !== false);
+    setAgents(available);
     setProviders(body.providers || []);
-    setDefaultAgentId(body.agents?.[0]?.id || "");
+    setDefaultAgentId(available[0]?.id || "");
   };
 
   useEffect(() => {

@@ -102,3 +102,81 @@ func TestLoadMigratesLegacyProfileFields(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSetProviderEnabledFlipsOnlyTheFlag(t *testing.T) {
+	cfg := Config{
+		Version: 1,
+		AgentProviders: []Provider{
+			{ID: "codex", Name: "Codex app-server", Type: "codex", Enabled: true},
+			{ID: "kimi", Name: "Kimi Code", Type: "kimi", Enabled: true, Command: "/opt/kimi/bin/kimi"},
+		},
+		Agents: []Agent{{ID: "a", ProviderID: "kimi", Options: map[string]string{"model": "k3"}}},
+	}
+	next, provider, err := cfg.SetProviderEnabled("kimi", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Enabled || provider.Command != "/opt/kimi/bin/kimi" || provider.Name != "Kimi Code" {
+		t.Fatalf("toggle did not preserve the provider: %+v", provider)
+	}
+	// Re-enabling restores the same underlying configuration.
+	restored, provider, err := next.SetProviderEnabled("kimi", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provider.Enabled || provider.Command != "/opt/kimi/bin/kimi" {
+		t.Fatalf("re-enable lost the underlying configuration: %+v", provider)
+	}
+	if len(restored.AgentProviders) != 2 || restored.AgentProviders[0].ID != "codex" {
+		t.Fatalf("provider order changed: %+v", restored.AgentProviders)
+	}
+	if restored.Agents[0].Options["model"] != "k3" {
+		t.Fatalf("agents were altered: %+v", restored.Agents)
+	}
+	// The input config is never mutated.
+	if !cfg.AgentProviders[1].Enabled {
+		t.Fatal("SetProviderEnabled mutated its input")
+	}
+}
+
+func TestSetProviderEnabledAppendsBuiltinDefault(t *testing.T) {
+	cfg := Config{
+		Version:        1,
+		AgentProviders: []Provider{{ID: "codex", Name: "Codex app-server", Type: "codex", Enabled: true}},
+	}
+	next, provider, err := cfg.SetProviderEnabled("pi", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider != (Provider{ID: "pi", Name: "Pi Coding Agent", Type: "pi", Enabled: true}) {
+		t.Fatalf("unexpected default provider: %+v", provider)
+	}
+	if err := next.Validate(); err != nil {
+		t.Fatalf("config with appended default is invalid: %v", err)
+	}
+	// A missing provider can also be recorded as disabled.
+	_, provider, err = cfg.SetProviderEnabled("opencode", false)
+	if err != nil || provider.Enabled {
+		t.Fatalf("unexpected disabled default: %+v %v", provider, err)
+	}
+}
+
+func TestSetProviderEnabledRejectsUnknownProvider(t *testing.T) {
+	cfg := Defaults()
+	if _, _, err := cfg.SetProviderEnabled("ghost", true); err == nil {
+		t.Fatal("expected an error for an unknown provider")
+	}
+}
+
+func TestDefaultsCoverTheFourBuiltinProviders(t *testing.T) {
+	defaults := Defaults()
+	builtin := BuiltinProviders()
+	if len(defaults.AgentProviders) != len(builtin) {
+		t.Fatalf("defaults = %+v, want the four built-in providers", defaults.AgentProviders)
+	}
+	for i, provider := range builtin {
+		if defaults.AgentProviders[i].ID != provider.ID || !defaults.AgentProviders[i].Enabled {
+			t.Fatalf("unexpected default at %d: %+v", i, defaults.AgentProviders[i])
+		}
+	}
+}

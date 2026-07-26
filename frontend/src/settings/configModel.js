@@ -135,11 +135,6 @@ function providerMap(draft) {
   return new Map((draft.agentProviders || []).map((provider) => [provider.id, provider]));
 }
 
-// providerReferences reports which agents use a provider directly.
-export function providerReferences(draft, providerId) {
-  return { agents: (draft.agents || []).filter((agent) => agent.providerId === providerId).map((agent) => agent.id) };
-}
-
 // validateDraft performs full client-side validation and returns structured
 // errors: { section, index, field, message },
 // section ∈ providers/agents.

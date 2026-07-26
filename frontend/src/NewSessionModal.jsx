@@ -131,7 +131,7 @@ export function NewSessionModal({
               </select>
             ) : (
               <span className="new-session-hint new-session-empty" role="status">
-                No agents are configured yet. Add one in Settings before creating a session.
+                No agents are available. Enable a provider or add an agent in Settings before creating a session.
               </span>
             )}
             {fieldError("agent") ? <span className="new-session-error" role="alert">{fieldError("agent")}</span> : null}
