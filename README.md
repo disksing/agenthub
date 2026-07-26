@@ -15,7 +15,8 @@ AgentHub is a local agent launcher and session hub. A single Go daemon manages C
   - Pi JSONL RPC, including models such as Kimi K3 and Grok
 - Session creation, chat, steer, interrupt, stop, resume, archive, and approvals.
 - On-demand recovery of provider-native sessions/threads after a daemon restart.
-- Same-origin Web UI: session list, real-time chat, status, approvals, stop, and a settings panel with four built-in provider switches plus structured agent forms.
+- Same-origin Web UI: session list, real-time chat, status, approvals, stop, and a settings panel with four built-in provider switches plus structured agent forms with provider-loaded model dropdowns.
+- Provider model enumeration: each built-in provider reports its currently usable models through its official interface, normalized into one read-only API.
 - CLI: one-shot runs, interactive chat, attach, event queries, and session management.
 - Each session stores only `session.json` and an append-only `events.jsonl`; turns and approvals are events, with no separate files.
 
@@ -126,6 +127,19 @@ Renaming an agent is safe: when a config save replaces a name with exactly one o
 
 Codex agents accept the options `model`, `sandbox`, `approval`, and `reasoning_effort`. `reasoning_effort` controls the Codex reasoning ("thinking") effort: it is sent as the `model_reasoning_effort` config override on `thread/start` and `thread/resume`, and the daemon validates the value against the efforts the selected model advertises via `model/list` (for example `low`, `medium`, `high`, `xhigh`; some models add `max` and `ultra`). An unsupported value fails session creation with the list of valid values; an empty value inherits the Codex default.
 
+### Model Enumeration
+
+Each built-in provider can report the models currently usable on this machine through its official interface — no provider session is created and nothing is written to provider configuration:
+
+- Codex: the app-server `model/list` request (account-scoped, with display names, a default flag, and hidden-model filtering).
+- Kimi: `kimi provider list --json` (the configured model registry, with display names).
+- Pi: the RPC `get_available_models` command in `--no-session` mode (every configured upstream; the model Pi would use by default is flagged).
+- OpenCode: `opencode models --verbose` (configured providers plus OpenCode Zen free models, with display names).
+
+`GET /v1/providers/{id}/models` normalizes all four into `{ "provider": {...}, "models": [{ "id", "label", "default" }] }`, where `id` is exactly the value to put into an agent's `model` option. Results are deduplicated, kept in provider order, cached briefly (5 minutes for successes, 15 seconds for failures) with concurrent lookups deduplicated, and the cache is dropped on every configuration change (whole-config save or provider toggle). Failures are classified so clients can render them differently: `404 unknown_provider`, `409 provider_disabled`, `503 provider_unavailable` (CLI missing or not startable), `504 provider_timeout`, and `502 provider_error` (upstream or parse failure); an empty list is a successful `200` with `"models": []`. The endpoint is read-only: it never creates a provider session and never changes configuration.
+
+In the Web settings, the agent **Model** field is a dropdown fed by this endpoint instead of a free-text input: pick the provider first, then choose a model. The empty "Provider default" choice simply omits the `model` option. A previously saved model that is not in the current list is kept as an explicit "saved, not currently listed" option until you pick a replacement, and loading, retry, empty, and disabled-provider states are shown inline.
+
 The Web UI's **Settings** panel is the recommended way to manage this configuration. The **Providers** section is intentionally minimal: exactly four switches enable or disable the built-in providers (Codex, Kimi, Grok/Pi, OpenCode). There is no provider add/delete and no editing of commands, arguments, environment variables or other advanced fields. A toggle flips only the `enabled` flag through `PUT /v1/config/providers/{id}`, so the underlying configuration survives a disable/enable cycle; a built-in provider missing from an old config is created with canonical defaults when it is first enabled. The **Agents** section keeps structured, validated forms, and provider command availability probes distinguish *enabled* from *CLI available*. All changes go through the daemon API, which remains the only writer of the config file — no manual JSON editing is required.
 
 A disabled provider's agents are reported as unavailable (`available: false` with a reason in `GET /v1/agents`), are hidden from the new-session choices, and are rejected by the daemon on session creation and resume even when a client bypasses the Web UI. Disabling never interrupts an already running session, and existing session history stays readable.
@@ -155,6 +169,7 @@ GET    /v1/status
 GET    /v1/config
 PUT    /v1/config
 GET    /v1/agents
+GET    /v1/providers/{id}/models
 
 POST   /v1/sessions
 GET    /v1/sessions

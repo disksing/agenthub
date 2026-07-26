@@ -23,6 +23,7 @@ import (
 	"github.com/disksing/agenthub/internal/config"
 	"github.com/disksing/agenthub/internal/daemon"
 	"github.com/disksing/agenthub/internal/paths"
+	"github.com/disksing/agenthub/internal/provider"
 	"github.com/disksing/agenthub/internal/runtime"
 	"github.com/disksing/agenthub/internal/session"
 )
@@ -144,6 +145,7 @@ func runServe(args []string) error {
 	httpServer := &http.Server{
 		Handler: api.New(store, version, startedAt, api.Dependencies{
 			Runtime: manager, ConfigPath: resolved.ConfigFile, WebDir: *webDir, Listen: listenAddress,
+			Models: provider.NewModelCache(),
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       75 * time.Second,

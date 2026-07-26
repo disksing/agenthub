@@ -16,9 +16,17 @@ import (
 	"time"
 
 	"github.com/disksing/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/provider"
 	"github.com/disksing/agenthub/internal/runtime"
 	"github.com/disksing/agenthub/internal/session"
 )
+
+// ModelLister enumerates the models of a built-in provider and can drop its
+// cached results. *provider.ModelCache implements it; tests substitute fakes.
+type ModelLister interface {
+	Models(ctx context.Context, provider config.Provider) ([]provider.Model, error)
+	InvalidateAll()
+}
 
 type Server struct {
 	store     *session.Store
@@ -28,6 +36,7 @@ type Server struct {
 	config    string
 	webDir    string
 	listen    *ListenAddress
+	models    ModelLister
 	// configMu serializes config mutations so a whole-config PUT and a
 	// single-provider toggle cannot interleave and lose each other's changes.
 	configMu sync.Mutex
@@ -40,6 +49,8 @@ type Dependencies struct {
 	// Listen, when set, enables the Host header guard derived from the
 	// validated listen address.
 	Listen *ListenAddress
+	// Models, when set, enables the provider model enumeration endpoint.
+	Models ModelLister
 }
 
 func New(store *session.Store, version string, startedAt time.Time, dependencies ...Dependencies) *Server {
@@ -49,6 +60,7 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 		server.config = dependencies[0].ConfigPath
 		server.webDir = dependencies[0].WebDir
 		server.listen = dependencies[0].Listen
+		server.models = dependencies[0].Models
 	}
 	return server
 }
@@ -60,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/config", s.getConfig)
 	mux.HandleFunc("PUT /v1/config", s.putConfig)
 	mux.HandleFunc("PUT /v1/config/providers/{id}", s.putProviderEnabled)
+	mux.HandleFunc("GET /v1/providers/{id}/models", s.providerModels)
 	mux.HandleFunc("GET /v1/agents", s.agents)
 	mux.HandleFunc("GET /v1/sessions", s.listSessions)
 	mux.HandleFunc("POST /v1/sessions", s.createSession)
@@ -145,6 +158,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.runtime.SetConfig(body.Config)
+	s.invalidateModels()
 	if err := s.migrateSessionAgentReferences(renames); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "agent_rename_failed", err.Error(), nil)
 		return
@@ -182,6 +196,83 @@ func (s *Server) migrateSessionAgentReferences(renames map[string]string) error 
 	return nil
 }
 
+// modelEnumerationTimeout bounds a whole model enumeration, including the
+// provider process startup. It is generous because app-server and RPC CLIs
+// can take seconds to boot, and short enough that a hung provider cannot pin
+// a request handler.
+const modelEnumerationTimeout = 45 * time.Second
+
+// providerModels enumerates the models of one built-in provider through its
+// official interface. It is read-only: it never creates a provider session
+// and never changes the configuration. Status codes distinguish the failure
+// modes a UI must render differently: 404 unknown provider, 409 disabled,
+// 503 CLI unavailable, 504 enumeration timeout, 502 upstream error; an empty
+// list is a 200 with an empty models array.
+func (s *Server) providerModels(w http.ResponseWriter, r *http.Request) {
+	if s.runtime == nil || s.models == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
+		return
+	}
+	id := r.PathValue("id")
+	target, ok := s.providerByID(id)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "unknown_provider", fmt.Sprintf("unknown built-in provider %q", id), nil)
+		return
+	}
+	if !target.Enabled {
+		writeAPIError(w, http.StatusConflict, "provider_disabled", fmt.Sprintf("provider %q is disabled", id), nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), modelEnumerationTimeout)
+	defer cancel()
+	models, err := s.models.Models(ctx, target)
+	if err != nil {
+		var modelErr *provider.ModelError
+		if errors.As(err, &modelErr) {
+			switch modelErr.Kind {
+			case provider.ModelErrTimeout:
+				writeAPIError(w, http.StatusGatewayTimeout, "provider_timeout", modelErr.Error(), nil)
+				return
+			case provider.ModelErrUnavailable:
+				writeAPIError(w, http.StatusServiceUnavailable, "provider_unavailable", modelErr.Error(), nil)
+				return
+			}
+		}
+		writeAPIError(w, http.StatusBadGateway, "provider_error", err.Error(), nil)
+		return
+	}
+	if models == nil {
+		models = []provider.Model{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider": map[string]any{"id": target.ID, "name": target.Name, "type": target.Type},
+		"models":   models,
+	})
+}
+
+// providerByID resolves a built-in provider id against the live
+// configuration: a configured provider keeps its name, type, command and
+// enabled flag; a built-in provider missing from the configuration is
+// reported with its canonical definition and enabled=false.
+func (s *Server) providerByID(id string) (config.Provider, bool) {
+	canonical, ok := config.BuiltinProvider(id)
+	if !ok {
+		return config.Provider{}, false
+	}
+	for _, configured := range s.runtime.Config().AgentProviders {
+		if configured.ID == id {
+			return configured, true
+		}
+	}
+	return canonical, true
+}
+
+func (s *Server) invalidateModels() {
+	if s.models != nil {
+		s.models.InvalidateAll()
+	}
+}
+
 // putProviderEnabled flips the enabled flag of one built-in provider without
 // touching the rest of the configuration. It is the minimal contract behind
 // the four switches of the Web settings UI: clients never have to rebuild or
@@ -216,6 +307,7 @@ func (s *Server) putProviderEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.runtime.SetConfig(next)
+	s.invalidateModels()
 	writeJSON(w, http.StatusOK, map[string]any{"provider": provider})
 }
 

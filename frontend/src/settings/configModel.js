@@ -48,7 +48,9 @@ export function normalizeAgentName(name) {
 
 export const AGENT_NAME_MAX_LENGTH = 80;
 
-const MODEL_FIELD = { key: "model", kind: "text", label: "Model", placeholder: "Leave empty to use the provider default model" };
+// The model option is not a free-text field: the settings UI loads the
+// provider's live model list and renders a dropdown (see ModelSelect).
+const MODEL_FIELD = { key: "model", kind: "model", label: "Model" };
 
 // providerOptionSchema returns the form description of the Agent options a
 // provider type supports.
@@ -142,7 +144,7 @@ export function normalizeAgentOptions(providerType, oldOptions = {}) {
   const result = {};
   for (const field of providerOptionSchema(providerType)) {
     const raw = String(oldOptions?.[field.key] ?? "").trim();
-    if (field.kind === "text") {
+    if (field.kind === "text" || field.kind === "model") {
       if (raw) result[field.key] = raw;
       continue;
     }
