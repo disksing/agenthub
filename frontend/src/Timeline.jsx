@@ -1,7 +1,8 @@
 import {
   Brain, CaretRight, CheckCircle, CircleNotch, Clock, Info, Package,
-  ShieldWarning, Terminal, TerminalWindow, User, WarningCircle, Wrench, XCircle,
+  ShieldWarning, TerminalWindow, User, WarningCircle, Wrench, XCircle,
 } from "@phosphor-icons/react";
+import { MarkdownMessage } from "./MarkdownMessage.js";
 import { displayTime } from "./timeline.js";
 
 function ToolStatusIcon({ status }) {
@@ -23,7 +24,7 @@ function MessageItem({ item, agent }) {
           {item.steer ? <span className="message-tag">steer</span> : null}
           <span>{displayTime(item.time)}</span>
         </div>
-        <p>{item.text}</p>
+        {isUser ? <p>{item.text}</p> : <MarkdownMessage text={item.text} />}
       </div>
     </article>
   );
@@ -137,24 +138,6 @@ function LifecycleItem({ item }) {
   );
 }
 
-function ActivityItem({ item }) {
-  return (
-    <details className="activity-group">
-      <summary>
-        <Terminal size={14} />
-        <span>Provider activity ({item.entries.length})</span>
-        <span className="note-time">{displayTime(item.time)}</span>
-        <CaretRight className="note-chevron" size={14} />
-      </summary>
-      <ul>
-        {item.entries.map((entry) => (
-          <li key={entry.key}><span>{entry.label}</span><span className="note-time">{displayTime(entry.time)}</span></li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
 function UnknownItem({ item }) {
   return (
     <details className="unknown-event">
@@ -182,8 +165,6 @@ export function Timeline({ items, agent, onApproval }) {
         return <ApprovalItem key={item.key} item={item} onApproval={onApproval} />;
       case "lifecycle":
         return <LifecycleItem key={item.key} item={item} />;
-      case "activity":
-        return <ActivityItem key={item.key} item={item} />;
       case "error":
         return (
           <article key={item.key} className="message message-error">

@@ -233,13 +233,15 @@ const STOP_REASON_TIMELINE = {
   daemon_recovery: "daemon recovery",
 };
 
-// Low-value provider notifications that stay available but folded into a
-// collapsible activity group so high-frequency updates do not add noise.
+// Low-value provider notifications remain in the durable event log but are
+// intentionally omitted from the conversation timeline. In addition to being
+// noisy, projecting them would split otherwise consecutive tool calls.
 // provider.turn.* mirrors the manager-level turn.started/turn.completed
 // lifecycle events, which are the ones rendered as timeline notes.
 function isActivityType(type) {
   return type === "provider.event" || type === "provider.metadata" || type === "plan.event" ||
-    type === "provider.stderr" || type === "provider.turn.started" || type === "provider.turn.completed";
+    type === "provider.stderr" || type === "provider.turn.started" || type === "provider.turn.completed" ||
+    type.startsWith("provider.process.");
 }
 
 function mergeToolCall(previous, update) {
@@ -276,15 +278,15 @@ function newToolCall(update, event) {
 export function buildTimeline(events) {
   const items = [];
   const approvalsById = new Map();
+  const openToolCalls = new Map();
 
-  const pushActivity = (entry) => {
-    const last = items.at(-1);
-    if (last?.kind === "activity") {
-      last.entries.push(entry);
-      last.time = entry.time;
-    } else {
-      items.push({ kind: "activity", key: entry.key, entries: [entry], time: entry.time });
+  const settleOpenToolCalls = (status, time) => {
+    for (const { call, group } of openToolCalls.values()) {
+      call.status = status;
+      call.time = time || call.time;
+      group.time = time || group.time;
     }
+    openToolCalls.clear();
   };
 
   for (const event of events || []) {
@@ -327,18 +329,22 @@ export function buildTimeline(events) {
         if (!update) break;
         const last = items.at(-1);
         const group = last?.kind === "tools" ? last : null;
-        const calls = group ? group.calls : null;
-        const existing = update.callId && calls
-          ? calls.find((call) => call.callId === update.callId)
-          : null;
+        const existing = update.callId ? openToolCalls.get(update.callId) : null;
         if (existing) {
-          Object.assign(existing, mergeToolCall(existing, update));
-          group.time = time;
-        } else if (group) {
-          group.calls.push(newToolCall(update, event));
-          group.time = time;
+          Object.assign(existing.call, mergeToolCall(existing.call, update));
+          existing.group.time = time;
+          if (existing.call.status !== "running") {
+            openToolCalls.delete(update.callId);
+          }
         } else {
-          items.push({ kind: "tools", key: event.id, calls: [newToolCall(update, event)], time });
+          const targetGroup = group || { kind: "tools", key: event.id, calls: [], time };
+          const call = newToolCall(update, event);
+          targetGroup.calls.push(call);
+          targetGroup.time = time;
+          if (!group) items.push(targetGroup);
+          if (call.callId && call.status === "running") {
+            openToolCalls.set(call.callId, { call, group: targetGroup });
+          }
         }
         break;
       }
@@ -384,15 +390,18 @@ export function buildTimeline(events) {
         items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Turn started" });
         break;
       case "turn.completed":
+        settleOpenToolCalls("completed", time);
         items.push({ kind: "lifecycle", tone: "ok", key: event.id, time, text: "Turn completed" });
         break;
       case "turn.failed":
+        settleOpenToolCalls("failed", time);
         items.push({
           kind: "lifecycle", tone: "danger", key: event.id, time,
           text: `Turn failed${firstString(data.error, data.message) ? `: ${firstString(data.error, data.message)}` : ""}`,
         });
         break;
       case "turn.cancelled":
+        settleOpenToolCalls("failed", time);
         items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Turn interrupted" });
         break;
       case "session.created":
@@ -410,6 +419,11 @@ export function buildTimeline(events) {
       }
       case "session.state": {
         let label = NOTABLE_STATES[data.state];
+        if (data.state === "failed") {
+          settleOpenToolCalls("failed", time);
+        } else if (data.state === "stopped") {
+          settleOpenToolCalls(data.reason === "completed" ? "completed" : "failed", time);
+        }
         if (data.state === "stopped" && STOP_REASON_TIMELINE[data.reason]) {
           label += ` · ${STOP_REASON_TIMELINE[data.reason]}`;
         }
@@ -422,10 +436,7 @@ export function buildTimeline(events) {
         break;
       default: {
         if (isActivityType(type)) {
-          const label = type === "provider.stderr"
-            ? `stderr: ${truncateText(firstString(data.text), 120)}`
-            : firstString(data.method, type);
-          pushActivity({ key: event.id, label: label || type, time });
+          break;
         } else {
           items.push({
             kind: "unknown", key: event.id, time, type: type || "unknown",

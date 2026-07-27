@@ -216,19 +216,29 @@ test("strict stopped lifecycle shows stopping and machine reason", () => {
   assert.equal(items[1].tone, "danger");
 });
 
-test("provider noise folds into a single activity group", () => {
+test("provider noise stays out of the timeline and does not split tool groups", () => {
   reset();
   const items = buildTimeline([
+    event("tool.event", {
+      method: "item/started",
+      raw: { item: { id: "call_1", type: "commandExecution", command: "make", status: "inProgress" } },
+    }),
     event("provider.event", { method: "thread/tokenUsage/updated" }),
     event("provider.metadata", { method: "account/rateLimits/updated" }),
     event("provider.stderr", { text: "warning: something" }),
-    event("message.user", { text: "next" }),
-    event("provider.event", { method: "thread/status/changed" }),
+    event("provider.process.started", { pid: 123 }),
+    event("tool.event", {
+      method: "item/completed",
+      raw: { item: { id: "call_1", type: "commandExecution", command: "make", status: "completed" } },
+    }),
+    event("tool.event", {
+      method: "item/completed",
+      raw: { item: { id: "call_2", type: "commandExecution", command: "test", status: "completed" } },
+    }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["activity", "message", "activity"]);
-  assert.equal(items[0].entries.length, 3);
-  assert.equal(items[0].entries[2].label, "stderr: warning: something");
-  assert.equal(items[2].entries.length, 1);
+  assert.deepEqual(items.map((item) => item.kind), ["tools"]);
+  assert.equal(items[0].calls.length, 2);
+  assert.equal(items[0].calls[0].status, "completed");
 });
 
 test("unknown event types get a safe fallback entry instead of disappearing", () => {
@@ -250,15 +260,63 @@ test("parseToolEvent handles unknown tool methods with a diagnostic fallback", (
   assert.equal(parsed.summary, "mystery/tool");
 });
 
-test("provider turn notifications fold into activity, not unknown entries", () => {
+test("provider turn notifications are omitted in favor of normalized lifecycle events", () => {
   reset();
   const items = buildTimeline([
     event("provider.turn.started", { method: "turn/started" }),
     event("provider.turn.completed", { method: "turn/completed" }),
   ]);
-  assert.equal(items.length, 1);
-  assert.equal(items[0].kind, "activity");
-  assert.deepEqual(items[0].entries.map((entry) => entry.label), ["turn/started", "turn/completed"]);
+  assert.deepEqual(items, []);
+});
+
+test("tool completion updates an earlier group across visible events", () => {
+  reset();
+  const items = buildTimeline([
+    event("tool.event", {
+      method: "item/started",
+      raw: { item: { id: "call_1", type: "commandExecution", command: "make", status: "inProgress" } },
+    }),
+    event("message.assistant.delta", { text: "Working on it." }, { turnId: "turn_1" }),
+    event("tool.event", {
+      method: "item/completed",
+      raw: { item: { id: "call_1", type: "commandExecution", command: "make", status: "completed" } },
+    }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["tools", "message"]);
+  assert.equal(items[0].calls.length, 1);
+  assert.equal(items[0].calls[0].status, "completed");
+});
+
+test("turn terminal events settle tools whose provider terminal update is missing", () => {
+  reset();
+  const completed = buildTimeline([
+    event("tool.event", {
+      method: "item/started",
+      raw: { item: { id: "call_done", type: "commandExecution", command: "make", status: "inProgress" } },
+    }),
+    event("turn.completed", {}, { turnId: "turn_1" }),
+  ]);
+  assert.equal(completed[0].calls[0].status, "completed");
+
+  reset();
+  const failed = buildTimeline([
+    event("tool.event", {
+      method: "item/started",
+      raw: { item: { id: "call_failed", type: "commandExecution", command: "make", status: "inProgress" } },
+    }),
+    event("turn.failed", { error: "provider stopped" }, { turnId: "turn_1" }),
+  ]);
+  assert.equal(failed[0].calls[0].status, "failed");
+
+  reset();
+  const stoppedNormally = buildTimeline([
+    event("tool.event", {
+      method: "item/started",
+      raw: { item: { id: "call_stopped", type: "commandExecution", command: "make", status: "inProgress" } },
+    }),
+    event("session.state", { state: "stopped", reason: "completed" }),
+  ]);
+  assert.equal(stoppedNormally[0].calls[0].status, "completed");
 });
 
 test("history rebuild and live streaming produce the same timeline", () => {

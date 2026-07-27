@@ -1000,13 +1000,97 @@ select {
   font-size: 13px;
 }
 
-.message-body p {
+.message-body > p,
+.message-markdown {
   max-width: 740px;
   margin: 2px 0 20px;
   color: #303637;
   font-size: 15px;
   line-height: 1.75;
+}
+
+.message-body > p {
   white-space: pre-line;
+}
+
+.message-markdown {
+  overflow-wrap: anywhere;
+}
+
+.message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message-markdown p,
+.message-markdown ul,
+.message-markdown ol,
+.message-markdown blockquote,
+.message-markdown pre,
+.message-markdown table {
+  margin: 0 0 12px;
+}
+
+.message-markdown ul,
+.message-markdown ol {
+  padding-left: 24px;
+}
+
+.message-markdown li + li {
+  margin-top: 3px;
+}
+
+.message-markdown blockquote {
+  padding-left: 13px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--muted);
+}
+
+.message-markdown a {
+  color: var(--teal-dark);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.message-markdown code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #eef2f1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.message-markdown pre {
+  max-width: 790px;
+  padding: 13px 15px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #f6f8f7;
+  line-height: 1.55;
+}
+
+.message-markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.message-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message-markdown th,
+.message-markdown td {
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong);
+  text-align: left;
 }
 
 .code-wrap {
@@ -1533,7 +1617,6 @@ details[open] > summary > .note-chevron {
 
 .thinking-note,
 .tool-group,
-.activity-group,
 .unknown-event {
   max-width: 760px;
   margin: 10px 0 10px 52px;
@@ -1545,7 +1628,6 @@ details[open] > summary > .note-chevron {
 
 .thinking-note summary,
 .tool-group summary,
-.activity-group summary,
 .unknown-event summary {
   display: flex;
   align-items: center;
@@ -1667,22 +1749,6 @@ details[open] > summary > .note-chevron {
   color: var(--muted);
   font-size: 12px;
   cursor: pointer;
-}
-
-.activity-group ul {
-  margin: 0;
-  padding: 2px 14px 10px 34px;
-  list-style: none;
-}
-
-.activity-group li {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 2px 0;
-  color: #5d6766;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
 }
 
 .unknown-event code {
@@ -1807,7 +1873,6 @@ details[open] > summary > .note-chevron {
 
   .thinking-note,
   .tool-group,
-  .activity-group,
   .unknown-event,
   .lifecycle-note,
   .approval-card {
