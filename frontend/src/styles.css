@@ -1215,6 +1215,72 @@ select {
   box-shadow: 0 0 0 3px rgb(13 139 131 / 8%);
 }
 
+.composer-resume {
+  display: flex;
+  align-items: center;
+  min-height: 120px;
+  background: #fbfcfb;
+}
+
+.resume-session-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  padding: 24px;
+}
+
+.resume-session-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.resume-session-copy strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.resume-session-copy span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.resume-session-copy .resume-session-error {
+  color: #8f2f24;
+}
+
+.resume-session-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 150px;
+  height: 42px;
+  padding: 0 17px;
+  border: 0;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--teal);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.resume-session-button:hover:not(:disabled) {
+  background: var(--teal-dark);
+}
+
+.resume-session-button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
 .composer textarea {
   display: block;
   width: 100%;
@@ -1877,6 +1943,16 @@ details[open] > summary > .note-chevron {
   .lifecycle-note,
   .approval-card {
     margin-left: 0;
+  }
+
+  .resume-session-prompt {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .resume-session-button {
+    width: 100%;
   }
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive, CaretRight, Check, CircleNotch, ClockCounterClockwise, Copy, Gear, List, PaperPlaneTilt, Plus,
-  SidebarSimple, Stop, X,
+  Play, SidebarSimple, Stop, X,
 } from "@phosphor-icons/react";
 import { api } from "./api";
 import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionStatusLabel, sessionsQuery } from "./archive.js";
@@ -9,6 +9,7 @@ import { catchUpEvents, projectLiveEvent } from "./events.js";
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
+import { isResumable, requestSessionResume } from "./resume.js";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
 
 export function App() {
@@ -23,7 +24,11 @@ export function App() {
   const [defaultAgentName, setDefaultAgentName] = useState("");
   const [activeId, setActiveId] = useState("");
   const [events, setEvents] = useState([]);
+  const [eventReloadKey, setEventReloadKey] = useState(0);
   const [draft, setDraft] = useState("");
+  const [resumingId, setResumingId] = useState("");
+  const [resumeFailure, setResumeFailure] = useState(null);
+  const resumingIdRef = useRef("");
   // On narrow viewports the details panel is hidden entirely (see styles.css);
   // start with it closed there.
   const isNarrow = () => window.matchMedia("(max-width: 760px)").matches;
@@ -49,6 +54,7 @@ export function App() {
     [sessions, archivedSessions, activeId],
   );
   const timeline = useMemo(() => buildTimeline(events), [events]);
+  const activeResumeError = resumeFailure?.sessionId === activeSession?.id ? resumeFailure.message : "";
 
   const refreshSessions = async () => {
     const body = await api(sessionsQuery(false));
@@ -138,7 +144,7 @@ export function App() {
       })
       .catch((value) => setError(value.message));
     return () => { disposed = true; source?.close(); };
-  }, [activeId]);
+  }, [activeId, eventReloadKey]);
 
   // Keep the conversation pinned to the bottom while the user is already
   // near it; jumping between sessions always lands on the latest events.
@@ -185,6 +191,35 @@ export function App() {
       await api(`/v1/sessions/${activeSession.id}/${action}`, { method: "POST", body: "{}" });
       await refreshSessions();
     } catch (value) { setError(value.message); }
+  };
+
+  const resumeSession = async () => {
+    if (!isResumable(activeSession) || resumingIdRef.current === activeSession.id) return;
+    const sessionId = activeSession.id;
+    resumingIdRef.current = sessionId;
+    setResumingId(sessionId);
+    setResumeFailure(null);
+    setError("");
+    try {
+      const resumed = await requestSessionResume(sessionId);
+      if (resumed) {
+        setSessions((current) => current.map((session) => session.id === sessionId ? resumed : session));
+      }
+      setEventReloadKey((current) => current + 1);
+      try {
+        await refreshSessions();
+      } catch (value) {
+        setError(`Session resumed, but its latest state could not be loaded: ${value.message}`);
+      }
+    } catch (value) {
+      setResumeFailure({
+        sessionId,
+        message: `Failed to resume session: ${value.message}`,
+      });
+    } finally {
+      if (resumingIdRef.current === sessionId) resumingIdRef.current = "";
+      setResumingId((current) => current === sessionId ? "" : current);
+    }
   };
 
   // archiveFromList is the one-click archive offered on hover/focus inside
@@ -305,13 +340,37 @@ export function App() {
           )}
         </div>
 
-        <div className="composer">
-          <textarea aria-label="Message" value={draft} disabled={!activeSession || ["stopping", "stopped"].includes(activeSession.state) || isArchived(activeSession)} onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder={isArchived(activeSession) ? "Archived sessions are read-only" : "Type a message…"} />
-          <div className="composer-footer">
-            <span className="composer-agent">{activeSession?.agentName || "Create a session to chat"}</span>
-            <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession || ["stopping", "stopped"].includes(activeSession.state) || isArchived(activeSession)}><PaperPlaneTilt size={20} weight="fill" /></button>
-          </div>
+        <div className={`composer ${isResumable(activeSession) ? "composer-resume" : ""}`}>
+          {isResumable(activeSession) ? (
+            <div className="resume-session-prompt" role="status">
+              <div className="resume-session-copy">
+                <strong>Session stopped</strong>
+                <span>Resume the provider to continue this conversation.</span>
+                {activeResumeError && <span className="resume-session-error" role="alert">{activeResumeError}</span>}
+              </div>
+              <button
+                type="button"
+                className="resume-session-button"
+                aria-label="Resume session"
+                aria-busy={resumingId === activeSession.id || undefined}
+                disabled={resumingId === activeSession.id}
+                onClick={resumeSession}
+              >
+                {resumingId === activeSession.id
+                  ? <><CircleNotch className="spin" size={17} />Resuming…</>
+                  : <><Play size={17} weight="fill" />Resume session</>}
+              </button>
+            </div>
+          ) : (
+            <>
+              <textarea aria-label="Message" value={draft} disabled={!activeSession || activeSession.state === "stopping" || isArchived(activeSession)} onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(); }} placeholder={isArchived(activeSession) ? "Archived sessions are read-only" : "Type a message…"} />
+              <div className="composer-footer">
+                <span className="composer-agent">{activeSession?.agentName || "Create a session to chat"}</span>
+                <button className="send-button" aria-label="Send message" onClick={sendMessage} disabled={!draft.trim() || !activeSession || activeSession.state === "stopping" || isArchived(activeSession)}><PaperPlaneTilt size={20} weight="fill" /></button>
+              </div>
+            </>
+          )}
         </div>
       </section>
 
