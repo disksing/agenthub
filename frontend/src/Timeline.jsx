@@ -4,7 +4,7 @@ import {
   ShieldWarning, TerminalWindow, User, WarningCircle, Wrench, XCircle,
 } from "@phosphor-icons/react";
 import { MarkdownMessage } from "./MarkdownMessage.js";
-import { displayTime } from "./display.js";
+import { displayDuration, displayTime } from "./display.js";
 
 function ToolStatusIcon({ status }) {
   if (status === "running") return <CircleNotch className="spin" size={15} aria-label="Running" />;
@@ -32,11 +32,12 @@ function MessageItem({ item, agent }) {
 }
 
 function ThinkingItem({ item }) {
+  const duration = item.active ? "" : displayDuration(item.startTime, item.time);
   return (
     <details className={`thinking-note ${item.active ? "thinking-active" : ""}`} open={item.active}>
       <summary>
         <Brain size={16} />
-        <span>{item.active ? "Thinking…" : "Thinking"}</span>
+        <span>{item.active ? "Thinking…" : duration ? `Thought for ${duration}` : "Thought"}</span>
         <span className="note-time">{displayTime(item.time)}</span>
         <CaretRight className="note-chevron" size={14} />
       </summary>

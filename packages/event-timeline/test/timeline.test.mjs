@@ -55,6 +55,18 @@ test("thinking is no longer active once later events exist", () => {
   assert.equal(items[0].active, false);
 });
 
+test("thinking block keeps the first delta time as startTime for the duration label", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "Let me " }, { turnId: "turn_1", time: "2026-07-25T10:00:00Z" }),
+    event("message.reasoning.delta", { text: "think." }, { turnId: "turn_1", time: "2026-07-25T10:01:02Z" }),
+    event("message.assistant.delta", { text: "answer" }, { turnId: "turn_1" }),
+  ]);
+  assert.equal(items[0].kind, "thinking");
+  assert.equal(items[0].startTime, "2026-07-25T10:00:00Z");
+  assert.equal(items[0].time, "2026-07-25T10:01:02Z");
+});
+
 test("assistant deltas without a turn id merge into one message", () => {
   reset();
   // Late provider chunks recorded after a turn terminal carry no turnId;

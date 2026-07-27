@@ -341,7 +341,9 @@
             last.text += text;
             last.time = time;
           } else if (text) {
-            items.push({ kind: "thinking", key: event.id, turnId: event.turnId || "", text, time, active: false });
+            // startTime pins the first delta so the collapsed header can show
+            // how long the agent reasoned; time keeps tracking the last delta.
+            items.push({ kind: "thinking", key: event.id, turnId: event.turnId || "", text, time, startTime: time, active: false });
           }
           break;
         }

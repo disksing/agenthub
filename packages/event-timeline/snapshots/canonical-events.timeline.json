@@ -25,6 +25,7 @@
         "turnId": "turn_1",
         "text": "Read carefully.",
         "time": "2026-01-02T03:04:04Z",
+        "startTime": "2026-01-02T03:04:03Z",
         "active": false
       },
       {

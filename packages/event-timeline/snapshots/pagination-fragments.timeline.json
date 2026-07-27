@@ -10,6 +10,7 @@
         "turnId": "turn_paged",
         "text": "Page ",
         "time": "2026-01-02T09:00:01Z",
+        "startTime": "2026-01-02T09:00:01Z",
         "active": false
       },
       {
@@ -39,6 +40,7 @@
         "turnId": "turn_paged",
         "text": "Page ",
         "time": "2026-01-02T09:00:01Z",
+        "startTime": "2026-01-02T09:00:01Z",
         "active": false
       },
       {
@@ -68,6 +70,7 @@
         "turnId": "turn_paged",
         "text": "Page ",
         "time": "2026-01-02T09:00:01Z",
+        "startTime": "2026-01-02T09:00:01Z",
         "active": false
       },
       {
@@ -95,6 +98,7 @@
         "turnId": "turn_paged",
         "text": "complete.",
         "time": "2026-01-02T09:00:06Z",
+        "startTime": "2026-01-02T09:00:06Z",
         "active": false
       },
       {
