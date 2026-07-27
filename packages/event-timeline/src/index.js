@@ -1,21 +1,18 @@
-// Timeline builder: turns the persisted Session event log into display items
-// for the conversation view. This module is pure (no DOM, no React) so it can
-// be unit tested directly with node --test.
+// Timeline builder: turns AgentHub API v1 canonical events into UI-neutral
+// timeline items. This module intentionally has no DOM, React, networking, or
+// host-specific formatting dependencies.
 //
-// The same builder is used for live SSE events and for events reloaded from
-// the daemon after a page refresh, so both paths render identical output.
+// Rebuild from the complete ordered event sequence whenever a REST page fills
+// a gap or an SSE event arrives. That keeps history and live projections
+// identical and lets late tool updates settle earlier visible groups.
 
 const MAX_PREVIEW = 400;
 const MAX_OUTPUT = 12000;
 
-export function displayTime(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? ""
-    : date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-}
+export const VERSION = "1.0.0";
+export const API_EVENT_CONTRACT_VERSION = "agenthub.api.v1";
 
-export function truncateText(value, max = MAX_PREVIEW) {
+function truncateText(value, max = MAX_PREVIEW) {
   const text = String(value ?? "");
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -31,7 +28,7 @@ function safePreview(data) {
 
 // Humanizes identifiers such as "mcpToolCall" or "web_search" into
 // "Mcp tool call" style labels.
-export function humanizeName(value) {
+function humanizeName(value) {
   const text = String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -73,7 +70,7 @@ function contentText(content) {
 // Parses one normalized tool.call update out of a provider `tool.event`.
 // Returns null for item types that are surfaced through other event types
 // (chat messages, reasoning) and therefore must not appear as tool calls.
-export function parseToolEvent(event) {
+function parseToolEvent(event) {
   const data = event?.data ?? {};
   const method = typeof data.method === "string" ? data.method : "";
   const raw = data.raw && typeof data.raw === "object" ? data.raw : {};
@@ -305,11 +302,11 @@ export function buildTimeline(events) {
       case "message.assistant.delta": {
         const last = items.at(-1);
         const text = typeof data.text === "string" ? data.text : "";
-        if (last?.kind === "message" && last.role === "agent" && last.turnId === event.turnId) {
+        if (last?.kind === "message" && last.role === "assistant" && last.turnId === event.turnId) {
           last.text += text;
           last.time = time;
         } else {
-          items.push({ kind: "message", role: "agent", key: event.id, turnId: event.turnId || "", text, time });
+          items.push({ kind: "message", role: "assistant", key: event.id, turnId: event.turnId || "", text, time });
         }
         break;
       }
@@ -450,13 +447,6 @@ export function buildTimeline(events) {
   // A trailing thinking block means the agent is still reasoning.
   const last = items.at(-1);
   if (last?.kind === "thinking") last.active = true;
-
-  // Collapse finished tool groups once the conversation has moved on.
-  items.forEach((item, index) => {
-    if (item.kind !== "tools") return;
-    const settled = item.calls.every((call) => call.status !== "running");
-    item.collapsed = settled && index < items.length - 1;
-  });
 
   return items;
 }

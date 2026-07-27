@@ -194,6 +194,20 @@ GET    /v1/sessions/{id}/events
 
 事件端点在普通请求下返回分页 JSON，包含 exclusive `after` cursor、`nextAfter`、`hasMore` 和最新 durable cursor；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并通过 `Last-Event-ID` 使用相同的 exclusive cursor 语义。daemon 先建立订阅并捕获 high-water mark，再分页重放完整 durable backlog，最后切换到 live；subscriber overflow 会关闭流，客户端可从最后一个连续 id 重连并从 `events.jsonl` 恢复，daemon 重启后同样有效。SSE 帧使用默认 message 通道，因此未知 event envelope 也会原样传输。
 
+### 可复用 Event Timeline
+
+[`packages/event-timeline`](packages/event-timeline/README.md) 是 API v1
+canonical event 的无依赖参考投影。AgentHub Web 直接导入其 ESM 产物；无
+bundler 的浏览器客户端可固定 vendoring IIFE，并调用
+`AgentHubEventTimeline.buildTimeline(events)`。package 包含脱敏的一致性
+fixtures 与精确 snapshots，覆盖 Provider 噪声、跨 Turn delta、reasoning、
+Codex/ACP/Pi 工具、审批、终态兜底、失败、取消、未知事件和分页重放。
+
+在 package 目录运行 `npm run build` 和 `npm test` 可复现并验证两种产物。
+`dist/manifest.json` 记录版本 `1.0.0`、契约 `agenthub.api.v1`、
+BSD-3-Clause 许可证、确定性构建命令，以及源码输入和生成产物的 SHA-256。
+下游应固定包含该 manifest 的 AgentHub Git commit。
+
 ### 归档 Session
 
 `DELETE /v1/sessions/{id}` 归档一个 Session：daemon 先追加一条持久化的 `session.archived` 事件，再把整个 Session 目录移动到 Session Store 的 `Archive/` 子目录（`sessions/Archive/<session-id>/`）。不删除任何数据——`session.json`、`events.jsonl` 和其他文件一起移动。

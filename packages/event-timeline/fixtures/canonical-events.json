@@ -1,0 +1,505 @@
+{
+  "schemaVersion": 1,
+  "apiEventContractVersion": "agenthub.api.v1",
+  "description": "Synthetic, sanitized canonical events for cross-client timeline conformance.",
+  "scenarios": [
+    {
+      "name": "provider-noise-cross-turn-deltas-and-reasoning",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T03:04:01Z",
+          "type": "message.user",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "Summarize the fixture." }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T03:04:02Z",
+          "type": "turn.started",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "Summarize the fixture." }
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T03:04:03Z",
+          "type": "message.reasoning.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "Read " }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T03:04:04Z",
+          "type": "message.reasoning.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "carefully." }
+        },
+        {
+          "id": 5,
+          "time": "2026-01-02T03:04:05Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "Fixture " }
+        },
+        {
+          "id": 6,
+          "time": "2026-01-02T03:04:06Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "summary." }
+        },
+        {
+          "id": 7,
+          "time": "2026-01-02T03:04:07Z",
+          "type": "provider.metadata",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "method": "account/rateLimits/updated" }
+        },
+        {
+          "id": 8,
+          "time": "2026-01-02T03:04:08Z",
+          "type": "provider.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "method": "thread/tokenUsage/updated" }
+        },
+        {
+          "id": 9,
+          "time": "2026-01-02T03:04:09Z",
+          "type": "provider.stderr",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "text": "synthetic diagnostic" }
+        },
+        {
+          "id": 10,
+          "time": "2026-01-02T03:04:10Z",
+          "type": "provider.turn.completed",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": { "method": "turn/completed" }
+        },
+        {
+          "id": 11,
+          "time": "2026-01-02T03:04:11Z",
+          "type": "turn.completed",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_1",
+          "data": {}
+        },
+        {
+          "id": 12,
+          "time": "2026-01-02T03:04:12Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_2",
+          "data": { "text": "Second turn." }
+        },
+        {
+          "id": 13,
+          "time": "2026-01-02T03:04:13Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_3",
+          "data": { "text": "Third turn." }
+        }
+      ]
+    },
+    {
+      "name": "codex-tool-correlation-across-visible-events",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T04:00:01Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_codex",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_codex",
+                "type": "commandExecution",
+                "command": ["printf", "fixture"],
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T04:00:02Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_codex",
+          "data": { "text": "Running a safe command." }
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T04:00:03Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_codex",
+          "data": {
+            "method": "item/commandExecution/outputDelta",
+            "raw": { "itemId": "call_codex", "delta": "fix" }
+          }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T04:00:04Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_codex",
+          "data": {
+            "method": "item/completed",
+            "raw": {
+              "item": {
+                "id": "call_codex",
+                "type": "commandExecution",
+                "command": ["printf", "fixture"],
+                "status": "completed",
+                "aggregatedOutput": "fixture",
+                "exitCode": 0
+              }
+            }
+          }
+        },
+        {
+          "id": 5,
+          "time": "2026-01-02T04:00:05Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_codex",
+          "data": {
+            "method": "item/completed",
+            "raw": {
+              "item": {
+                "id": "call_search",
+                "type": "webSearch",
+                "query": "AgentHub canonical events",
+                "status": "completed"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "acp-tool-and-approval",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T05:00:01Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_acp",
+          "data": {
+            "method": "session/update",
+            "raw": {
+              "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "call_acp",
+                "title": "Read fixture.txt",
+                "kind": "read",
+                "status": "in_progress"
+              }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T05:00:02Z",
+          "type": "approval.requested",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_acp",
+          "data": {
+            "approvalId": "approval_fixture",
+            "method": "session/request_permission",
+            "params": { "toolCall": { "title": "Read fixture.txt", "kind": "read" } }
+          }
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T05:00:03Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_acp",
+          "data": {
+            "method": "session/update",
+            "raw": {
+              "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_acp",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "content",
+                    "content": { "type": "text", "text": "sanitized fixture body" }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T05:00:04Z",
+          "type": "approval.resolved",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_acp",
+          "data": {
+            "approvalId": "approval_fixture",
+            "decision": "acceptForSession"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pi-tool-success-and-failure",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T06:00:01Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_pi",
+          "data": {
+            "method": "tool_execution_start",
+            "raw": {
+              "toolCallId": "call_pi_read",
+              "toolName": "read",
+              "args": { "path": "fixture.txt" }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T06:00:02Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_pi",
+          "data": {
+            "method": "tool_execution_end",
+            "raw": {
+              "toolCallId": "call_pi_read",
+              "toolName": "read",
+              "result": "sanitized fixture body"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T06:00:03Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_pi",
+          "data": {
+            "method": "tool_execution_start",
+            "raw": {
+              "toolCallId": "call_pi_fail",
+              "toolName": "bash",
+              "args": { "command": "exit 2" }
+            }
+          }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T06:00:04Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_pi",
+          "data": {
+            "method": "tool_execution_end",
+            "raw": {
+              "toolCallId": "call_pi_fail",
+              "toolName": "bash",
+              "isError": true,
+              "error": "synthetic failure"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "terminal-fallbacks-failure-cancel-and-session-stop",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T07:00:01Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_done",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_done",
+                "type": "commandExecution",
+                "command": "true",
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T07:00:02Z",
+          "type": "turn.completed",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_done",
+          "data": {}
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T07:00:03Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_failed",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_failed",
+                "type": "commandExecution",
+                "command": "exit 1",
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T07:00:04Z",
+          "type": "turn.failed",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_failed",
+          "data": { "error": "synthetic provider failure" }
+        },
+        {
+          "id": 5,
+          "time": "2026-01-02T07:00:05Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_cancelled",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_cancelled",
+                "type": "commandExecution",
+                "command": "sleep 1",
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 6,
+          "time": "2026-01-02T07:00:06Z",
+          "type": "turn.cancelled",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_cancelled",
+          "data": { "reason": "requested" }
+        },
+        {
+          "id": 7,
+          "time": "2026-01-02T07:00:07Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_session_done",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_session_done",
+                "type": "commandExecution",
+                "command": "true",
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 8,
+          "time": "2026-01-02T07:00:08Z",
+          "type": "session.state",
+          "sessionId": "ses_fixture",
+          "data": { "state": "stopped", "reason": "completed" }
+        },
+        {
+          "id": 9,
+          "time": "2026-01-02T07:00:09Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_session_failed",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_session_failed",
+                "type": "commandExecution",
+                "command": "exit 1",
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 10,
+          "time": "2026-01-02T07:00:10Z",
+          "type": "session.state",
+          "sessionId": "ses_fixture",
+          "data": { "state": "stopped", "reason": "provider_error" }
+        }
+      ]
+    },
+    {
+      "name": "lifecycle-provider-error-and-unknown",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T08:00:01Z",
+          "type": "session.created",
+          "sessionId": "ses_fixture",
+          "data": { "id": "ses_fixture" }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T08:00:02Z",
+          "type": "session.provider",
+          "sessionId": "ses_fixture",
+          "data": { "agentName": "Fixture Agent", "provider": "codex" }
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T08:00:03Z",
+          "type": "provider.error",
+          "sessionId": "ses_fixture",
+          "data": { "message": "synthetic stream reset" }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T08:00:04Z",
+          "type": "session.extension.fixture",
+          "sessionId": "ses_fixture",
+          "data": { "nested": { "value": 1 } }
+        },
+        {
+          "id": 5,
+          "time": "2026-01-02T08:00:05Z",
+          "type": "session.archived",
+          "sessionId": "ses_fixture",
+          "data": {}
+        }
+      ]
+    }
+  ]
+}

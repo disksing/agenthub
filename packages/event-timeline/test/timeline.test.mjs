@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTimeline, parseToolEvent, truncateText, humanizeName } from "../src/timeline.js";
+import {
+  API_EVENT_CONTRACT_VERSION,
+  VERSION,
+  buildTimeline,
+} from "../src/index.js";
 
 let nextId = 1;
 function event(type, data, extra = {}) {
@@ -11,12 +15,9 @@ function reset() {
   nextId = 1;
 }
 
-test("humanizeName and truncateText helpers", () => {
-  assert.equal(humanizeName("mcpToolCall"), "Mcp Tool Call");
-  assert.equal(humanizeName("web_search"), "Web search");
-  assert.equal(humanizeName(""), "");
-  assert.equal(truncateText("abc", 10), "abc");
-  assert.equal(truncateText("abcdefghij", 5), "abcd…");
+test("exports stable package and canonical event contract versions", () => {
+  assert.equal(VERSION, "1.0.0");
+  assert.equal(API_EVENT_CONTRACT_VERSION, "agenthub.api.v1");
 });
 
 test("user and assistant messages merge deltas per turn", () => {
@@ -30,7 +31,7 @@ test("user and assistant messages merge deltas per turn", () => {
   ]);
   assert.deepEqual(items.map((item) => item.kind), ["message", "lifecycle", "message", "lifecycle"]);
   assert.equal(items[2].text, "Hi there");
-  assert.equal(items[2].role, "agent");
+  assert.equal(items[2].role, "assistant");
 });
 
 test("reasoning deltas merge into a thinking block and stay active at the tail", () => {
@@ -74,7 +75,7 @@ test("codex command execution tool call is normalized and completed", () => {
   assert.equal(call.summary, "ls -la");
   assert.equal(call.status, "completed");
   assert.equal(call.output, "total 0");
-  assert.equal(items[0].collapsed, false); // last item stays open
+  assert.equal("collapsed" in items[0], false);
 });
 
 test("codex failed command surfaces the exit code as an error", () => {
@@ -152,7 +153,7 @@ test("pi tool failure is flagged", () => {
   assert.equal(items[0].calls[0].error, "boom");
 });
 
-test("consecutive tool calls group together and collapse after a later message", () => {
+test("consecutive tool calls group without projecting host expansion state", () => {
   reset();
   const items = buildTimeline([
     event("tool.event", { method: "item/completed", raw: { item: { id: "1", type: "commandExecution", command: "ls", status: "completed" } } }),
@@ -161,7 +162,7 @@ test("consecutive tool calls group together and collapse after a later message",
   ]);
   assert.equal(items[0].kind, "tools");
   assert.equal(items[0].calls.length, 2);
-  assert.equal(items[0].collapsed, true);
+  assert.equal("collapsed" in items[0], false);
 });
 
 test("approvals pair requested and resolved events", () => {
@@ -254,10 +255,12 @@ test("unknown event types get a safe fallback entry instead of disappearing", ()
   assert.equal(items[1].type, "unknown");
 });
 
-test("parseToolEvent handles unknown tool methods with a diagnostic fallback", () => {
-  const parsed = parseToolEvent(event("tool.event", { method: "mystery/tool", raw: { id: "x" } }));
-  assert.equal(parsed.name, "Tool");
-  assert.equal(parsed.summary, "mystery/tool");
+test("unknown tool methods produce a diagnostic fallback", () => {
+  const items = buildTimeline([
+    event("tool.event", { method: "mystery/tool", raw: { id: "x" } }),
+  ]);
+  assert.equal(items[0].calls[0].name, "Tool");
+  assert.equal(items[0].calls[0].summary, "mystery/tool");
 });
 
 test("provider turn notifications are omitted in favor of normalized lifecycle events", () => {

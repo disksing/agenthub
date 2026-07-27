@@ -1,0 +1,29 @@
+{
+  "name": "@agenthub/event-timeline",
+  "version": "1.0.0",
+  "description": "Pure AgentHub API v1 canonical event timeline projection",
+  "private": true,
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "exports": {
+    ".": {
+      "import": "./dist/event-timeline.mjs",
+      "default": "./dist/event-timeline.mjs"
+    },
+    "./manifest.json": "./dist/manifest.json"
+  },
+  "browser": "./dist/event-timeline.iife.js",
+  "files": [
+    "dist",
+    "fixtures",
+    "snapshots",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && npm run test:unit",
+    "test:unit": "node --test test/*.test.mjs",
+    "update:snapshots": "npm run build && UPDATE_SNAPSHOTS=1 node --test test/fixtures.test.mjs"
+  }
+}

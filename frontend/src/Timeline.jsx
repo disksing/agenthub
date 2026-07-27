@@ -3,7 +3,7 @@ import {
   ShieldWarning, TerminalWindow, User, WarningCircle, Wrench, XCircle,
 } from "@phosphor-icons/react";
 import { MarkdownMessage } from "./MarkdownMessage.js";
-import { displayTime } from "./timeline.js";
+import { displayTime } from "./display.js";
 
 function ToolStatusIcon({ status }) {
   if (status === "running") return <CircleNotch className="spin" size={15} aria-label="Running" />;
@@ -71,7 +71,7 @@ function ToolCallRow({ call }) {
   );
 }
 
-function ToolsItem({ item }) {
+function ToolsItem({ item, isOpen }) {
   const running = item.calls.filter((call) => call.status === "running").length;
   const failed = item.calls.filter((call) => call.status === "failed").length;
   const count = item.calls.length;
@@ -82,7 +82,7 @@ function ToolsItem({ item }) {
     .join(" · ");
   const remaining = Math.max(0, count - 2);
   return (
-    <details className="tool-group" open={!item.collapsed}>
+    <details className="tool-group" open={isOpen}>
       <summary>
         <span className="tool-group-icon"><Wrench size={15} /></span>
         <span className="tool-group-title">
@@ -153,14 +153,23 @@ function UnknownItem({ item }) {
 }
 
 export function Timeline({ items, agent, onApproval }) {
-  return items.map((item) => {
+  return items.map((item, index) => {
     switch (item.kind) {
       case "message":
         return <MessageItem key={item.key} item={item} agent={agent} />;
       case "thinking":
         return <ThinkingItem key={item.key} item={item} />;
       case "tools":
-        return <ToolsItem key={item.key} item={item} />;
+        return (
+          <ToolsItem
+            key={item.key}
+            item={item}
+            isOpen={
+              index === items.length - 1 ||
+              item.calls.some((call) => call.status === "running")
+            }
+          />
+        );
       case "approval":
         return <ApprovalItem key={item.key} item={item} onApproval={onApproval} />;
       case "lifecycle":

@@ -234,6 +234,22 @@ Clients may attach optional caller-defined correlation metadata when creating a 
 
 The `source` object is persisted in `session.created`, rebuilt into `session.json` on replay, and returned by session GET/list responses. It is deliberately self-asserted metadata: AgentHub does not register applications, reserve names, authenticate values, enforce uniqueness, or isolate tenants. Any client may submit any values and duplicates are valid. `GET /v1/sessions` accepts exact, case-sensitive `sourceApp`, `sourceInstanceId`, and `sourceExternalId` filters in any combination; they also compose with `includeArchived`, `archived`, and `state`. Sessions created without source metadata remain compatible and do not match source filters. See the complete [HTTP API reference](http://127.0.0.1:4646/api.md) served by the daemon.
 
+### Reusable Event Timeline
+
+[`packages/event-timeline`](packages/event-timeline/README.md) is the
+dependency-free reference projection for API v1 canonical events. AgentHub
+Web imports its ESM artifact directly; non-bundled browser clients can vendor
+the IIFE and call `AgentHubEventTimeline.buildTimeline(events)`. The package
+contains sanitized conformance fixtures and exact snapshots for provider
+noise, cross-turn deltas, reasoning, Codex/ACP/Pi tools, approvals, terminal
+fallbacks, failures, cancellation, unknown events, and paginated replay.
+
+Run `npm run build` and `npm test` in the package directory to reproduce and
+verify both artifacts. `dist/manifest.json` records version `1.0.0`, contract
+`agenthub.api.v1`, BSD-3-Clause licensing, the deterministic build command,
+and SHA-256 hashes for source inputs and generated artifacts. Consumers
+should pin the AgentHub Git commit containing the manifest.
+
 ### Archiving Sessions
 
 `DELETE /v1/sessions/{id}` archives a session: the daemon appends a durable `session.archived` event and then moves the whole session directory into the store's `Archive/` subdirectory (`sessions/Archive/<session-id>/`). Nothing is deleted — `session.json`, `events.jsonl` and all other files move along.

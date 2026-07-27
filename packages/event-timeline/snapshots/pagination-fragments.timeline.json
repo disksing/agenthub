@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "packageVersion": "1.0.0",
+  "apiEventContractVersion": "agenthub.api.v1",
+  "stages": [
+    [
+      {
+        "kind": "thinking",
+        "key": 1,
+        "turnId": "turn_paged",
+        "text": "Page ",
+        "time": "2026-01-02T09:00:01Z",
+        "active": false
+      },
+      {
+        "kind": "tools",
+        "key": 2,
+        "calls": [
+          {
+            "key": 2,
+            "callId": "call_paged",
+            "name": "Command",
+            "summary": "printf paged",
+            "status": "running",
+            "output": "",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T09:00:02Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T09:00:02Z"
+      }
+    ],
+    [
+      {
+        "kind": "thinking",
+        "key": 1,
+        "turnId": "turn_paged",
+        "text": "Page ",
+        "time": "2026-01-02T09:00:01Z",
+        "active": false
+      },
+      {
+        "kind": "tools",
+        "key": 2,
+        "calls": [
+          {
+            "key": 2,
+            "callId": "call_paged",
+            "name": "Command",
+            "summary": "printf paged",
+            "status": "running",
+            "output": "pag",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T09:00:04Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T09:00:04Z"
+      }
+    ],
+    [
+      {
+        "kind": "thinking",
+        "key": 1,
+        "turnId": "turn_paged",
+        "text": "Page ",
+        "time": "2026-01-02T09:00:01Z",
+        "active": false
+      },
+      {
+        "kind": "tools",
+        "key": 2,
+        "calls": [
+          {
+            "key": 2,
+            "callId": "call_paged",
+            "name": "Command",
+            "summary": "printf paged",
+            "status": "completed",
+            "output": "paged",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T09:00:05Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T09:00:05Z"
+      },
+      {
+        "kind": "thinking",
+        "key": 6,
+        "turnId": "turn_paged",
+        "text": "complete.",
+        "time": "2026-01-02T09:00:06Z",
+        "active": false
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "ok",
+        "key": 7,
+        "time": "2026-01-02T09:00:07Z",
+        "text": "Turn completed"
+      }
+    ]
+  ]
+}

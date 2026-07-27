@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!packages/event-timeline/dist/
+!packages/event-timeline/dist/**
 bin/
 *.log
 .DS_Store

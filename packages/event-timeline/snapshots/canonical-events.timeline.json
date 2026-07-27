@@ -1,0 +1,343 @@
+{
+  "schemaVersion": 1,
+  "packageVersion": "1.0.0",
+  "apiEventContractVersion": "agenthub.api.v1",
+  "scenarios": {
+    "provider-noise-cross-turn-deltas-and-reasoning": [
+      {
+        "kind": "message",
+        "role": "user",
+        "key": 1,
+        "time": "2026-01-02T03:04:01Z",
+        "steer": false,
+        "text": "Summarize the fixture."
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "muted",
+        "key": 2,
+        "time": "2026-01-02T03:04:02Z",
+        "text": "Turn started"
+      },
+      {
+        "kind": "thinking",
+        "key": 3,
+        "turnId": "turn_1",
+        "text": "Read carefully.",
+        "time": "2026-01-02T03:04:04Z",
+        "active": false
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "key": 5,
+        "turnId": "turn_1",
+        "text": "Fixture summary.",
+        "time": "2026-01-02T03:04:06Z"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "ok",
+        "key": 11,
+        "time": "2026-01-02T03:04:11Z",
+        "text": "Turn completed"
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "key": 12,
+        "turnId": "turn_2",
+        "text": "Second turn.",
+        "time": "2026-01-02T03:04:12Z"
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "key": 13,
+        "turnId": "turn_3",
+        "text": "Third turn.",
+        "time": "2026-01-02T03:04:13Z"
+      }
+    ],
+    "codex-tool-correlation-across-visible-events": [
+      {
+        "kind": "tools",
+        "key": 1,
+        "calls": [
+          {
+            "key": 1,
+            "callId": "call_codex",
+            "name": "Command",
+            "summary": "printf fixture",
+            "status": "completed",
+            "output": "fixture",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T04:00:04Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_codex\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"fixture\"],\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T04:00:04Z"
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "key": 2,
+        "turnId": "turn_codex",
+        "text": "Running a safe command.",
+        "time": "2026-01-02T04:00:02Z"
+      },
+      {
+        "kind": "tools",
+        "key": 5,
+        "calls": [
+          {
+            "key": 5,
+            "callId": "call_search",
+            "name": "Web search",
+            "summary": "AgentHub canonical events",
+            "status": "completed",
+            "output": "",
+            "error": "",
+            "method": "item/completed",
+            "time": "2026-01-02T04:00:05Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_search\",\"type\":\"webSearch\",\"query\":\"AgentHub canonical events\",\"status\":\"completed\"}}"
+          }
+        ],
+        "time": "2026-01-02T04:00:05Z"
+      }
+    ],
+    "acp-tool-and-approval": [
+      {
+        "kind": "tools",
+        "key": 1,
+        "calls": [
+          {
+            "key": 1,
+            "callId": "call_acp",
+            "name": "Tool",
+            "summary": "Read fixture.txt",
+            "status": "completed",
+            "output": "sanitized fixture body",
+            "error": "",
+            "method": "session/update",
+            "time": "2026-01-02T05:00:03Z",
+            "rawPreview": "{\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"call_acp\",\"title\":\"Read fixture.txt\",\"kind\":\"read\",\"status\":\"in_progress\"}}"
+          }
+        ],
+        "time": "2026-01-02T05:00:03Z"
+      },
+      {
+        "kind": "approval",
+        "key": 2,
+        "time": "2026-01-02T05:00:04Z",
+        "approvalId": "approval_fixture",
+        "title": "Read fixture.txt",
+        "detail": "",
+        "status": "accepted",
+        "decision": "Allowed for this session"
+      }
+    ],
+    "pi-tool-success-and-failure": [
+      {
+        "kind": "tools",
+        "key": 1,
+        "calls": [
+          {
+            "key": 1,
+            "callId": "call_pi_read",
+            "name": "Read",
+            "summary": "fixture.txt",
+            "status": "completed",
+            "output": "sanitized fixture body",
+            "error": "",
+            "method": "tool_execution_start",
+            "time": "2026-01-02T06:00:02Z",
+            "rawPreview": "{\"toolCallId\":\"call_pi_read\",\"toolName\":\"read\",\"args\":{\"path\":\"fixture.txt\"}}"
+          },
+          {
+            "key": 3,
+            "callId": "call_pi_fail",
+            "name": "Bash",
+            "summary": "exit 2",
+            "status": "failed",
+            "output": "",
+            "error": "synthetic failure",
+            "method": "tool_execution_start",
+            "time": "2026-01-02T06:00:04Z",
+            "rawPreview": "{\"toolCallId\":\"call_pi_fail\",\"toolName\":\"bash\",\"args\":{\"command\":\"exit 2\"}}"
+          }
+        ],
+        "time": "2026-01-02T06:00:04Z"
+      }
+    ],
+    "terminal-fallbacks-failure-cancel-and-session-stop": [
+      {
+        "kind": "tools",
+        "key": 1,
+        "calls": [
+          {
+            "key": 1,
+            "callId": "call_done",
+            "name": "Command",
+            "summary": "true",
+            "status": "completed",
+            "output": "",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T07:00:02Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_done\",\"type\":\"commandExecution\",\"command\":\"true\",\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T07:00:02Z"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "ok",
+        "key": 2,
+        "time": "2026-01-02T07:00:02Z",
+        "text": "Turn completed"
+      },
+      {
+        "kind": "tools",
+        "key": 3,
+        "calls": [
+          {
+            "key": 3,
+            "callId": "call_failed",
+            "name": "Command",
+            "summary": "exit 1",
+            "status": "failed",
+            "output": "",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T07:00:04Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_failed\",\"type\":\"commandExecution\",\"command\":\"exit 1\",\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T07:00:04Z"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "danger",
+        "key": 4,
+        "time": "2026-01-02T07:00:04Z",
+        "text": "Turn failed: synthetic provider failure"
+      },
+      {
+        "kind": "tools",
+        "key": 5,
+        "calls": [
+          {
+            "key": 5,
+            "callId": "call_cancelled",
+            "name": "Command",
+            "summary": "sleep 1",
+            "status": "failed",
+            "output": "",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T07:00:06Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_cancelled\",\"type\":\"commandExecution\",\"command\":\"sleep 1\",\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T07:00:06Z"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "muted",
+        "key": 6,
+        "time": "2026-01-02T07:00:06Z",
+        "text": "Turn interrupted"
+      },
+      {
+        "kind": "tools",
+        "key": 7,
+        "calls": [
+          {
+            "key": 7,
+            "callId": "call_session_done",
+            "name": "Command",
+            "summary": "true",
+            "status": "completed",
+            "output": "",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T07:00:08Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_session_done\",\"type\":\"commandExecution\",\"command\":\"true\",\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T07:00:08Z"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "muted",
+        "key": 8,
+        "time": "2026-01-02T07:00:08Z",
+        "text": "Session stopped · provider completed"
+      },
+      {
+        "kind": "tools",
+        "key": 9,
+        "calls": [
+          {
+            "key": 9,
+            "callId": "call_session_failed",
+            "name": "Command",
+            "summary": "exit 1",
+            "status": "failed",
+            "output": "",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T07:00:10Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_session_failed\",\"type\":\"commandExecution\",\"command\":\"exit 1\",\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T07:00:10Z"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "danger",
+        "key": 10,
+        "time": "2026-01-02T07:00:10Z",
+        "text": "Session stopped · provider error"
+      }
+    ],
+    "lifecycle-provider-error-and-unknown": [
+      {
+        "kind": "lifecycle",
+        "tone": "muted",
+        "key": 1,
+        "time": "2026-01-02T08:00:01Z",
+        "text": "Session created"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "muted",
+        "key": 2,
+        "time": "2026-01-02T08:00:02Z",
+        "text": "Agent connected · Fixture Agent · via codex"
+      },
+      {
+        "kind": "error",
+        "key": 3,
+        "time": "2026-01-02T08:00:03Z",
+        "text": "synthetic stream reset"
+      },
+      {
+        "kind": "unknown",
+        "key": 4,
+        "time": "2026-01-02T08:00:04Z",
+        "type": "session.extension.fixture",
+        "preview": "{\"nested\":{\"value\":1}}"
+      },
+      {
+        "kind": "lifecycle",
+        "tone": "muted",
+        "key": 5,
+        "time": "2026-01-02T08:00:05Z",
+        "text": "Session archived"
+      }
+    ]
+  }
+}

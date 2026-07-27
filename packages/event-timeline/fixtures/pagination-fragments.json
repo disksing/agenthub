@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "apiEventContractVersion": "agenthub.api.v1",
+  "description": "Three REST pages whose combined replay completes deltas and an earlier tool call.",
+  "pages": [
+    [
+      {
+        "id": 1,
+        "time": "2026-01-02T09:00:01Z",
+        "type": "message.reasoning.delta",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": { "text": "Page " }
+      },
+      {
+        "id": 2,
+        "time": "2026-01-02T09:00:02Z",
+        "type": "tool.event",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": {
+          "method": "item/started",
+          "raw": {
+            "item": {
+              "id": "call_paged",
+              "type": "commandExecution",
+              "command": ["printf", "paged"],
+              "status": "inProgress"
+            }
+          }
+        }
+      }
+    ],
+    [
+      {
+        "id": 3,
+        "time": "2026-01-02T09:00:03Z",
+        "type": "provider.metadata",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": { "method": "synthetic/noise" }
+      },
+      {
+        "id": 4,
+        "time": "2026-01-02T09:00:04Z",
+        "type": "tool.event",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": {
+          "method": "item/commandExecution/outputDelta",
+          "raw": { "itemId": "call_paged", "delta": "pag" }
+        }
+      }
+    ],
+    [
+      {
+        "id": 5,
+        "time": "2026-01-02T09:00:05Z",
+        "type": "tool.event",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": {
+          "method": "item/completed",
+          "raw": {
+            "item": {
+              "id": "call_paged",
+              "type": "commandExecution",
+              "command": ["printf", "paged"],
+              "status": "completed",
+              "aggregatedOutput": "paged",
+              "exitCode": 0
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "time": "2026-01-02T09:00:06Z",
+        "type": "message.reasoning.delta",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": { "text": "complete." }
+      },
+      {
+        "id": 7,
+        "time": "2026-01-02T09:00:07Z",
+        "type": "turn.completed",
+        "sessionId": "ses_fixture",
+        "turnId": "turn_paged",
+        "data": {}
+      }
+    ]
+  ]
+}

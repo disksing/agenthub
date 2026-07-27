@@ -6,7 +6,8 @@ import {
 import { api } from "./api";
 import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionStatusLabel, sessionsQuery } from "./archive.js";
 import { catchUpEvents, projectLiveEvent } from "./events.js";
-import { buildTimeline, displayTime } from "./timeline.js";
+import { buildTimeline } from "@agenthub/event-timeline";
+import { displayTime } from "./display.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
 import { isResumable, requestSessionResume, resumeErrorForSession } from "./resume.js";

@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "build": "npm run build:timeline && vite build && node scripts/prepare-sites-build.mjs",
+    "build:timeline": "npm --prefix ../packages/event-timeline run build",
     "preview": "vite preview",
-    "test": "node --test",
+    "test": "npm run build && npm --prefix ../packages/event-timeline run test:unit && node --test",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {
+    "@agenthub/event-timeline": "file:../packages/event-timeline",
     "@phosphor-icons/react": "^2.1.10",
     "@vitejs/plugin-react": "5.0.4",
     "prismjs": "^1.30.0",
