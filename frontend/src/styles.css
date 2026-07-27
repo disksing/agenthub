@@ -63,6 +63,10 @@ select {
   flex-direction: column;
   justify-content: space-between;
   min-width: 0;
+  /* Grid items default to min-height: auto, so without this a long session
+     list would stretch the app-shell row past 100vh and push the composer
+     out of the viewport instead of scrolling inside the sidebar. */
+  min-height: 0;
   padding: 32px 16px 28px;
   border-right: 1px solid var(--line);
   background: #fbfcfb;
@@ -87,6 +91,7 @@ select {
 
 .new-session {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 10px;
@@ -119,10 +124,22 @@ select {
   font-weight: 600;
 }
 
+.sidebar-top {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .session-list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: #d4d8d7 transparent;
+  scrollbar-width: thin;
 }
 
 .session-row {
@@ -1959,6 +1976,7 @@ details[open] > summary > .note-chevron {
 /* Session archive */
 .archive-view-link {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 10px;
   margin: 2px 8px 4px;
