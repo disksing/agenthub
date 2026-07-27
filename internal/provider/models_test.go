@@ -29,6 +29,21 @@ func TestHelperProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	switch mode {
+	case "jsonrpc-output-then-exit":
+		fmt.Println(`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"final"}}}}`)
+	case "pi-output-then-exit":
+		for scanner.Scan() {
+			var request struct {
+				ID   json.RawMessage `json:"id"`
+				Type string          `json:"type"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &request) != nil || request.Type != "get_state" {
+				continue
+			}
+			fmt.Printf(`{"id":%s,"type":"response","command":"get_state","success":true,"data":{"sessionId":"terminal-order"}}`+"\n", request.ID)
+			fmt.Println(`{"type":"agent_settled"}`)
+			break
+		}
 	case "codex", "codex-session-environment":
 		for scanner.Scan() {
 			var request struct {

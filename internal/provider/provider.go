@@ -191,10 +191,25 @@ func (r *jsonRPC) start() error {
 	}
 	r.cmd, r.pgid, r.stdin = cmd, pgid, stdin
 	r.mu.Unlock()
-	go r.readLoop(stdout)
-	go r.stderrLoop(stderr)
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stdoutDone)
+		r.readLoop(stdout)
+	}()
+	go func() {
+		defer close(stderrDone)
+		r.stderrLoop(stderr)
+	}()
 	go func() {
 		err := cmd.Wait()
+		// cmd.Wait and the pipe readers run concurrently. The child can exit
+		// immediately after writing its final response, so publishing
+		// ProcessEnd before both readers finish can close a request waiter
+		// before readLoop delivers that response. Drain the protocol and
+		// diagnostic streams before exposing the process terminal boundary.
+		<-stdoutDone
+		<-stderrDone
 		r.finish(err)
 	}()
 	if r.hooks.ProcessStart != nil {

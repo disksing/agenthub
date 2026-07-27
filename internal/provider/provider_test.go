@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -199,6 +200,80 @@ func TestPiLaunchEnvironmentOverridesDaemonEnvironment(t *testing.T) {
 	}
 	if err := value.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestJSONRPCDrainsFinalOutputBeforeProcessEnd(t *testing.T) {
+	notificationStarted := make(chan struct{})
+	releaseNotification := make(chan struct{})
+	processEnded := make(chan struct{})
+	var notificationOnce sync.Once
+	var processEndOnce sync.Once
+	value := newJSONRPC(
+		helperCLI(t, "jsonrpc-output-then-exit"),
+		nil,
+		t.TempDir(),
+		nil,
+		Hooks{ProcessEnd: func(error) { processEndOnce.Do(func() { close(processEnded) }) }},
+	)
+	value.notify = func(string, json.RawMessage) {
+		notificationOnce.Do(func() { close(notificationStarted) })
+		<-releaseNotification
+	}
+	if err := value.start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, notificationStarted, "final JSON-RPC notification")
+	select {
+	case <-processEnded:
+		t.Fatal("ProcessEnd ran before the final JSON-RPC notification completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseNotification)
+	waitForSignal(t, processEnded, "JSON-RPC ProcessEnd")
+	if err := value.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPiDrainsFinalOutputBeforeProcessEnd(t *testing.T) {
+	eventStarted := make(chan struct{})
+	releaseEvent := make(chan struct{})
+	processEnded := make(chan struct{})
+	var eventOnce sync.Once
+	var processEndOnce sync.Once
+	value := newPi(helperCLI(t, "pi-output-then-exit"), Options{
+		Cwd: t.TempDir(),
+		Hooks: Hooks{
+			Event: func(Event) {
+				eventOnce.Do(func() { close(eventStarted) })
+				<-releaseEvent
+			},
+			ProcessEnd: func(error) { processEndOnce.Do(func() { close(processEnded) }) },
+		},
+	})
+	if err := value.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, eventStarted, "final Pi event")
+	select {
+	case <-processEnded:
+		t.Fatal("ProcessEnd ran before the final Pi event completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseEvent)
+	waitForSignal(t, processEnded, "Pi ProcessEnd")
+	if err := value.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
 	}
 }
 

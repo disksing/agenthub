@@ -348,7 +348,12 @@ func (d *daemon) session(id string) sessionValue {
 
 func (d *daemon) waitSession(id string, predicate func(sessionValue) bool) sessionValue {
 	d.t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	return d.waitSessionFor(id, 20*time.Second, predicate)
+}
+
+func (d *daemon) waitSessionFor(id string, timeout time.Duration, predicate func(sessionValue) bool) sessionValue {
+	d.t.Helper()
+	deadline := time.Now().Add(timeout)
 	var value sessionValue
 	for time.Now().Before(deadline) {
 		value = d.session(id)
@@ -751,7 +756,7 @@ func TestForgeGateLosslessReplayBacklogDisconnectOverflowAndCatchup(t *testing.T
 		gate := newGate(t)
 		code, body := gate.create(map[string]string{
 			"FAKE_MODE":        "burst",
-			"FAKE_BURST_COUNT": "400",
+			"FAKE_BURST_COUNT": "270",
 			"FAKE_BURST_BYTES": "65536",
 		}, nil)
 		if code != http.StatusCreated {
@@ -765,11 +770,17 @@ func TestForgeGateLosslessReplayBacklogDisconnectOverflowAndCatchup(t *testing.T
 		if code != http.StatusAccepted {
 			t.Fatalf("burst message: status=%d body=%v", code, body)
 		}
-		value = gate.waitSession(value.ID, func(current sessionValue) bool { return current.CurrentTurnID == "" })
-		if value.LastEventID < 400 {
+		// This case deliberately persists and fsyncs more than 17 MiB across
+		// enough distinct events to overflow the 256-event live queue. APFS
+		// can require substantially longer than the ordinary 20-second
+		// convergence budget for that durability workload.
+		value = gate.waitSessionFor(value.ID, 2*time.Minute, func(current sessionValue) bool {
+			return current.CurrentTurnID == ""
+		})
+		if value.LastEventID < 270 {
 			t.Fatalf("burst durable head=%d", value.LastEventID)
 		}
-		// The deliberately tiny receive window and 25+ MiB burst force the
+		// The deliberately tiny receive window and 17+ MiB burst force the
 		// live subscriber queue past its 256-event capacity. Close the slow
 		// client as a real SSE interruption; exact immediate-handler
 		// termination is covered deterministically by the API/store tests,

@@ -76,10 +76,22 @@ func (p *piSession) Start(resumeID string) error {
 		return fmt.Errorf("get provider process group: %w", err)
 	}
 	p.cmd, p.pgid, p.stdin = cmd, pgid, stdin
-	go p.readLoop(stdout)
-	go p.stderrLoop(stderr)
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stdoutDone)
+		p.readLoop(stdout)
+	}()
+	go func() {
+		defer close(stderrDone)
+		p.stderrLoop(stderr)
+	}()
 	go func() {
 		err := cmd.Wait()
+		// Preserve every final response/event before the process terminal
+		// hook closes outstanding requests and converges the session.
+		<-stdoutDone
+		<-stderrDone
 		p.finish(err)
 	}()
 	if p.options.Hooks.ProcessStart != nil {
