@@ -40,6 +40,36 @@ type ProcessInfo struct {
 	ProcessGroupID int
 }
 
+// asyncOperations prevents a process terminal hook from overtaking work that
+// was accepted while the process was still running. begin and stopAndWait are
+// serialized so a WaitGroup.Add can never race a Wait that observed zero.
+type asyncOperations struct {
+	mu      sync.Mutex
+	ending  bool
+	pending sync.WaitGroup
+}
+
+func (o *asyncOperations) begin() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.ending {
+		return false
+	}
+	o.pending.Add(1)
+	return true
+}
+
+func (o *asyncOperations) done() {
+	o.pending.Done()
+}
+
+func (o *asyncOperations) stopAndWait() {
+	o.mu.Lock()
+	o.ending = true
+	o.mu.Unlock()
+	o.pending.Wait()
+}
+
 type Session interface {
 	Start(resumeID string) error
 	Prompt(text string, steer bool) error
@@ -164,29 +194,33 @@ func (r *jsonRPC) start() error {
 	cmd.Dir = r.cwd
 	cmd.Env = processEnvironment(r.environment)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = processTerminateGrace
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		r.mu.Unlock()
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		r.mu.Unlock()
-		return err
-	}
+	stdout, stdoutWriter := io.Pipe()
+	stderr, stderrWriter := io.Pipe()
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		r.mu.Unlock()
 		return err
 	}
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
+		r.mu.Unlock()
 		return fmt.Errorf("get provider process group: %w", err)
 	}
 	r.cmd, r.pgid, r.stdin = cmd, pgid, stdin
@@ -195,19 +229,22 @@ func (r *jsonRPC) start() error {
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stdoutDone)
+		defer stdout.Close()
 		r.readLoop(stdout)
 	}()
 	go func() {
 		defer close(stderrDone)
+		defer stderr.Close()
 		r.stderrLoop(stderr)
 	}()
 	go func() {
+		// Assigning writers instead of using StdoutPipe/StderrPipe makes
+		// exec.Cmd.Wait wait for its copy goroutines. This guarantees that
+		// bytes written immediately before exit reach our readers; with the
+		// Pipe methods Wait is allowed to close the descriptors first.
 		err := cmd.Wait()
-		// cmd.Wait and the pipe readers run concurrently. The child can exit
-		// immediately after writing its final response, so publishing
-		// ProcessEnd before both readers finish can close a request waiter
-		// before readLoop delivers that response. Drain the protocol and
-		// diagnostic streams before exposing the process terminal boundary.
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
 		<-stdoutDone
 		<-stderrDone
 		r.finish(err)

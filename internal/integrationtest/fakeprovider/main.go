@@ -97,7 +97,6 @@ func (f *fake) handleRequest(message envelope) {
 			return
 		case "complete-exit":
 			f.completePrompt()
-			time.Sleep(40 * time.Millisecond)
 			os.Exit(0)
 		case "burst":
 			count := getenvInt("FAKE_BURST_COUNT", 400)

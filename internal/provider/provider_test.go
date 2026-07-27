@@ -268,6 +268,41 @@ func TestPiDrainsFinalOutputBeforeProcessEnd(t *testing.T) {
 	}
 }
 
+func TestACPPromptCompletionPrecedesImmediateProcessEnd(t *testing.T) {
+	var nativeID string
+	var mu sync.Mutex
+	var order []string
+	processEnded := make(chan struct{})
+	options := acpTestOptions(t, &nativeID)
+	options.Hooks.Event = func(event Event) {
+		if !event.TurnDone {
+			return
+		}
+		mu.Lock()
+		order = append(order, "turn")
+		mu.Unlock()
+	}
+	options.Hooks.ProcessEnd = func(error) {
+		mu.Lock()
+		order = append(order, "process")
+		mu.Unlock()
+		close(processEnded)
+	}
+	value := newACP(helperCLI(t, "acp-prompt-exit"), options)
+	if err := value.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := value.Prompt("finish", false); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, processEnded, "ACP ProcessEnd")
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(order, ",") != "turn,process" {
+		t.Fatalf("terminal order = %v, want turn before process", order)
+	}
+}
+
 func waitForSignal(t *testing.T, signal <-chan struct{}, description string) {
 	t.Helper()
 	select {

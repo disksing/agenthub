@@ -25,6 +25,7 @@ type piSession struct {
 	waiting map[string]chan piResponse
 	closed  bool
 	done    chan struct{}
+	prompts asyncOperations
 }
 
 type piResponse struct {
@@ -36,7 +37,15 @@ type piResponse struct {
 }
 
 func newPi(command string, options Options) *piSession {
-	return &piSession{command: command, options: options, nextID: 1, waiting: make(map[string]chan piResponse), done: make(chan struct{})}
+	value := &piSession{command: command, options: options, nextID: 1, waiting: make(map[string]chan piResponse), done: make(chan struct{})}
+	processEnd := value.options.Hooks.ProcessEnd
+	value.options.Hooks.ProcessEnd = func(err error) {
+		value.prompts.stopAndWait()
+		if processEnd != nil {
+			processEnd(err)
+		}
+	}
+	return value
 }
 
 func (p *piSession) Start(resumeID string) error {
@@ -54,25 +63,30 @@ func (p *piSession) Start(resumeID string) error {
 	cmd.Dir = p.options.Cwd
 	cmd.Env = processEnvironment(p.options.Environment)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = processTerminateGrace
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
+	stdout, stdoutWriter := io.Pipe()
+	stderr, stderrWriter := io.Pipe()
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		return err
 	}
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
 		return fmt.Errorf("get provider process group: %w", err)
 	}
 	p.cmd, p.pgid, p.stdin = cmd, pgid, stdin
@@ -80,16 +94,20 @@ func (p *piSession) Start(resumeID string) error {
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stdoutDone)
+		defer stdout.Close()
 		p.readLoop(stdout)
 	}()
 	go func() {
 		defer close(stderrDone)
+		defer stderr.Close()
 		p.stderrLoop(stderr)
 	}()
 	go func() {
+		// Wait owns the copy into these writers and therefore cannot publish
+		// process completion before the final protocol output is delivered.
 		err := cmd.Wait()
-		// Preserve every final response/event before the process terminal
-		// hook closes outstanding requests and converges the session.
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
 		<-stdoutDone
 		<-stderrDone
 		p.finish(err)
@@ -119,7 +137,11 @@ func (p *piSession) Prompt(text string, steer bool) error {
 	if steer {
 		command = "steer"
 	}
+	if !p.prompts.begin() {
+		return errors.New("Pi provider process is stopping")
+	}
 	go func() {
+		defer p.prompts.done()
 		if _, err := p.request(command, map[string]any{"message": text}); err != nil && p.options.Hooks.Event != nil {
 			p.options.Hooks.Event(Event{Type: "provider.error", Data: map[string]any{"message": err.Error()}, TurnDone: true, TurnFailed: true})
 		}

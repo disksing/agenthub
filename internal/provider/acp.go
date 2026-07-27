@@ -11,6 +11,7 @@ type acpSession struct {
 	options      Options
 	rpc          *jsonRPC
 	sessionID    string
+	prompts      asyncOperations
 	capabilities struct {
 		LoadSession         bool                       `json:"loadSession"`
 		SessionCapabilities map[string]json.RawMessage `json:"sessionCapabilities"`
@@ -32,7 +33,15 @@ type acpSessionResult struct {
 func newACP(command string, options Options) *acpSession {
 	args := []string{"acp"}
 	value := &acpSession{options: options}
-	value.rpc = newJSONRPC(command, args, options.Cwd, options.Environment, options.Hooks)
+	hooks := options.Hooks
+	processEnd := hooks.ProcessEnd
+	hooks.ProcessEnd = func(err error) {
+		value.prompts.stopAndWait()
+		if processEnd != nil {
+			processEnd(err)
+		}
+	}
+	value.rpc = newJSONRPC(command, args, options.Cwd, options.Environment, hooks)
 	value.rpc.inbound = value.inbound
 	value.rpc.notify = value.notification
 	return value
@@ -154,7 +163,11 @@ func (a *acpSession) Prompt(text string, steer bool) error {
 	if a.sessionID == "" {
 		return errors.New("ACP session is not ready")
 	}
+	if !a.prompts.begin() {
+		return errors.New("ACP provider process is stopping")
+	}
 	go func() {
+		defer a.prompts.done()
 		result, err := a.rpc.request("session/prompt", map[string]any{
 			"sessionId": a.sessionID,
 			"prompt":    []map[string]any{{"type": "text", "text": text}},

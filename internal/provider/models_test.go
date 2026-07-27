@@ -100,7 +100,7 @@ func TestHelperProcess(t *testing.T) {
 			}
 			fmt.Printf(`{"id":%s,"type":"response","command":%q,"success":true,"data":%s}`+"\n", request.ID, request.Type, data)
 		}
-	case "acp", "acp-session-environment", "acp-hang-session-new", "acp-init-error":
+	case "acp", "acp-session-environment", "acp-hang-session-new", "acp-init-error", "acp-prompt-exit":
 		for scanner.Scan() {
 			var request struct {
 				ID     json.RawMessage `json:"id"`
@@ -138,6 +138,9 @@ func TestHelperProcess(t *testing.T) {
 				result = json.RawMessage(`{}`)
 			}
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", request.ID, result)
+			if mode == "acp-prompt-exit" && request.Method == "session/prompt" {
+				return
+			}
 		}
 	case "sleep":
 		time.Sleep(time.Minute)
