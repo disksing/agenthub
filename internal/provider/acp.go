@@ -168,7 +168,10 @@ func (a *acpSession) Prompt(text string, steer bool) error {
 	}
 	go func() {
 		defer a.prompts.done()
-		result, err := a.rpc.request("session/prompt", map[string]any{
+		// session/prompt covers the complete provider turn. Its duration is
+		// controlled by the provider and explicit Interrupt/Close calls, not
+		// by the short operational request deadline.
+		result, err := a.rpc.requestLongRunning("session/prompt", map[string]any{
 			"sessionId": a.sessionID,
 			"prompt":    []map[string]any{{"type": "text", "text": text}},
 		})

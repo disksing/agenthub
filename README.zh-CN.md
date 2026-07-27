@@ -226,7 +226,10 @@ CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --a
 - API 返回 `502 provider_start_failed`，携带 Provider 的真实错误；超时时附带可操作的提示（在 macOS 上指向“系统设置 > 隐私与安全性”弹窗，例如“下载”文件夹或完全磁盘访问权限）。Web 新建 Session 窗口会显示该信息。
 - 失败 Session 保留用于诊断：记录 `provider.error`、失败闭合 open turn，并在确认进程退出后收敛到带 `stopReason: "startup_error"` 的 `stopped`；之后可查看、resume、归档或保留。
 
-`session/prompt` 等长请求使用单独的 15 分钟上限，因为一个 Turn 可能合理运行很久。
+活动 Provider Turn 不设置固定的总时长上限。ACP `session/prompt` 与 Pi
+`prompt`/`steer` 会等待 Provider 的真实终态，即使推理或工具执行超过 15 分钟；
+用户仍可通过 interrupt 或 stop 主动结束，Provider 退出或 daemon 关闭也会解除等待。
+启动握手继续保留 2 分钟上限，普通控制请求则继续使用单独的有界超时。
 
 ### Strict stopped 生命周期与崩溃恢复
 

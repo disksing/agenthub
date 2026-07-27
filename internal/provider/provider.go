@@ -122,9 +122,11 @@ type rpcResult struct {
 	err  error
 }
 
-// defaultRequestTimeout bounds long-running provider requests such as
-// session/prompt, which may legitimately run for many minutes.
-const defaultRequestTimeout = 15 * time.Minute
+// controlRequestTimeout bounds operational provider requests that should
+// acknowledge promptly. A provider turn is deliberately excluded: it remains
+// active until the provider reports a terminal result or the caller interrupts,
+// stops, or closes the session.
+var controlRequestTimeout = 15 * time.Minute
 
 // startupRequestTimeout bounds the handshake requests that must complete
 // before a session becomes ready (initialize, session/new, thread/start,
@@ -302,7 +304,11 @@ func processEnvironment(overrides map[string]string) []string {
 }
 
 func (r *jsonRPC) request(method string, params any) (json.RawMessage, error) {
-	return r.requestWithTimeout(method, params, defaultRequestTimeout)
+	return r.requestWithTimeout(method, params, controlRequestTimeout)
+}
+
+func (r *jsonRPC) requestLongRunning(method string, params any) (json.RawMessage, error) {
+	return r.requestWithTimeout(method, params, 0)
 }
 
 func (r *jsonRPC) requestWithTimeout(method string, params any, timeout time.Duration) (json.RawMessage, error) {
@@ -322,6 +328,13 @@ func (r *jsonRPC) requestWithTimeout(method string, params any, timeout time.Dur
 		delete(r.waiting, key)
 		r.mu.Unlock()
 		return nil, err
+	}
+	if timeout <= 0 {
+		result, ok := <-ch
+		if !ok {
+			return nil, errors.New("provider exited before responding")
+		}
+		return result.data, result.err
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

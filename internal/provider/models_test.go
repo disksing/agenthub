@@ -73,7 +73,7 @@ func TestHelperProcess(t *testing.T) {
 			}
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", request.ID, result)
 		}
-	case "pi", "pi-session-environment":
+	case "pi", "pi-session-environment", "pi-delayed-prompt":
 		for scanner.Scan() {
 			var request struct {
 				ID   json.RawMessage `json:"id"`
@@ -95,12 +95,21 @@ func TestHelperProcess(t *testing.T) {
 				})
 			case "get_available_models":
 				data = json.RawMessage(`{"models":[{"provider":"xai","id":"grok-9","name":"Grok 9"},{"provider":"kimi-coding","id":"k3","name":"Kimi K3"},{"provider":"xai","id":"grok-9","name":"Grok 9 dup"}]}`)
+			case "prompt", "steer":
+				if mode == "pi-delayed-prompt" {
+					delay, _ := time.ParseDuration(os.Getenv("AGENTHUB_TEST_PROMPT_DELAY"))
+					time.Sleep(delay)
+				}
+				data = json.RawMessage(`{}`)
 			default:
 				data = json.RawMessage(`{}`)
 			}
 			fmt.Printf(`{"id":%s,"type":"response","command":%q,"success":true,"data":%s}`+"\n", request.ID, request.Type, data)
+			if mode == "pi-delayed-prompt" && (request.Type == "prompt" || request.Type == "steer") {
+				fmt.Println(`{"type":"agent_settled"}`)
+			}
 		}
-	case "acp", "acp-session-environment", "acp-hang-session-new", "acp-init-error", "acp-prompt-exit":
+	case "acp", "acp-session-environment", "acp-hang-session-new", "acp-init-error", "acp-prompt-exit", "acp-delayed-prompt":
 		for scanner.Scan() {
 			var request struct {
 				ID     json.RawMessage `json:"id"`
@@ -135,6 +144,10 @@ func TestHelperProcess(t *testing.T) {
 					},
 				})
 			default:
+				if mode == "acp-delayed-prompt" && request.Method == "session/prompt" {
+					delay, _ := time.ParseDuration(os.Getenv("AGENTHUB_TEST_PROMPT_DELAY"))
+					time.Sleep(delay)
+				}
 				result = json.RawMessage(`{}`)
 			}
 			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", request.ID, result)

@@ -286,7 +286,12 @@ approvals and the open turn, and finishes with `daemon_recovery`. Legacy
 `failed` states and old `session.state` events without a reason remain
 readable and are recovered into the same stopped boundary.
 
-Long-running requests such as `session/prompt` keep a separate 15-minute bound, since turns may legitimately run for many minutes.
+Active provider turns have no fixed wall-clock deadline. ACP `session/prompt`
+and Pi `prompt`/`steer` requests wait for the provider's real terminal result,
+even when reasoning or tool work runs longer than 15 minutes. Users can still
+end work explicitly with interrupt or stop, and provider exit or daemon
+shutdown releases the pending request. Startup handshakes keep their 2-minute
+bound, while ordinary control requests keep a separate bounded timeout.
 
 ## Data and Security
 

@@ -281,6 +281,44 @@ func TestJSONRPCDrainsFinalOutputBeforeProcessEnd(t *testing.T) {
 	}
 }
 
+func TestJSONRPCCloseReleasesLongRunningRequest(t *testing.T) {
+	value := newJSONRPC(helperCLI(t, "sleep"), nil, t.TempDir(), nil, Hooks{})
+	if err := value.start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = value.close() })
+
+	requestDone := make(chan error, 1)
+	go func() {
+		_, err := value.requestLongRunning("session/prompt", map[string]any{})
+		requestDone <- err
+	}()
+	waitForWaitingRequest(t, func() int {
+		value.mu.Lock()
+		defer value.mu.Unlock()
+		return len(value.waiting)
+	})
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- value.close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close deadlocked behind a long-running request")
+	}
+	select {
+	case err := <-requestDone:
+		if err == nil || !strings.Contains(err.Error(), "provider exited") {
+			t.Fatalf("request error = %v, want provider exit", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("long-running request remained blocked after Close")
+	}
+}
+
 func TestPiDrainsFinalOutputBeforeProcessEnd(t *testing.T) {
 	eventStarted := make(chan struct{})
 	releaseEvent := make(chan struct{})
@@ -348,12 +386,87 @@ func TestACPPromptCompletionPrecedesImmediateProcessEnd(t *testing.T) {
 	}
 }
 
+func TestACPPromptCanOutliveControlRequestTimeout(t *testing.T) {
+	previous := controlRequestTimeout
+	controlRequestTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { controlRequestTimeout = previous })
+	t.Setenv("AGENTHUB_TEST_PROMPT_DELAY", "150ms")
+
+	terminal := make(chan Event, 1)
+	var nativeID string
+	options := acpTestOptions(t, &nativeID)
+	options.Hooks.Event = func(event Event) {
+		if event.TurnDone {
+			terminal <- event
+		}
+	}
+	value := newACP(helperCLI(t, "acp-delayed-prompt"), options)
+	if err := value.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = value.Close() })
+	if err := value.Prompt("take your time", false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-terminal:
+		if event.TurnFailed || event.Type != "provider.turn.completed" {
+			t.Fatalf("long ACP prompt was treated as failed: %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delayed ACP prompt")
+	}
+}
+
+func TestPiPromptCanOutliveControlRequestTimeout(t *testing.T) {
+	previous := controlRequestTimeout
+	controlRequestTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { controlRequestTimeout = previous })
+	t.Setenv("AGENTHUB_TEST_PROMPT_DELAY", "150ms")
+
+	terminal := make(chan Event, 1)
+	value := newPi(helperCLI(t, "pi-delayed-prompt"), Options{
+		Cwd: t.TempDir(),
+		Hooks: Hooks{Event: func(event Event) {
+			if event.TurnDone {
+				terminal <- event
+			}
+		}},
+	})
+	if err := value.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = value.Close() })
+	if err := value.Prompt("take your time", false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-terminal:
+		if event.TurnFailed || event.Type != "provider.turn.completed" {
+			t.Fatalf("long Pi prompt was treated as failed: %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delayed Pi prompt")
+	}
+}
+
 func waitForSignal(t *testing.T, signal <-chan struct{}, description string) {
 	t.Helper()
 	select {
 	case <-signal:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func waitForWaitingRequest(t *testing.T, count func() int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for count() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for provider request registration")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

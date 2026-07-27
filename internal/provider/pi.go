@@ -142,7 +142,7 @@ func (p *piSession) Prompt(text string, steer bool) error {
 	}
 	go func() {
 		defer p.prompts.done()
-		if _, err := p.request(command, map[string]any{"message": text}); err != nil && p.options.Hooks.Event != nil {
+		if _, err := p.requestLongRunning(command, map[string]any{"message": text}); err != nil && p.options.Hooks.Event != nil {
 			p.options.Hooks.Event(Event{Type: "provider.error", Data: map[string]any{"message": err.Error()}, TurnDone: true, TurnFailed: true})
 		}
 	}()
@@ -183,7 +183,13 @@ func (p *piSession) startRequest(command string, fields map[string]any) (piRespo
 }
 
 func (p *piSession) request(command string, fields map[string]any) (piResponse, error) {
-	return p.requestWithTimeout(command, fields, defaultRequestTimeout)
+	return p.requestWithTimeout(command, fields, controlRequestTimeout)
+}
+
+// requestLongRunning waits for a prompt/steer response until the provider
+// settles the turn or session shutdown closes the waiter.
+func (p *piSession) requestLongRunning(command string, fields map[string]any) (piResponse, error) {
+	return p.requestWithTimeout(command, fields, 0)
 }
 
 func (p *piSession) requestWithTimeout(command string, fields map[string]any, timeout time.Duration) (piResponse, error) {
@@ -209,6 +215,17 @@ func (p *piSession) requestWithTimeout(command string, fields map[string]any, ti
 		return piResponse{}, err
 	}
 	var response piResponse
+	if timeout <= 0 {
+		value, ok := <-ch
+		if !ok {
+			return piResponse{}, errors.New("Pi exited before responding")
+		}
+		response = value
+		if !response.Success {
+			return response, fmt.Errorf("Pi %s: %s", command, response.Error)
+		}
+		return response, nil
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
