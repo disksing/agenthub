@@ -975,7 +975,7 @@ select {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   gap: 16px;
-  padding: 4px 0 30px;
+  padding: 4px 0 14px;
 }
 
 .message + .message {
@@ -1020,7 +1020,7 @@ select {
 .message-body > p,
 .message-markdown {
   max-width: 740px;
-  margin: 2px 0 20px;
+  margin: 2px 0 6px;
   color: #303637;
   font-size: 15px;
   line-height: 1.75;
