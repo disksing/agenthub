@@ -189,23 +189,39 @@ function parseToolEvent(event) {
   };
 }
 
+// summarizeApproval extracts the display model of an approval.requested
+// event. Besides the coarse title/detail used for tool approvals, it surfaces
+// the question text and selectable options of elicitation requests (ACP
+// session/request_permission carries them in params.toolCall.content and
+// params.options), so clients can render the actual question instead of a
+// bare allow/decline prompt.
 function summarizeApproval(event) {
   const data = event?.data ?? {};
   const method = firstString(data.method);
   const params = data.params && typeof data.params === "object" ? data.params : {};
+  const options = Array.isArray(params.options)
+    ? params.options
+      .map((option) => ({
+        optionId: firstString(option?.optionId),
+        name: firstString(option?.name),
+        kind: firstString(option?.kind),
+      }))
+      .filter((option) => option.optionId)
+    : [];
   const command = joinCommand(params.command) || joinCommand(params?.rawInput?.command);
-  if (command) return { title: "Run command", detail: truncateText(command, 160) };
+  if (command) return { title: "Run command", detail: truncateText(command, 160), question: "", options };
   const paths = Array.isArray(params.changes)
     ? params.changes.map((change) => change?.path).filter(Boolean)
     : [];
   if (params.toolCall && typeof params.toolCall === "object") {
     const title = firstString(params.toolCall.title, params.toolCall.kind && humanizeName(params.toolCall.kind));
-    return { title: title || "Permission requested", detail: "" };
+    const question = contentText(params.toolCall.content);
+    return { title: title || "Permission requested", detail: "", question, options };
   }
-  if (paths.length) return { title: "Apply file changes", detail: truncateText(paths.join(", "), 160) };
-  if (method.includes("permissions")) return { title: "Grant permissions", detail: firstString(params.reason) };
-  if (method.includes("fileChange")) return { title: "Apply file changes", detail: firstString(params.reason) };
-  return { title: "Approval requested", detail: firstString(params.reason, method) };
+  if (paths.length) return { title: "Apply file changes", detail: truncateText(paths.join(", "), 160), question: "", options };
+  if (method.includes("permissions")) return { title: "Grant permissions", detail: firstString(params.reason), question: "", options };
+  if (method.includes("fileChange")) return { title: "Apply file changes", detail: firstString(params.reason), question: "", options };
+  return { title: "Approval requested", detail: firstString(params.reason, method), question: "", options };
 }
 
 const DECISION_LABELS = {
@@ -351,13 +367,14 @@ export function buildTimeline(events) {
         break;
       }
       case "approval.requested": {
-        const { title, detail } = summarizeApproval(event);
+        const { title, detail, question, options } = summarizeApproval(event);
         const item = {
           kind: "approval", key: event.id, time,
           approvalId: firstString(data.approvalId),
-          title, detail,
+          title, detail, question, options,
           status: "pending",
           decision: "",
+          reply: "",
         };
         if (item.approvalId) approvalsById.set(item.approvalId, item);
         items.push(item);
@@ -366,18 +383,33 @@ export function buildTimeline(events) {
       case "approval.resolved": {
         const approvalId = firstString(data.approvalId);
         const decision = firstString(data.decision) || "decline";
+        const optionId = firstString(data.optionId);
+        const text = firstString(data.text);
         const target = approvalId ? approvalsById.get(approvalId) : null;
+        const label = (item) => {
+          if (decision === "text") return "Replied";
+          if (optionId) {
+            const option = item?.options?.find((entry) => entry.optionId === optionId);
+            return `Answered: ${option?.name || optionId}`;
+          }
+          return DECISION_LABELS[decision] || humanizeName(decision);
+        };
+        const accepted = decision === "accept" || decision === "acceptForSession" || decision === "text";
         if (target) {
-          target.status = decision === "accept" || decision === "acceptForSession" ? "accepted" : "declined";
-          target.decision = DECISION_LABELS[decision] || humanizeName(decision);
+          target.status = accepted ? "accepted" : "declined";
+          target.decision = label(target);
+          target.reply = decision === "text" ? text : "";
           target.time = time;
         } else {
           items.push({
             kind: "approval", key: event.id, time, approvalId,
             title: "Approval resolved",
             detail: "",
-            status: decision === "accept" || decision === "acceptForSession" ? "accepted" : "declined",
-            decision: DECISION_LABELS[decision] || humanizeName(decision),
+            question: "",
+            options: [],
+            status: accepted ? "accepted" : "declined",
+            decision: label(null),
+            reply: decision === "text" ? text : "",
           });
         }
         break;

@@ -196,8 +196,8 @@ present on events that belong to a turn. Core event types:
 | `turn.completed` | `{}` | The active turn finished successfully. |
 | `turn.failed` | `{"error"}` | The active turn failed. |
 | `turn.cancelled` | `{"reason"}` | The active turn was interrupted. |
-| `approval.requested` | `{"approvalId", "method", "params"}` | The provider asks for approval; resolve it through the approvals endpoint. |
-| `approval.resolved` | `{"approvalId", "decision"}` | An approval was answered. |
+| `approval.requested` | `{"approvalId", "method", "params"}` | The provider asks for approval; resolve it through the approvals endpoint. ACP elicitation requests carry the question in `params.toolCall` and the selectable answers in `params.options`. |
+| `approval.resolved` | `{"approvalId", "decision", "optionId?", "text?"}` | An approval was answered. `optionId` records an explicit option selection; decision `text` records a custom free-text reply. |
 | `message.assistant.delta` | `{"text"}` | Assistant output chunk. |
 | `message.reasoning.delta` | `{"text"}` | Reasoning/thinking chunk. |
 | `tool.event` | provider-specific | Tool call lifecycle (start, update, end). |
@@ -732,12 +732,22 @@ event and the session enters `waiting_approval` with the id in
 
 - **Path parameters:** `id` — session id; `approvalId` — the id from the
   `approval.requested` event.
-- **Request body:** `{"decision": "accept"}` — one of:
-  - `accept` — approve this request once.
-  - `acceptForSession` — approve and allow matching requests for the rest of
-    the session where the provider supports it.
-  - `decline` — reject the request.
-  - `cancel` — cancel the operation that asked for approval.
+- **Request body:** exactly one of the following reply modes:
+  - `{"decision": "..."}` — a coarse decision, one of:
+    - `accept` — approve this request once.
+    - `acceptForSession` — approve and allow matching requests for the rest
+      of the session where the provider supports it.
+    - `decline` — reject the request.
+    - `cancel` — cancel the operation that asked for approval.
+  - `{"optionId": "..."}` — select one specific option offered by the
+    request (the `optionId` values come from
+    `approval.requested` → `params.options`). Unknown option ids are
+    rejected and the approval stays pending.
+  - `{"text": "..."}` — answer a question with custom free text. Provider
+    protocols cannot carry free text inside an approval response, so the
+    question is dismissed and the text is delivered as a regular user
+    message once the current turn closes; the `approval.resolved` event
+    records decision `text` with the reply.
 - **Success `200`:** `{"session": {...}}`; an `approval.resolved` event is
   appended.
 - **Errors:** `400 invalid_request`, `415 json_required`,

@@ -153,7 +153,9 @@ func (p *piSession) Interrupt() error {
 	_, err := p.request("abort", nil)
 	return err
 }
-func (p *piSession) Approve(_, _ string) error { return errors.New("Pi RPC does not expose approvals") }
+func (p *piSession) Approve(string, ApprovalResolution) error {
+	return errors.New("Pi RPC does not expose approvals")
+}
 func (p *piSession) Close() error {
 	p.mu.Lock()
 	if p.closed {

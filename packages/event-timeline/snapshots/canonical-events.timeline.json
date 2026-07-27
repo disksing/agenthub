@@ -134,8 +134,11 @@
         "approvalId": "approval_fixture",
         "title": "Read fixture.txt",
         "detail": "",
+        "question": "",
+        "options": [],
         "status": "accepted",
-        "decision": "Allowed for this session"
+        "decision": "Allowed for this session",
+        "reply": ""
       }
     ],
     "pi-tool-success-and-failure": [

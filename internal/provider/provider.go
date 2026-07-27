@@ -70,11 +70,21 @@ func (o *asyncOperations) stopAndWait() {
 	o.pending.Wait()
 }
 
+// ApprovalResolution is the provider-independent reply to a pending approval
+// or question. Decision carries the coarse outcome (accept, acceptForSession,
+// decline, cancel). OptionID selects one specific option offered by the
+// provider request (for example one answer of an ACP elicitation); when set,
+// it takes precedence over the option the Decision would have picked.
+type ApprovalResolution struct {
+	Decision string
+	OptionID string
+}
+
 type Session interface {
 	Start(resumeID string) error
 	Prompt(text string, steer bool) error
 	Interrupt() error
-	Approve(id, decision string) error
+	Approve(id string, resolution ApprovalResolution) error
 	// Close does not return until the provider process group can no longer
 	// execute or write to the session working directory.
 	Close() error

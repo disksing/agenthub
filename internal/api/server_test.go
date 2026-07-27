@@ -1957,6 +1957,10 @@ func TestSessionConflictCodesAreStable(t *testing.T) {
 		{"interrupt without turn", "/v1/sessions/" + stopping.ID + "/interrupt", `{}`, http.StatusConflict, "turn_not_active"},
 		{"resume while stopping", "/v1/sessions/" + stopping.ID + "/resume", `{}`, http.StatusConflict, "session_stopping"},
 		{"invalid approval decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"decision":"maybe"}`, http.StatusBadRequest, "invalid_approval_decision"},
+		{"approval text with decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"text":"hi","decision":"accept"}`, http.StatusBadRequest, "invalid_approval_decision"},
+		{"approval option with decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"optionId":"opt-1","decision":"accept"}`, http.StatusBadRequest, "invalid_approval_decision"},
+		{"approval text not pending", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"text":"hi"}`, http.StatusConflict, "approval_not_pending"},
+		{"approval option not pending", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"optionId":"opt-1"}`, http.StatusConflict, "approval_not_pending"},
 		{"approval not pending", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"decision":"accept"}`, http.StatusConflict, "approval_not_pending"},
 	}
 	for _, test := range tests {

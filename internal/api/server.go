@@ -772,16 +772,37 @@ func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, id stri
 	}
 	var body struct {
 		Decision string `json:"decision"`
+		OptionID string `json:"optionId"`
+		Text     string `json:"text"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	switch body.Decision {
-	case "accept", "acceptForSession", "decline", "cancel":
+	reply := runtime.ApprovalReply{
+		Decision: body.Decision,
+		OptionID: strings.TrimSpace(body.OptionID),
+		Text:     strings.TrimSpace(body.Text),
+	}
+	switch {
+	case reply.Text != "":
+		if reply.Decision != "" || reply.OptionID != "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_approval_decision", "text replies cannot be combined with decision or optionId", nil)
+			return
+		}
+	case reply.OptionID != "":
+		if reply.Decision != "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_approval_decision", "optionId cannot be combined with decision", nil)
+			return
+		}
+		reply.Decision = "accept"
 	default:
-		writeAPIError(w, http.StatusBadRequest, "invalid_approval_decision", "decision must be accept, acceptForSession, decline, or cancel", nil)
-		return
+		switch reply.Decision {
+		case "accept", "acceptForSession", "decline", "cancel":
+		default:
+			writeAPIError(w, http.StatusBadRequest, "invalid_approval_decision", "decision must be accept, acceptForSession, decline, or cancel", nil)
+			return
+		}
 	}
 	current, err := s.store.Get(id)
 	if err != nil {
@@ -792,7 +813,7 @@ func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, id stri
 		writeAPIError(w, http.StatusConflict, "approval_not_pending", "approval is not pending", map[string]any{"approvalId": approvalID})
 		return
 	}
-	if err := s.runtime.Approve(id, approvalID, body.Decision); err != nil {
+	if err := s.runtime.Approve(id, approvalID, reply); err != nil {
 		s.writeRuntimeError(w, err)
 		return
 	}

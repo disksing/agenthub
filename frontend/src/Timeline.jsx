@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Brain, CaretRight, CheckCircle, CircleNotch, Clock, Info, Package,
   ShieldWarning, TerminalWindow, User, WarningCircle, Wrench, XCircle,
@@ -103,7 +104,14 @@ function ToolsItem({ item, isOpen }) {
 }
 
 function ApprovalItem({ item, onApproval }) {
+  const [reply, setReply] = useState("");
   const tone = item.status === "pending" ? "pending" : item.status === "accepted" ? "accepted" : "declined";
+  const options = Array.isArray(item.options) ? item.options : [];
+  const submitReply = (event) => {
+    event.preventDefault();
+    const text = reply.trim();
+    if (text) onApproval(item.approvalId, { text });
+  };
   return (
     <article className={`approval-card approval-${tone}`}>
       <div className="approval-heading">
@@ -111,20 +119,53 @@ function ApprovalItem({ item, onApproval }) {
         <strong>{item.title}</strong>
         <span className="note-time">{displayTime(item.time)}</span>
       </div>
+      {item.question ? <p className="approval-question">{item.question}</p> : null}
       {item.detail ? <code className="approval-detail">{item.detail}</code> : null}
       {item.status === "pending" ? (
-        <div className="approval-actions">
-          <button onClick={() => onApproval(item.approvalId, "decline")}>Decline</button>
-          <button className="primary-small" onClick={() => onApproval(item.approvalId, "accept")}>Allow once</button>
-        </div>
+        <>
+          {options.length ? (
+            <div className="approval-options">
+              {options.map((option) => (
+                <button
+                  key={option.optionId}
+                  className={option.kind && option.kind.startsWith("reject") ? "approval-option-reject" : ""}
+                  onClick={() => onApproval(item.approvalId, { optionId: option.optionId })}
+                >
+                  {option.name || humanizeApprovalKind(option.kind) || option.optionId}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="approval-actions">
+              <button onClick={() => onApproval(item.approvalId, { decision: "decline" })}>Decline</button>
+              <button className="primary-small" onClick={() => onApproval(item.approvalId, { decision: "accept" })}>Allow once</button>
+            </div>
+          )}
+          {item.question ? (
+            <form className="approval-reply" onSubmit={submitReply}>
+              <input
+                value={reply}
+                placeholder="Reply with a custom answer…"
+                aria-label="Custom reply"
+                onChange={(event) => setReply(event.target.value)}
+              />
+              <button type="submit" disabled={!reply.trim()}>Send</button>
+            </form>
+          ) : null}
+        </>
       ) : (
         <span className={`approval-status approval-status-${tone}`} role="status">
           {item.status === "accepted" ? <CheckCircle size={14} /> : <XCircle size={14} />}
           {item.decision || (item.status === "accepted" ? "Allowed" : "Declined")}
+          {item.reply ? `: ${item.reply}` : ""}
         </span>
       )}
     </article>
   );
+}
+
+function humanizeApprovalKind(kind) {
+  return String(kind || "").replace(/[_-]+/g, " ").trim();
 }
 
 function LifecycleItem({ item }) {

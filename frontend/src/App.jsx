@@ -253,9 +253,9 @@ export function App() {
     }
   };
 
-  const resolveApproval = async (approvalId, decision) => {
+  const resolveApproval = async (approvalId, reply) => {
     try {
-      await api(`/v1/sessions/${activeId}/approvals/${approvalId}`, { method: "POST", body: JSON.stringify({ decision }) });
+      await api(`/v1/sessions/${activeId}/approvals/${approvalId}`, { method: "POST", body: JSON.stringify(reply) });
     } catch (value) { setError(value.message); }
   };
 

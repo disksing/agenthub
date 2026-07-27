@@ -39,7 +39,7 @@ func TestCodexTranslatesStreamingTurnAndApproval(t *testing.T) {
 	if approvalID != "42" {
 		t.Fatalf("approval id = %q", approvalID)
 	}
-	if err := value.Approve("42", "accept"); err != nil {
+	if err := value.Approve("42", ApprovalResolution{Decision: "accept"}); err != nil {
 		t.Fatal(err)
 	}
 	value.notification("turn/completed", json.RawMessage(`{"turn":{"id":"turn-native"}}`))
@@ -118,13 +118,58 @@ func TestACPTranslatesMessageAndPermission(t *testing.T) {
 	if approvalID != "req-1" {
 		t.Fatalf("approval id = %q", approvalID)
 	}
-	if err := value.Approve("req-1", "accept"); err != nil {
+	if err := value.Approve("req-1", ApprovalResolution{Decision: "accept"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(events) != 1 || events[0].Type != "message.assistant.delta" {
 		t.Fatalf("unexpected events: %+v", events)
 	}
 	if !strings.Contains(output.String(), `"optionId":"once"`) {
+		t.Fatalf("unexpected permission response: %s", output.String())
+	}
+}
+
+func TestACPSelectsExplicitPermissionOption(t *testing.T) {
+	var approvalID string
+	value := newACP("unused", Options{
+		Provider: config.Provider{Type: "kimi"},
+		Hooks:    Hooks{Approval: func(id, _ string, _ json.RawMessage) { approvalID = id }},
+	})
+	var output bytes.Buffer
+	value.rpc.stdin = writeCloser{&output}
+	params := json.RawMessage(`{"toolCall":{"toolCallId":"t1","title":"AskUserQuestion"},"options":[{"optionId":"q0_opt_0","name":"red","kind":"allow_once"},{"optionId":"q0_opt_1","name":"blue","kind":"allow_once"},{"optionId":"q0_skip","name":"Skip","kind":"reject_once"}]}`)
+	value.inbound(json.RawMessage(`"req-2"`), "session/request_permission", params)
+	if approvalID != "req-2" {
+		t.Fatalf("approval id = %q", approvalID)
+	}
+	// An explicit option selection wins over the kind-based default, which
+	// would otherwise pick the first allow_once option.
+	if err := value.Approve("req-2", ApprovalResolution{Decision: "accept", OptionID: "q0_opt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"optionId":"q0_opt_1"`) {
+		t.Fatalf("unexpected permission response: %s", output.String())
+	}
+}
+
+func TestACPRejectsUnknownPermissionOptionAndStaysPending(t *testing.T) {
+	value := newACP("unused", Options{Provider: config.Provider{Type: "kimi"}})
+	var output bytes.Buffer
+	value.rpc.stdin = writeCloser{&output}
+	params := json.RawMessage(`{"options":[{"optionId":"q0_opt_0","kind":"allow_once"},{"optionId":"q0_skip","kind":"reject_once"}]}`)
+	value.inbound(json.RawMessage(`"req-3"`), "session/request_permission", params)
+	err := value.Approve("req-3", ApprovalResolution{Decision: "accept", OptionID: "bogus"})
+	if err == nil || !strings.Contains(err.Error(), `"bogus"`) {
+		t.Fatalf("expected unknown option error, got %v", err)
+	}
+	if output.String() != "" {
+		t.Fatalf("unknown option must not reach the provider: %s", output.String())
+	}
+	// The failed selection leaves the request pending so the user can retry.
+	if err := value.Approve("req-3", ApprovalResolution{Decision: "accept", OptionID: "q0_opt_0"}); err != nil {
+		t.Fatalf("retry after unknown option failed: %v", err)
+	}
+	if !strings.Contains(output.String(), `"optionId":"q0_opt_0"`) {
 		t.Fatalf("unexpected permission response: %s", output.String())
 	}
 }

@@ -1915,6 +1915,62 @@ details[open] > summary > .note-chevron {
   cursor: pointer;
 }
 
+.approval-question {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.approval-options button {
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.approval-options button:hover {
+  border-color: var(--teal);
+}
+
+.approval-options .approval-option-reject {
+  color: var(--muted);
+}
+
+.approval-reply {
+  display: flex;
+  gap: 8px;
+}
+
+.approval-reply input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.approval-reply button {
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.approval-reply button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .approval-status {
   display: inline-flex;
   align-items: center;

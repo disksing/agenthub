@@ -21,6 +21,7 @@ type fakeSession struct {
 	hooks        provider.Hooks
 	resumeID     string
 	prompts      []string
+	resolution   provider.ApprovalResolution
 	startErr     error
 	onClose      func()
 	holdTurn     bool
@@ -53,8 +54,13 @@ func (f *fakeSession) Prompt(text string, _ bool) error {
 	})
 	return nil
 }
-func (f *fakeSession) Interrupt() error          { return nil }
-func (f *fakeSession) Approve(_, _ string) error { return nil }
+func (f *fakeSession) Interrupt() error { return nil }
+func (f *fakeSession) Approve(_ string, resolution provider.ApprovalResolution) error {
+	f.mu.Lock()
+	f.resolution = resolution
+	f.mu.Unlock()
+	return nil
+}
 func (f *fakeSession) Close() error {
 	if f.closeStarted != nil {
 		f.closeOnce.Do(func() { close(f.closeStarted) })
@@ -334,7 +340,7 @@ func TestManagerTreatsArchivedSessionAsReadOnly(t *testing.T) {
 	if err := manager.Interrupt(value.ID); err == nil {
 		t.Fatal("Interrupt on archived session must fail")
 	}
-	if err := manager.Approve(value.ID, "apr_1", "accept"); err == nil {
+	if err := manager.Approve(value.ID, "apr_1", ApprovalReply{Decision: "accept"}); err == nil {
 		t.Fatal("Approve on archived session must fail")
 	}
 	// Stop stays a safe no-op and appends nothing.
@@ -488,6 +494,165 @@ func TestProviderTurnFailureClosesApprovalBeforeCanonicalTerminal(t *testing.T) 
 	want := []string{"provider.error", "approval.resolved", "turn.failed"}
 	if string(mustJSON(tail)) != string(mustJSON(want)) {
 		t.Fatalf("terminal event order = %v, want %v", tail, want)
+	}
+}
+
+func TestCustomApprovalReplyIsDeliveredAfterTurnCloses(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	var adapter *fakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter = &fakeSession{hooks: options.Hooks, holdTurn: true}
+		return adapter, nil
+	}
+	if _, err := manager.Send(value.ID, "question", false); err != nil {
+		t.Fatal(err)
+	}
+	adapter.hooks.Approval("apr_text", "session/request_permission", nil)
+	if err := manager.Approve(value.ID, "apr_text", ApprovalReply{Text: "custom answer"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.PendingApprovalIDs) != 0 || got.CurrentTurnID == "" {
+		t.Fatalf("text reply must resolve the approval and keep the turn open: %+v", got)
+	}
+	adapter.mu.Lock()
+	prompts := len(adapter.prompts)
+	adapter.mu.Unlock()
+	if prompts != 1 {
+		t.Fatalf("reply must wait for the open turn, prompts = %d", prompts)
+	}
+	adapter.hooks.Event(provider.Event{
+		Type: "provider.turn.completed", Data: map[string]any{"nativeTurnId": "provider-private"}, TurnDone: true,
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		adapter.mu.Lock()
+		delivered := len(adapter.prompts) == 2 && adapter.prompts[1] == "custom answer"
+		adapter.mu.Unlock()
+		if delivered {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queued reply was not delivered after the turn closed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resolved, userMessage map[string]any
+	var order []string
+	for _, event := range events {
+		order = append(order, event.Type)
+		switch event.Type {
+		case "approval.resolved":
+			_ = json.Unmarshal(event.Data, &resolved)
+		case "message.user":
+			var data struct {
+				Text string `json:"text"`
+			}
+			if _ = json.Unmarshal(event.Data, &data); data.Text == "custom answer" {
+				userMessage = map[string]any{"text": data.Text}
+			}
+		}
+	}
+	if resolved["decision"] != "text" || resolved["text"] != "custom answer" {
+		t.Fatalf("approval.resolved = %v", resolved)
+	}
+	if userMessage == nil {
+		t.Fatalf("reply was not recorded as a user message: %v", order)
+	}
+}
+
+func TestCustomApprovalReplyIsNotDeliveredToStoppedSession(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	var adapter *fakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter = &fakeSession{hooks: options.Hooks, holdTurn: true}
+		return adapter, nil
+	}
+	if _, err := manager.Send(value.ID, "question", false); err != nil {
+		t.Fatal(err)
+	}
+	adapter.hooks.Approval("apr_text", "session/request_permission", nil)
+	if err := manager.Approve(value.ID, "apr_text", ApprovalReply{Text: "custom answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(value.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		adapter.mu.Lock()
+		prompts := len(adapter.prompts)
+		adapter.mu.Unlock()
+		if prompts != 1 {
+			t.Fatal("stopped session must not receive queued replies")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestApprovalReplySelectsExplicitOption(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	var adapter *fakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter = &fakeSession{hooks: options.Hooks, holdTurn: true}
+		return adapter, nil
+	}
+	if _, err := manager.Send(value.ID, "question", false); err != nil {
+		t.Fatal(err)
+	}
+	adapter.hooks.Approval("apr_option", "session/request_permission", nil)
+	if err := manager.Approve(value.ID, "apr_option", ApprovalReply{Decision: "accept", OptionID: "q0_opt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	adapter.mu.Lock()
+	resolution := adapter.resolution
+	adapter.mu.Unlock()
+	if resolution.Decision != "accept" || resolution.OptionID != "q0_opt_1" {
+		t.Fatalf("adapter received %+v", resolution)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resolved map[string]any
+	for _, event := range events {
+		if event.Type == "approval.resolved" {
+			_ = json.Unmarshal(event.Data, &resolved)
+		}
+	}
+	if resolved["decision"] != "accept" || resolved["optionId"] != "q0_opt_1" {
+		t.Fatalf("approval.resolved = %v", resolved)
 	}
 }
 

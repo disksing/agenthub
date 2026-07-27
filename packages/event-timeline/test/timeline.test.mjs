@@ -226,6 +226,77 @@ test("a pending approval stays actionable", () => {
   assert.equal(items[0].title, "Write file");
 });
 
+test("a question approval surfaces the question text and options", () => {
+  reset();
+  const items = buildTimeline([
+    event("approval.requested", {
+      approvalId: "ap_q",
+      method: "session/request_permission",
+      params: {
+        toolCall: {
+          toolCallId: "0:tool_1",
+          title: "AskUserQuestion",
+          content: [{ type: "content", content: { type: "text", text: "Which color do you prefer?" } }],
+        },
+        options: [
+          { optionId: "q0_opt_0", name: "red", kind: "allow_once" },
+          { optionId: "q0_opt_1", name: "blue", kind: "allow_once" },
+          { optionId: "q0_skip", name: "Skip", kind: "reject_once" },
+        ],
+      },
+    }),
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, "approval");
+  assert.equal(items[0].status, "pending");
+  assert.equal(items[0].question, "Which color do you prefer?");
+  assert.deepEqual(items[0].options, [
+    { optionId: "q0_opt_0", name: "red", kind: "allow_once" },
+    { optionId: "q0_opt_1", name: "blue", kind: "allow_once" },
+    { optionId: "q0_skip", name: "Skip", kind: "reject_once" },
+  ]);
+});
+
+test("a resolved question shows the selected option name", () => {
+  reset();
+  const items = buildTimeline([
+    event("approval.requested", {
+      approvalId: "ap_q",
+      method: "session/request_permission",
+      params: {
+        toolCall: { title: "AskUserQuestion", content: [{ type: "content", content: { type: "text", text: "Pick one" } }] },
+        options: [
+          { optionId: "q0_opt_0", name: "red", kind: "allow_once" },
+          { optionId: "q0_opt_1", name: "blue", kind: "allow_once" },
+        ],
+      },
+    }),
+    event("approval.resolved", { approvalId: "ap_q", decision: "accept", optionId: "q0_opt_1" }),
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, "accepted");
+  assert.equal(items[0].decision, "Answered: blue");
+});
+
+test("a custom text reply resolves the approval as replied", () => {
+  reset();
+  const items = buildTimeline([
+    event("approval.requested", {
+      approvalId: "ap_q",
+      method: "session/request_permission",
+      params: {
+        toolCall: { title: "AskUserQuestion", content: [{ type: "content", content: { type: "text", text: "Pick one" } }] },
+        options: [{ optionId: "q0_opt_0", name: "red", kind: "allow_once" }],
+      },
+    }),
+    event("approval.resolved", { approvalId: "ap_q", decision: "text", text: "my own answer" }),
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, "accepted");
+  assert.equal(items[0].decision, "Replied");
+  assert.equal(items[0].reply, "my own answer");
+});
+
 test("provider errors, lifecycle and notable session states are visible", () => {
   reset();
   const items = buildTimeline([

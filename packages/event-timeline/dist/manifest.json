@@ -15,7 +15,7 @@
     "repository": "https://github.com/disksing/agenthub",
     "revision": "the Git commit containing this manifest",
     "inputs": {
-      "src/index.js": "6aa11303e09810a443b767c20f94a877f419706ca353dcbcf7c365b7a1a65736",
+      "src/index.js": "6805e366dda9f32afbb33463a534fc3f272a25ad87d978acf5c4fdf0df3211bc",
       "package.json": "9e60b16b341523720ccb2ff1c337ede982ec9982b4221369424c7a0c7352865b",
       "scripts/build.mjs": "59109be2db4a26a1c7197103bb743b970dec9f083c19268c54478ba8f2ff9b23"
     }
@@ -27,11 +27,11 @@
   "artifacts": {
     "event-timeline.mjs": {
       "format": "esm",
-      "sha256": "9ae4200c35704b544dce05901f8640b2694480e589d41884d2b764a32cd0639f"
+      "sha256": "35464ff9475a884a143120109dfa2282f246a85053c039fdfb0d7b709202bbdf"
     },
     "event-timeline.iife.js": {
       "format": "iife",
-      "sha256": "789659286d490d14105f32e281fab9744a57d04cf890f38114afc127d57d9713"
+      "sha256": "8e2a788ce469409fd083ac9b1b08f9d742cc73edb3485c00e7d6733672b111fa"
     }
   }
 }

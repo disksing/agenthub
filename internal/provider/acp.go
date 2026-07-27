@@ -190,15 +190,15 @@ func (a *acpSession) Interrupt() error {
 	return a.rpc.send("session/cancel", map[string]any{"sessionId": a.sessionID})
 }
 
-func (a *acpSession) Approve(id, decision string) error {
+func (a *acpSession) Approve(id string, resolution ApprovalResolution) error {
 	a.rpc.mu.Lock()
 	pending, ok := a.rpc.pending[id]
-	if ok {
-		delete(a.rpc.pending, id)
-	}
 	a.rpc.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("unknown approval %q", id)
+	}
+	if resolution.Decision == "cancel" || resolution.Decision == "decline" {
+		return a.answer(id, pending, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
 	}
 	var params struct {
 		Options []struct {
@@ -207,23 +207,44 @@ func (a *acpSession) Approve(id, decision string) error {
 		} `json:"options"`
 	}
 	_ = json.Unmarshal(pending.params, &params)
-	if decision == "cancel" || decision == "decline" {
-		return a.rpc.respond(pending.id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
-	}
 	optionID := ""
-	preferred := "allow_once"
-	if decision == "acceptForSession" {
-		preferred = "allow_always"
-	}
-	for _, choice := range params.Options {
-		if choice.Kind == preferred || optionID == "" {
-			optionID = choice.OptionID
+	if resolution.OptionID != "" {
+		// An explicit selection must match one of the offered options; picking
+		// a fallback here would answer a question with a choice the user
+		// never made.
+		for _, choice := range params.Options {
+			if choice.OptionID == resolution.OptionID {
+				optionID = choice.OptionID
+			}
+		}
+		if optionID == "" {
+			return fmt.Errorf("approval %q offers no option %q", id, resolution.OptionID)
+		}
+	} else {
+		preferred := "allow_once"
+		if resolution.Decision == "acceptForSession" {
+			preferred = "allow_always"
+		}
+		for _, choice := range params.Options {
+			if choice.Kind == preferred || optionID == "" {
+				optionID = choice.OptionID
+			}
 		}
 	}
 	if optionID == "" {
 		return errors.New("approval request exposes no permission options")
 	}
-	return a.rpc.respond(pending.id, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}})
+	return a.answer(id, pending, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}})
+}
+
+// answer resolves a pending provider request exactly once: the pending entry
+// is removed only after the response has been validated, so a failed
+// resolution (for example an unknown option) stays pending and retryable.
+func (a *acpSession) answer(id string, pending pendingRequest, result map[string]any) error {
+	a.rpc.mu.Lock()
+	delete(a.rpc.pending, id)
+	a.rpc.mu.Unlock()
+	return a.rpc.respond(pending.id, result)
 }
 
 func (a *acpSession) Close() error {

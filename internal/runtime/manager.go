@@ -35,6 +35,11 @@ type active struct {
 	stopReason string
 	finalized  bool
 	finalize   sync.Once
+	// replies holds custom text replies queued while the owning turn is still
+	// open. Providers cannot accept free text inside an approval response, so
+	// each reply dismisses its question immediately and is delivered as a
+	// regular user message once the turn closes.
+	replies []string
 }
 
 func (a *active) turn() string {
@@ -249,17 +254,48 @@ func (m *Manager) IsRunning(id string) bool {
 	return m.running[id] != nil
 }
 
-func (m *Manager) Approve(id, approvalID, decision string) error {
+// ApprovalReply is the public reply to a pending approval. Exactly one mode
+// applies: Text sends a custom free-text reply (the question is dismissed and
+// the text is delivered as the next user message once the current turn
+// closes), OptionID selects one of the options offered by the request, and
+// Decision alone keeps the legacy coarse outcomes.
+type ApprovalReply struct {
+	Decision string
+	OptionID string
+	Text     string
+}
+
+func (m *Manager) Approve(id, approvalID string, reply ApprovalReply) error {
 	m.mu.Lock()
 	run := m.running[id]
 	m.mu.Unlock()
 	if run == nil {
 		return errors.New("session provider is not running; approval cannot survive daemon restart")
 	}
-	if err := run.adapter.Approve(approvalID, decision); err != nil {
+	if reply.Text != "" {
+		// No provider protocol carries free text inside an approval response,
+		// so a custom reply dismisses the question and is queued for delivery
+		// as a regular user message when the turn closes (see providerEvent).
+		if err := run.adapter.Approve(approvalID, provider.ApprovalResolution{Decision: "cancel"}); err != nil {
+			return err
+		}
+		run.mu.Lock()
+		run.replies = append(run.replies, reply.Text)
+		run.mu.Unlock()
+		_, err := m.store.Append(id, "approval.resolved", run.turn(), marshal(map[string]any{
+			"approvalId": approvalID, "decision": "text", "text": reply.Text,
+		}))
 		return err
 	}
-	_, err := m.store.Append(id, "approval.resolved", run.turn(), marshal(map[string]any{"approvalId": approvalID, "decision": decision}))
+	resolution := provider.ApprovalResolution{Decision: reply.Decision, OptionID: reply.OptionID}
+	if err := run.adapter.Approve(approvalID, resolution); err != nil {
+		return err
+	}
+	data := map[string]any{"approvalId": approvalID, "decision": reply.Decision}
+	if reply.OptionID != "" {
+		data["optionId"] = reply.OptionID
+	}
+	_, err := m.store.Append(id, "approval.resolved", run.turn(), marshal(data))
 	return err
 }
 
@@ -375,6 +411,7 @@ func (m *Manager) ensure(id string) (*active, error) {
 }
 
 func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
+	var replies []string
 	run.withEvent(func(turnID string) {
 		if event.Type != "" {
 			_, _ = m.store.Append(id, event.Type, turnID, marshal(event.Data))
@@ -404,7 +441,39 @@ func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
 		}
 		_, _ = m.store.Append(id, eventType, turnID, marshal(terminal))
 		run.turnID = ""
+		replies = run.replies
+		run.replies = nil
 	})
+	// Replies are delivered from a separate goroutine: providerEvent runs on
+	// the provider read loop, and some adapters send prompts synchronously,
+	// which would deadlock the loop that feeds their own responses.
+	if len(replies) > 0 {
+		go func() {
+			for _, reply := range replies {
+				m.deliverReply(id, reply)
+			}
+		}()
+	}
+}
+
+// deliverReply sends a queued custom approval reply as a regular user
+// message. The turn that carried the question has already closed, so the
+// reply starts a fresh turn; a session that stopped in the meantime is not
+// resurrected, and the recorded approval.resolved event keeps the text
+// visible for a manual resend.
+func (m *Manager) deliverReply(id, text string) {
+	value, err := m.store.Get(id)
+	if err != nil {
+		return
+	}
+	if value.State == session.StateStopping || value.State == session.StateStopped || value.State == session.StateArchived {
+		return
+	}
+	if _, err := m.Send(id, text, false); err != nil {
+		_, _ = m.store.Append(id, "provider.error", "", marshal(map[string]any{
+			"message": "could not deliver queued reply: " + err.Error(),
+		}))
+	}
 }
 
 func providerEventMessage(data any) string {

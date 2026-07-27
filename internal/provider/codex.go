@@ -123,7 +123,7 @@ func (c *codexSession) Interrupt() error {
 	return err
 }
 
-func (c *codexSession) Approve(id, decision string) error {
+func (c *codexSession) Approve(id string, resolution ApprovalResolution) error {
 	c.rpc.mu.Lock()
 	pending, ok := c.rpc.pending[id]
 	if ok {
@@ -136,6 +136,9 @@ func (c *codexSession) Approve(id, decision string) error {
 	if pending.method == "item/permissions/requestApproval" {
 		return c.rpc.respond(pending.id, map[string]any{"permissions": map[string]any{}, "scope": "turn"})
 	}
+	// Codex approvals expose no selectable options; resolution.OptionID is
+	// intentionally ignored here.
+	decision := resolution.Decision
 	if decision != "accept" && decision != "acceptForSession" && decision != "cancel" {
 		decision = "decline"
 	}
