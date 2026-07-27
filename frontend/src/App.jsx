@@ -9,7 +9,7 @@ import { catchUpEvents, projectLiveEvent } from "./events.js";
 import { buildTimeline, displayTime } from "./timeline.js";
 import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
-import { isResumable, requestSessionResume } from "./resume.js";
+import { isResumable, requestSessionResume, resumeErrorForSession } from "./resume.js";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
 
 export function App() {
@@ -54,7 +54,7 @@ export function App() {
     [sessions, archivedSessions, activeId],
   );
   const timeline = useMemo(() => buildTimeline(events), [events]);
-  const activeResumeError = resumeFailure?.sessionId === activeSession?.id ? resumeFailure.message : "";
+  const activeResumeError = resumeErrorForSession(resumeFailure, activeSession);
 
   const refreshSessions = async () => {
     const body = await api(sessionsQuery(false));
