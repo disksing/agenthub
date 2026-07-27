@@ -305,11 +305,16 @@
         case "message.assistant.delta": {
           const last = items.at(-1);
           const text = typeof data.text === "string" ? data.text : "";
-          if (last?.kind === "message" && last.role === "assistant" && last.turnId === event.turnId) {
+          // Deltas that arrive after a turn terminal (for example a late
+          // provider response to a timed-out prompt) carry no turnId. Normalize
+          // the missing value so consecutive chunks still merge into one
+          // message instead of one bubble per delta.
+          const turnId = event.turnId || "";
+          if (last?.kind === "message" && last.role === "assistant" && last.turnId === turnId) {
             last.text += text;
             last.time = time;
-          } else {
-            items.push({ kind: "message", role: "assistant", key: event.id, turnId: event.turnId || "", text, time });
+          } else if (text) {
+            items.push({ kind: "message", role: "assistant", key: event.id, turnId, text, time });
           }
           break;
         }
@@ -319,7 +324,7 @@
           if (last?.kind === "thinking" && last.turnId === (event.turnId || "")) {
             last.text += text;
             last.time = time;
-          } else {
+          } else if (text) {
             items.push({ kind: "thinking", key: event.id, turnId: event.turnId || "", text, time, active: false });
           }
           break;

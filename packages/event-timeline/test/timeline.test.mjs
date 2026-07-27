@@ -55,6 +55,44 @@ test("thinking is no longer active once later events exist", () => {
   assert.equal(items[0].active, false);
 });
 
+test("assistant deltas without a turn id merge into one message", () => {
+  reset();
+  // Late provider chunks recorded after a turn terminal carry no turnId;
+  // they must still merge instead of rendering one bubble per delta.
+  const items = buildTimeline([
+    event("turn.failed", { error: "prompt timed out" }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "任务" }),
+    event("message.assistant.delta", { text: "完成" }),
+    event("message.assistant.delta", { text: "。" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["lifecycle", "message"]);
+  assert.equal(items[1].role, "assistant");
+  assert.equal(items[1].text, "任务完成。");
+  assert.equal(items[1].turnId, "");
+});
+
+test("assistant deltas after a turn keep their own message per turn", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.assistant.delta", { text: "one" }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "two" }, { turnId: "turn_2" }),
+  ]);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].text, "one");
+  assert.equal(items[1].text, "two");
+});
+
+test("empty deltas do not create empty bubbles", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "" }),
+    event("message.assistant.delta", { text: "" }),
+    event("message.assistant.delta", { text: "answer" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["message"]);
+  assert.equal(items[0].text, "answer");
+});
+
 test("codex command execution tool call is normalized and completed", () => {
   reset();
   const items = buildTimeline([
