@@ -35,7 +35,7 @@ canonical `time` string. Kind-specific fields are:
 | `thinking` | `text`, `turnId`, semantic `active` flag |
 | `tools` | `calls[]`; each call has identity, label, status, output/error, method, time, and a bounded raw preview |
 | `approval` | `approvalId`, summary, `pending`/`accepted`/`declined` status, decision |
-| `lifecycle` | stable English summary plus semantic `muted`/`ok`/`danger` tone |
+| `lifecycle` | stable English summary plus semantic `muted`/`info`/`ok`/`danger` tone |
 | `error` | provider error text |
 | `unknown` | original event type and a bounded payload preview |
 

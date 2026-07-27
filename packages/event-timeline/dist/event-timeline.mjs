@@ -418,10 +418,19 @@ export function buildTimeline(events) {
         break;
       }
       case "provider.error":
-        items.push({
-          kind: "error", key: event.id, time,
-          text: firstString(data.message, "The provider reported an error"),
-        });
+        {
+          const message = firstString(data.message, "The provider reported an error");
+          const details = firstString(data.details);
+          const text = details && details !== message ? `${message} · ${details}` : message;
+          if (data.willRetry === true) {
+            items.push({
+              kind: "lifecycle", tone: "info", key: event.id, time,
+              text,
+            });
+          } else {
+            items.push({ kind: "error", key: event.id, time, text });
+          }
+        }
         break;
       case "turn.started":
         items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Turn started" });

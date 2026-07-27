@@ -51,6 +51,72 @@ func TestCodexTranslatesStreamingTurnAndApproval(t *testing.T) {
 	}
 }
 
+func TestCodexRetryableErrorKeepsTurnOpenAndNormalizesData(t *testing.T) {
+	var events []Event
+	value := newCodex("unused", Options{Hooks: Hooks{
+		Event: func(event Event) { events = append(events, event) },
+	}})
+	value.notification("turn/started", json.RawMessage(`{"turn":{"id":"turn-native"}}`))
+	value.notification("error", json.RawMessage(`{
+		"error": {
+			"message": "Reconnecting... 2/5",
+			"additionalDetails": "stream disconnected before completion: tls handshake eof"
+		},
+		"willRetry": true
+	}`))
+
+	if value.turn != "turn-native" {
+		t.Fatalf("retryable error cleared native turn: %q", value.turn)
+	}
+	retry := events[1]
+	if retry.Type != "provider.error" || retry.TurnDone || retry.TurnFailed {
+		t.Fatalf("retryable error became terminal: %+v", retry)
+	}
+	data, ok := retry.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("retry data type = %T", retry.Data)
+	}
+	if data["message"] != "Reconnecting... 2/5" ||
+		data["details"] != "stream disconnected before completion: tls handshake eof" ||
+		data["willRetry"] != true {
+		t.Fatalf("retry data was not normalized: %+v", data)
+	}
+
+	value.notification("item/agentMessage/delta", json.RawMessage(`{"delta":"recovered"}`))
+	value.notification("turn/completed", json.RawMessage(`{"turn":{"id":"turn-native"}}`))
+	if events[2].Type != "message.assistant.delta" || !events[3].TurnDone || events[3].TurnFailed {
+		t.Fatalf("recovered turn did not complete normally: %+v", events)
+	}
+}
+
+func TestCodexNonRetryableErrorFailsTurnWithNormalizedMessage(t *testing.T) {
+	var events []Event
+	value := newCodex("unused", Options{Hooks: Hooks{
+		Event: func(event Event) { events = append(events, event) },
+	}})
+	value.notification("turn/started", json.RawMessage(`{"turn":{"id":"turn-native"}}`))
+	value.notification("error", json.RawMessage(`{
+		"error": {
+			"message": "stream disconnected",
+			"additionalDetails": "retry budget exhausted"
+		},
+		"willRetry": false
+	}`))
+
+	if value.turn != "" {
+		t.Fatalf("terminal error kept native turn open: %q", value.turn)
+	}
+	failure := events[1]
+	if failure.Type != "provider.error" || !failure.TurnDone || !failure.TurnFailed {
+		t.Fatalf("non-retryable error was not terminal: %+v", failure)
+	}
+	data := failure.Data.(map[string]any)
+	if data["message"] != "stream disconnected" || data["details"] != "retry budget exhausted" ||
+		data["willRetry"] != false {
+		t.Fatalf("terminal error data was not normalized: %+v", data)
+	}
+}
+
 func TestCodexParsesModelList(t *testing.T) {
 	raw := json.RawMessage(`{"data":[{"id":"gpt-5.6-sol","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},{"id":"gpt-5.5","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}`)
 	models := parseCodexModels(raw)

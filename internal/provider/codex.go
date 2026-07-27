@@ -255,9 +255,18 @@ func (c *codexSession) notification(method string, params json.RawMessage) {
 	case "turn/completed":
 		c.turn = ""
 		event.Type, event.TurnDone = "provider.turn.completed", true
-	case "turn/failed", "error":
+	case "turn/failed":
 		c.turn = ""
+		event.Data, _ = codexErrorData(method, params)
 		event.Type, event.TurnDone, event.TurnFailed = "provider.error", true, true
+	case "error":
+		var willRetry bool
+		event.Data, willRetry = codexErrorData(method, params)
+		event.Type = "provider.error"
+		if !willRetry {
+			c.turn = ""
+			event.TurnDone, event.TurnFailed = true, true
+		}
 	case "item/agentMessage/delta":
 		text := lookup(params, "delta")
 		if text == "" {
@@ -274,6 +283,41 @@ func (c *codexSession) notification(method string, params json.RawMessage) {
 	if c.options.Hooks.Event != nil {
 		c.options.Hooks.Event(event)
 	}
+}
+
+func codexErrorData(method string, params json.RawMessage) (map[string]any, bool) {
+	var payload struct {
+		WillRetry bool `json:"willRetry"`
+	}
+	_ = json.Unmarshal(params, &payload)
+
+	message := lookup(params, "error", "message")
+	if message == "" {
+		message = lookup(params, "turn", "error", "message")
+	}
+	if message == "" {
+		message = lookup(params, "message")
+	}
+	details := lookup(params, "error", "additionalDetails")
+	if details == "" {
+		details = lookup(params, "turn", "error", "additionalDetails")
+	}
+	if details == "" {
+		details = lookup(params, "additionalDetails")
+	}
+
+	data := map[string]any{
+		"method":    method,
+		"raw":       json.RawMessage(params),
+		"willRetry": payload.WillRetry,
+	}
+	if message != "" {
+		data["message"] = message
+	}
+	if details != "" {
+		data["details"] = details
+	}
+	return data, payload.WillRetry
 }
 
 func option(agent config.Agent, key, fallback string) string {

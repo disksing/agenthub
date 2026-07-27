@@ -202,7 +202,7 @@ present on events that belong to a turn. Core event types:
 | `message.reasoning.delta` | `{"text"}` | Reasoning/thinking chunk. |
 | `tool.event` | provider-specific | Tool call lifecycle (start, update, end). |
 | `provider.event` | `{"method", "raw"}` | Raw provider notification kept for transparency. |
-| `provider.error` | `{"message"}` | Provider process or protocol error. |
+| `provider.error` | `{"message", "details"?, "willRetry"?}` | Provider process or protocol error. A Codex event with `willRetry: true` is recoverable and does not close the active turn; clients must wait for a canonical `turn.*` terminal event. |
 | `provider.stderr` | `{"text"}` | Provider stderr output. |
 | `provider.warning` | `{"message", ...}` | Non-fatal provider problem. |
 

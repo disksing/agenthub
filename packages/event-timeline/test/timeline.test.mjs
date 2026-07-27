@@ -327,6 +327,40 @@ test("provider errors, lifecycle and notable session states are visible", () => 
   assert.equal(items[4].tone, "danger");
 });
 
+test("retryable provider errors render as informational reconnecting lifecycle", () => {
+  reset();
+  const items = buildTimeline([
+    event("provider.error", {
+      message: "Reconnecting... 2/5",
+      details: "stream disconnected before completion: tls handshake eof",
+      willRetry: true,
+    }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "recovered" }, { turnId: "turn_1" }),
+    event("turn.completed", {}, { turnId: "turn_1" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["lifecycle", "message", "lifecycle"]);
+  assert.equal(items[0].tone, "info");
+  assert.equal(
+    items[0].text,
+    "Reconnecting... 2/5 · stream disconnected before completion: tls handshake eof",
+  );
+  assert.equal(items[2].text, "Turn completed");
+});
+
+test("terminal provider errors include normalized details", () => {
+  reset();
+  const items = buildTimeline([
+    event("provider.error", {
+      message: "stream disconnected",
+      details: "retry budget exhausted",
+      willRetry: false,
+    }, { turnId: "turn_1" }),
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, "error");
+  assert.equal(items[0].text, "stream disconnected · retry budget exhausted");
+});
+
 test("strict stopped lifecycle shows stopping and machine reason", () => {
   reset();
   const items = buildTimeline([

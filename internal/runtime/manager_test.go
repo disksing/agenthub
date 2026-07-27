@@ -497,6 +497,86 @@ func TestProviderTurnFailureClosesApprovalBeforeCanonicalTerminal(t *testing.T) 
 	}
 }
 
+func TestRetryableProviderErrorKeepsTurnBusyUntilCompletion(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	var adapter *fakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter = &fakeSession{hooks: options.Hooks, holdTurn: true}
+		return adapter, nil
+	}
+	if _, err := manager.Send(value.ID, "question", false); err != nil {
+		t.Fatal(err)
+	}
+	adapter.hooks.Event(provider.Event{
+		Type: "provider.error",
+		Data: map[string]any{
+			"message":   "Reconnecting... 2/5",
+			"details":   "tls handshake eof",
+			"willRetry": true,
+		},
+	})
+
+	during, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if during.State != session.StateBusy || during.CurrentTurnID == "" {
+		t.Fatalf("retryable error closed the active turn: %+v", during)
+	}
+	turnID := during.CurrentTurnID
+	adapter.hooks.Event(provider.Event{
+		Type: "message.assistant.delta",
+		Data: map[string]any{"text": "recovered"},
+	})
+	adapter.hooks.Event(provider.Event{
+		Type:     "provider.turn.completed",
+		Data:     map[string]any{"nativeTurnId": "provider-private"},
+		TurnDone: true,
+	})
+
+	after, err := store.Get(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != session.StateReady || after.CurrentTurnID != "" {
+		t.Fatalf("recovered turn did not complete: %+v", after)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retryCount, failedCount, completedCount int
+	for _, event := range events {
+		switch event.Type {
+		case "provider.error":
+			retryCount++
+			if event.TurnID != turnID {
+				t.Fatalf("retry event turn = %q, want %q", event.TurnID, turnID)
+			}
+		case "message.assistant.delta":
+			if event.TurnID != turnID {
+				t.Fatalf("post-retry delta turn = %q, want %q", event.TurnID, turnID)
+			}
+		case session.EventTurnFailed:
+			failedCount++
+		case session.EventTurnCompleted:
+			completedCount++
+		}
+	}
+	if retryCount != 1 || failedCount != 0 || completedCount != 1 {
+		t.Fatalf("retry terminal counts: provider.error=%d turn.failed=%d turn.completed=%d",
+			retryCount, failedCount, completedCount)
+	}
+}
+
 func TestCustomApprovalReplyIsDeliveredAfterTurnCloses(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {
