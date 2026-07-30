@@ -357,6 +357,13 @@ export function buildTimeline(events) {
             openToolCalls.delete(update.callId);
           }
         } else {
+          // A client may intentionally project only a recent tail of a long
+          // session. In that case a command that started before the loaded
+          // window can still emit output deltas inside it. A delta is only an
+          // update to an existing call, never a standalone tool call; ignore
+          // it when its start is not present instead of creating noisy
+          // synthetic "Tool" rows that can also split assistant text.
+          if (update.deltaOnly) break;
           const targetGroup = group || { kind: "tools", key: event.id, calls: [], time };
           const call = newToolCall(update, event);
           targetGroup.calls.push(call);

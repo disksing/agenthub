@@ -23,8 +23,10 @@ expanded/collapsed state.
 
 Events must be in durable `id` order. The function does not fetch, sort, or
 retain hidden state: after adding REST or SSE events, call it again with the
-complete contiguous sequence. It returns new mutable objects and never
-mutates the input events.
+available contiguous sequence. A sequence may be a truncated recent tail;
+pure tool output deltas whose call started before that tail stay hidden because
+an update is not a standalone tool call. It returns new mutable objects and
+never mutates the input events.
 
 All items include `kind`, `key` (the originating event id), and the raw
 canonical `time` string. Kind-specific fields are:

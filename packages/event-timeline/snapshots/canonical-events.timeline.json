@@ -307,6 +307,35 @@
         "text": "Session stopped · provider error"
       }
     ],
+    "truncated-history-orphan-command-delta": [
+      {
+        "kind": "message",
+        "role": "assistant",
+        "key": 1,
+        "turnId": "turn_truncated",
+        "text": "Long commands are still running.",
+        "time": "2026-01-02T08:00:03Z"
+      },
+      {
+        "kind": "tools",
+        "key": 4,
+        "calls": [
+          {
+            "key": 4,
+            "callId": "call_visible",
+            "name": "Command",
+            "summary": "git status",
+            "status": "completed",
+            "output": "working tree clean",
+            "error": "",
+            "method": "item/started",
+            "time": "2026-01-02T08:00:06Z",
+            "rawPreview": "{\"item\":{\"id\":\"call_visible\",\"type\":\"commandExecution\",\"command\":\"git status\",\"status\":\"inProgress\"}}"
+          }
+        ],
+        "time": "2026-01-02T08:00:06Z"
+      }
+    ],
     "lifecycle-provider-error-and-unknown": [
       {
         "kind": "lifecycle",

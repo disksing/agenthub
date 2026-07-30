@@ -462,6 +462,93 @@
       ]
     },
     {
+      "name": "truncated-history-orphan-command-delta",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T08:00:01Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_truncated",
+          "data": { "text": "Long commands " }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T08:00:02Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_truncated",
+          "data": {
+            "method": "item/commandExecution/outputDelta",
+            "raw": {
+              "itemId": "call_before_window",
+              "delta": "compile output"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "time": "2026-01-02T08:00:03Z",
+          "type": "message.assistant.delta",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_truncated",
+          "data": { "text": "are still running." }
+        },
+        {
+          "id": 4,
+          "time": "2026-01-02T08:00:04Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_truncated",
+          "data": {
+            "method": "item/started",
+            "raw": {
+              "item": {
+                "id": "call_visible",
+                "type": "commandExecution",
+                "command": "git status",
+                "status": "inProgress"
+              }
+            }
+          }
+        },
+        {
+          "id": 5,
+          "time": "2026-01-02T08:00:05Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_truncated",
+          "data": {
+            "method": "item/commandExecution/outputDelta",
+            "raw": {
+              "itemId": "call_visible",
+              "delta": "working tree clean"
+            }
+          }
+        },
+        {
+          "id": 6,
+          "time": "2026-01-02T08:00:06Z",
+          "type": "tool.event",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_truncated",
+          "data": {
+            "method": "item/completed",
+            "raw": {
+              "item": {
+                "id": "call_visible",
+                "type": "commandExecution",
+                "command": "git status",
+                "status": "completed",
+                "aggregatedOutput": "working tree clean",
+                "exitCode": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "lifecycle-provider-error-and-unknown",
       "events": [
         {

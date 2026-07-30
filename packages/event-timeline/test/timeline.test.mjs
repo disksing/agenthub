@@ -128,6 +128,46 @@ test("codex command execution tool call is normalized and completed", () => {
   assert.equal("collapsed" in items[0], false);
 });
 
+test("orphan command output deltas stay hidden in truncated history", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.assistant.delta", { text: "Long commands " }, { turnId: "turn_1" }),
+    event("tool.event", {
+      method: "item/commandExecution/outputDelta",
+      raw: { itemId: "call_before_window", delta: "compile output" },
+    }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "are still running." }, { turnId: "turn_1" }),
+    event("tool.event", {
+      method: "item/started",
+      raw: { item: { id: "call_visible", type: "commandExecution", command: "git status", status: "inProgress" } },
+    }, { turnId: "turn_1" }),
+    event("tool.event", {
+      method: "item/commandExecution/outputDelta",
+      raw: { itemId: "call_visible", delta: "working tree clean" },
+    }, { turnId: "turn_1" }),
+    event("tool.event", {
+      method: "item/completed",
+      raw: {
+        item: {
+          id: "call_visible",
+          type: "commandExecution",
+          command: "git status",
+          status: "completed",
+          aggregatedOutput: "working tree clean",
+          exitCode: 0,
+        },
+      },
+    }, { turnId: "turn_1" }),
+  ]);
+
+  assert.deepEqual(items.map((item) => item.kind), ["message", "tools"]);
+  assert.equal(items[0].text, "Long commands are still running.");
+  assert.equal(items[1].calls.length, 1);
+  assert.equal(items[1].calls[0].callId, "call_visible");
+  assert.equal(items[1].calls[0].name, "Command");
+  assert.equal(items[1].calls[0].output, "working tree clean");
+});
+
 test("codex failed command surfaces the exit code as an error", () => {
   reset();
   const items = buildTimeline([
