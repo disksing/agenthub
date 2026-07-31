@@ -312,17 +312,21 @@ func (s *Store) Append(id, eventType, turnID string, data []byte) (Event, error)
 		state.mu.Unlock()
 		return Event{}, ErrArchived
 	}
-	event, err := s.appendLocked(state, id, eventType, turnID, data)
+	event, broadcast, err := s.appendLocked(state, id, eventType, turnID, data)
 	state.mu.Unlock()
 	if err != nil {
 		return Event{}, err
 	}
-	s.publish(event)
+	s.publish(broadcast)
 	return event, nil
 }
 
-// appendLocked appends an event while the caller holds state.mu.
-func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, data []byte) (Event, error) {
+// appendLocked appends an event while the caller holds state.mu. It returns
+// the stored event plus the frame to broadcast to live subscribers. The two
+// differ for delta merges: the stored event accumulates the full text while
+// subscribers receive a small append patch, so steady-state live traffic
+// stays proportional to the fragments instead of the accumulated message.
+func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, data []byte) (Event, Event, error) {
 	event := Event{
 		ID:        state.session.LastEventID + 1,
 		Time:      time.Now().UTC(),
@@ -331,32 +335,32 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 		TurnID:    turnID,
 		Data:      append(json.RawMessage(nil), data...),
 	}
-	if last, mergedData, ok := mergeableDeltaEvent(state, event); ok {
-		merged, done, err := s.mergeDeltaLocked(state, last, mergedData, event)
+	if last, mergedData, patchData, ok := mergeableDeltaEvent(state, event); ok {
+		merged, patch, done, err := s.mergeDeltaLocked(state, last, mergedData, patchData, event)
 		if done || err != nil {
-			return merged, err
+			return merged, patch, err
 		}
 		// The durable tail no longer matched the in-memory event, so the
 		// merge was skipped; fall through to the plain append path.
 	}
 	encoded, err := json.Marshal(event)
 	if err != nil {
-		return Event{}, err
+		return Event{}, Event{}, err
 	}
 	projected := cloneSession(state.session)
 	if err := applyEvent(&projected, event); err != nil {
-		return Event{}, fmt.Errorf("project event: %w", err)
+		return Event{}, Event{}, fmt.Errorf("project event: %w", err)
 	}
 	encoded = append(encoded, '\n')
 	if err := appendDurable(s.eventsPath(id), encoded); err != nil {
-		return Event{}, err
+		return Event{}, Event{}, err
 	}
 	state.session = projected
 	state.events = append(state.events, event)
 	if err := writeJSONAtomic(s.snapshotPath(id), state.session); err != nil {
-		return Event{}, fmt.Errorf("write session snapshot: %w", err)
+		return Event{}, Event{}, fmt.Errorf("write session snapshot: %w", err)
 	}
-	return event, nil
+	return event, event, nil
 }
 
 // mergeableDeltaEvent reports whether event is a streaming text delta that
@@ -367,43 +371,44 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 // history loads. Merging requires the same type, turn, and an identical
 // payload shape (every key except text equal, including the provider
 // method) so no provider-specific field is ever dropped. It returns the
-// last event plus its payload with the merged text.
+// last event, its payload with the merged text, and the append patch
+// (the fragment payload flagged with "append": true) for live subscribers.
 //
 // Merging stops once the accumulated payload reaches
 // maxMergedDeltaEventBytes: each merge rewrites the tail line, so the cap
 // bounds the rewrite cost of one event and keeps merged events well below
 // the scanner limits of history and stream readers.
-func mergeableDeltaEvent(state *sessionState, event Event) (Event, map[string]any, bool) {
+func mergeableDeltaEvent(state *sessionState, event Event) (Event, map[string]any, map[string]any, bool) {
 	if event.Type != "message.assistant.delta" && event.Type != "message.reasoning.delta" {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	if len(state.events) == 0 {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	last := state.events[len(state.events)-1]
 	if last.Type != event.Type || last.TurnID != event.TurnID {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	if len(last.Data) >= maxMergedDeltaEventBytes {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	var lastData, eventData map[string]any
 	if err := json.Unmarshal(last.Data, &lastData); err != nil {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	if err := json.Unmarshal(event.Data, &eventData); err != nil {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	if len(lastData) != len(eventData) {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	lastText, ok := lastData["text"].(string)
 	if !ok {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	eventText, ok := eventData["text"].(string)
 	if !ok {
-		return Event{}, nil, false
+		return Event{}, nil, nil, false
 	}
 	for key, value := range eventData {
 		if key == "text" {
@@ -411,53 +416,64 @@ func mergeableDeltaEvent(state *sessionState, event Event) (Event, map[string]an
 		}
 		other, present := lastData[key]
 		if !present || !reflect.DeepEqual(other, value) {
-			return Event{}, nil, false
+			return Event{}, nil, nil, false
 		}
 	}
 	lastData["text"] = lastText + eventText
-	return last, lastData, true
+	eventData["append"] = true
+	return last, lastData, eventData, true
 }
 
 // mergeDeltaLocked folds a delta event into the session's last durable event
 // while the caller holds state.mu. The merged event keeps its original id, so
 // the log stays contiguous and REST cursors are unaffected; the event time
 // moves to the newest fragment so session UpdatedAt keeps tracking provider
-// activity. Live subscribers receive the updated event again as a
-// replacement for the id they already have.
+// activity.
+//
+// Live subscribers receive the returned patch instead of the merged event:
+// it reuses the merged event's id and carries only the new fragment flagged
+// with "append": true, so consumers extend their copy of the event without
+// re-receiving the accumulated text. History reads and stream replays
+// always serve the full merged event.
 //
 // done reports whether the durable log was updated. When the on-disk tail no
 // longer matches the in-memory event, done is false and the caller falls
 // back to a plain append; once the rewrite succeeded, done is true and any
 // later error (projection, snapshot) is final, mirroring appendLocked.
-func (s *Store) mergeDeltaLocked(state *sessionState, last Event, mergedData map[string]any, event Event) (merged Event, done bool, err error) {
+func (s *Store) mergeDeltaLocked(state *sessionState, last Event, mergedData, patchData map[string]any, event Event) (merged, patch Event, done bool, err error) {
 	data, err := json.Marshal(mergedData)
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, Event{}, false, err
 	}
 	merged = last
 	merged.Time = event.Time
 	merged.Data = data
 	encoded, err := json.Marshal(merged)
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, Event{}, false, err
 	}
 	oldEncoded, err := json.Marshal(last)
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, Event{}, false, err
 	}
 	if err := rewriteLastEventLine(s.eventsPath(last.SessionID), append(oldEncoded, '\n'), append(encoded, '\n')); err != nil {
-		return Event{}, false, nil
+		return Event{}, Event{}, false, nil
+	}
+	patch = merged
+	patch.Data, err = json.Marshal(patchData)
+	if err != nil {
+		return Event{}, Event{}, false, err
 	}
 	projected := cloneSession(state.session)
 	if err := applyEvent(&projected, merged); err != nil {
-		return Event{}, true, fmt.Errorf("project event: %w", err)
+		return Event{}, Event{}, true, fmt.Errorf("project event: %w", err)
 	}
 	state.session = projected
 	state.events[len(state.events)-1] = merged
 	if err := writeJSONAtomic(s.snapshotPath(last.SessionID), state.session); err != nil {
-		return Event{}, true, fmt.Errorf("write session snapshot: %w", err)
+		return Event{}, Event{}, true, fmt.Errorf("write session snapshot: %w", err)
 	}
-	return merged, true, nil
+	return merged, patch, true, nil
 }
 
 // rewriteLastEventLine replaces the final line of the event log with the
@@ -538,12 +554,12 @@ func (s *Store) Archive(id string) (Session, error) {
 			state.mu.Unlock()
 			return Session{}, fmt.Errorf("%w: open turn or pending approval", ErrSessionActive)
 		}
-		event, err := s.appendLocked(state, id, "session.archived", "", nil)
+		_, broadcast, err := s.appendLocked(state, id, "session.archived", "", nil)
 		state.mu.Unlock()
 		if err != nil {
 			return Session{}, err
 		}
-		s.publish(event)
+		s.publish(broadcast)
 	} else {
 		state.mu.Unlock()
 	}

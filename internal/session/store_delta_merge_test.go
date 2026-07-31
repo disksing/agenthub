@@ -289,7 +289,7 @@ func TestDeltaMergeStopsAtAccumulatedSizeCap(t *testing.T) {
 	}
 }
 
-func TestDeltaMergePublishesReplacement(t *testing.T) {
+func TestDeltaMergePublishesAppendPatch(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -308,15 +308,32 @@ func TestDeltaMergePublishesReplacement(t *testing.T) {
 	if event := <-subscription.Events(); event.ID != first.ID {
 		t.Fatalf("first live delta = %+v", event)
 	}
-	if _, err := store.Append(created.ID, "message.assistant.delta", "turn_1", mustJSON(t, deltaData("!", "item/agentMessage/delta"))); err != nil {
+	merged, err := store.Append(created.ID, "message.assistant.delta", "turn_1", mustJSON(t, deltaData("!", "item/agentMessage/delta")))
+	if err != nil {
 		t.Fatal(err)
 	}
-	replacement := <-subscription.Events()
-	if replacement.ID != first.ID {
-		t.Fatalf("replacement id = %d, want %d", replacement.ID, first.ID)
+	// The stored event accumulates the full text...
+	if text := deltaTextOf(t, merged); text != "Hello!" {
+		t.Fatalf("stored merged text = %q, want %q", text, "Hello!")
 	}
-	if text := deltaTextOf(t, replacement); text != "Hello!" {
-		t.Fatalf("replacement text = %q, want %q", text, "Hello!")
+	// ...while live subscribers receive only the fragment as an append
+	// patch, so steady-state traffic stays proportional to the fragments.
+	patch := <-subscription.Events()
+	if patch.ID != first.ID {
+		t.Fatalf("patch id = %d, want %d", patch.ID, first.ID)
+	}
+	var patchData map[string]any
+	if err := json.Unmarshal(patch.Data, &patchData); err != nil {
+		t.Fatal(err)
+	}
+	if patchData["append"] != true {
+		t.Fatalf("patch missing append flag: %+v", patchData)
+	}
+	if patchData["text"] != "!" {
+		t.Fatalf("patch text = %q, want only the new fragment", patchData["text"])
+	}
+	if patchData["method"] != "item/agentMessage/delta" {
+		t.Fatalf("patch method = %q", patchData["method"])
 	}
 }
 

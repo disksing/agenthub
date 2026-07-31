@@ -739,8 +739,13 @@ func TestForgeGateLosslessReplayBacklogDisconnectOverflowAndCatchup(t *testing.T
 		if len(first) != 137 || first[0] != 1 {
 			t.Fatalf("first SSE segment: len=%d first=%v", len(first), first)
 		}
-		second := readSSE(t, restarted.endpoint+"/v1/sessions/"+value.ID+"/events?stream=true", first[len(first)-1], int(value.LastEventID)-len(first))
-		assertContiguous(t, append(first, second...), 1, value.LastEventID)
+		// The second segment starts at the last received id; the replay
+		// re-sends that cursor event once before continuing with newer ids.
+		second := readSSE(t, restarted.endpoint+"/v1/sessions/"+value.ID+"/events?stream=true", first[len(first)-1], int(value.LastEventID)-len(first)+1)
+		if second[0] != first[len(first)-1] {
+			t.Fatalf("second SSE segment must start with the cursor event: %v", second[:min(3, len(second))])
+		}
+		assertContiguous(t, append(first, second[1:]...), 1, value.LastEventID)
 
 		status, page := restarted.request(http.MethodGet, "/v1/sessions/"+value.ID+"/events?after=1000&limit=1000", nil)
 		if status != http.StatusOK || int(page["latestCursor"].(float64)) != int(value.LastEventID) {

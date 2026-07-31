@@ -950,6 +950,22 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	lastSent := after
+	// Delta merges fold new fragments into the event at the client's cursor
+	// without issuing a new id, and live append patches never move the
+	// cursor, so after a disconnect the client's copy of that event may lag
+	// behind. Re-send it with its current durable content before replaying
+	// newer events; consumers treat the repeated id as a full replacement.
+	if lastSent > 0 {
+		page, err := s.store.EventsPage(id, lastSent-1, 1)
+		if err != nil {
+			return
+		}
+		if len(page.Events) == 1 {
+			if err := writeSSE(w, page.Events[0]); err != nil {
+				return
+			}
+		}
+	}
 	for lastSent < highWater {
 		if live.Overflowed() {
 			return
@@ -991,8 +1007,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 			}
 			if event.ID <= lastSent {
 				// The store folds consecutive text deltas into the tail event
-				// and republishes it under the id the client already has.
-				// Forward the replacement so live readers see the merged
+				// and republishes an append patch under the id the client
+				// already has. Forward it so live readers extend the merged
 				// content; only a new id may advance the cursor.
 				if err := writeSSE(w, event); err != nil {
 					return
