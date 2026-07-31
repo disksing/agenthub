@@ -99,8 +99,21 @@ export function App() {
     let recovering = false;
     const project = (incoming) => {
       setEvents((current) => {
-        const known = new Set(current.map((event) => event.id));
-        return [...current, ...incoming.filter((event) => !known.has(event.id))];
+        // Delta-merge replacements republish an id the list already holds:
+        // swap the stored event for the merged content in place and append
+        // genuinely new ids in arrival order.
+        const next = [...current];
+        const indexById = new Map(next.map((event, index) => [event.id, index]));
+        for (const event of incoming) {
+          const index = indexById.get(event.id);
+          if (index === undefined) {
+            indexById.set(event.id, next.length);
+            next.push(event);
+          } else {
+            next[index] = event;
+          }
+        }
+        return next;
       });
     };
     const refreshForEvent = (event) => {

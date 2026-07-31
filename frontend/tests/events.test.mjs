@@ -59,20 +59,21 @@ test("catch-up refuses a non-contiguous REST page", async () => {
   );
 });
 
-test("duplicates are ignored and contiguous unknown envelopes are preserved", async () => {
+test("delta-merge replacements are projected again under the same id", async () => {
   const projected = [];
-  const duplicateCursor = await projectLiveEvent({
+  const replacementCursor = await projectLiveEvent({
     sessionId: "ses_test",
     cursor: 5,
-    event: event(5),
+    event: event(5, "message.assistant.delta"),
     project: (events) => projected.push(...events),
   });
+  assert.equal(replacementCursor, 5);
   const nextCursor = await projectLiveEvent({
     sessionId: "ses_test",
-    cursor: duplicateCursor,
+    cursor: replacementCursor,
     event: event(6, "future.event.type"),
     project: (events) => projected.push(...events),
   });
   assert.equal(nextCursor, 6);
-  assert.deepEqual(projected, [event(6, "future.event.type")]);
+  assert.deepEqual(projected, [event(5, "message.assistant.delta"), event(6, "future.event.type")]);
 });

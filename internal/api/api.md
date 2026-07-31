@@ -102,6 +102,7 @@ Current runtime-backed daemon instances advertise:
 | `session.launch-environment` | Durable per-session provider environment, including provider resume. |
 | `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
 | `events.lossless-replay` | Durable exclusive cursors, paginated REST catch-up and gap-free SSE replay. |
+| `events.delta-merge` | Consecutive same-message text deltas are folded into one durable event; SSE republishes the merged event under its existing id as a replacement frame. |
 | `events.canonical-turn-terminals` | Provider-independent `turn.completed`, `turn.failed` and `turn.cancelled`. |
 | `recovery.closed-turns` | Daemon recovery closes open approvals and turns before publishing `stopped`. |
 
@@ -180,7 +181,15 @@ looks like:
 
 `id` is a durable, per-session, monotonically increasing integer cursor. A
 committed id is never reused, including across daemon restarts. `turnId` is
-present on events that belong to a turn. Core event types:
+present on events that belong to a turn.
+
+Consecutive `message.assistant.delta` or `message.reasoning.delta` fragments
+of one provider message (same type, turn, and provider method) are folded
+into a single durable event instead of one event per fragment: the event
+keeps its original id, its `text` accumulates, and its `time` tracks the
+newest fragment. Folding stops at a 32 KiB accumulated payload, so one long
+message may span several events. Live streams republish the merged event
+under its existing id; see SSE mode below. Core event types:
 
 | Type | `data` payload | Meaning |
 | --- | --- | --- |
@@ -594,8 +603,10 @@ connection open and receive events as they happen.
      high-water mark.
   2. It pages through **all** stored events after the exclusive cursor up to
      that high-water mark, with no 1000-event backlog limit.
-  3. It then consumes the live subscription, discarding only duplicate
-     notifications at or below the high-water mark.
+  3. It then consumes the live subscription. Delta-merge replacements
+     republish the tail event under the id the client already holds and are
+     forwarded so live readers can swap in the accumulated content; only a
+     new id advances the stream cursor.
   4. Every 15 seconds without traffic the daemon sends a `: heartbeat`
      comment line to keep proxies and clients alive.
   5. The stream ends when the client disconnects or when the daemon shuts
@@ -607,9 +618,12 @@ connection open and receive events as they happen.
 - **Recovery:** reconnect with `Last-Event-ID` set to the id of the last
   contiguous event processed. Events are replayed from `events.jsonl`, not
   the in-memory subscriber queue, so overflow and daemon restart are
-  recoverable. A client that observes an adjacent id other than
-  `last_processed_id + 1` must stop projection and catch up through REST
-  before resuming SSE.
+  recoverable. A frame whose id is at or below the last processed id is a
+  delta-merge replacement carrying the full accumulated content of that
+  event: swap it in for the stored copy and keep the cursor unchanged. Only
+  an id greater than `last_processed_id + 1` is a gap; a client that
+  observes one must stop projection and catch up through REST before
+  resuming SSE.
 - **Frame format:** every event uses the default SSE message channel (no
   per-type `event:` field), so consumers receive every event — including
   types they do not know about yet — instead of silently dropping events
@@ -831,8 +845,9 @@ curl -fsS -X POST "$BASE/v1/sessions/$SESSION/messages" \
   -H "Content-Type: application/json" \
   -d '{"text":"Implement the requested change."}'
 
-# Reconnect with Last-Event-ID=$CURSOR. Process each adjacent id and ignore
-# unknown types. If approval.requested arrives, resolve its approvalId:
+# Reconnect with Last-Event-ID=$CURSOR. Process each adjacent id, swap in
+# replacement frames whose id you already hold, and ignore unknown types. If
+# approval.requested arrives, resolve its approvalId:
 curl -fsS -X POST "$BASE/v1/sessions/$SESSION/approvals/approval-1" \
   -H "Content-Type: application/json" \
   -d '{"decision":"accept"}'

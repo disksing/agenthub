@@ -36,6 +36,11 @@ export async function catchUpEvents(sessionId, after = 0, request = api) {
 // A live gap is never projected directly. The caller pauses the live source,
 // catches up from the last contiguous cursor through REST, and only then
 // resumes projection.
+//
+// The store folds consecutive text deltas into the tail event and republishes
+// the merged event under the id the client already has. Such replacement
+// frames (event.id <= cursor) are projected again so the host swaps in the
+// merged content; the cursor only advances on new ids.
 export async function projectLiveEvent({
   sessionId,
   cursor,
@@ -43,7 +48,10 @@ export async function projectLiveEvent({
   request = api,
   project,
 }) {
-  if (event.id <= cursor) return cursor;
+  if (event.id <= cursor) {
+    project([event]);
+    return cursor;
+  }
   if (event.id === cursor + 1) {
     project([event]);
     return event.id;
