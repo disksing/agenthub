@@ -180,7 +180,7 @@ curl -s http://127.0.0.1:4646/api.md
 `GET /v1/status` is the compatibility handshake. It returns
 `"apiVersion": "1"` and only the capabilities this daemon instance can
 actually exercise: `session.source`, `session.launch-environment`,
-`session.strict-stopped`, `events.lossless-replay`,
+`session.strict-stopped`, `events.lossless-replay`, `events.delta-merge`,
 `events.canonical-turn-terminals`, and `recovery.closed-turns`. A client
 must reject an unsupported API version or a missing required capability
 before creating a session; older daemons with neither field are explicitly

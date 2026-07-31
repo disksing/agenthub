@@ -901,6 +901,104 @@ func TestSSEStreamsUnknownEventTypes(t *testing.T) {
 	cancel()
 }
 
+// Consecutive text deltas merge into one durable event; the live stream
+// forwards the merged event again under the id the client already has, so
+// readers can swap in the accumulated content, and the cursor still
+// advances normally on the next new event.
+func TestSSEForwardsDeltaMergeReplacements(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Title: "SSE", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/sessions/"+created.ID+"/events?stream=true", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+
+	if id, _ := readSSEFrame(t, reader); id != 1 {
+		t.Fatalf("replayed frame id = %d, want 1", id)
+	}
+	if _, err := store.Append(created.ID, "turn.started", "turn_1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := readSSEFrame(t, reader); id != 2 {
+		t.Fatalf("turn.started frame id = %d, want 2", id)
+	}
+	appendDelta := func(text string) {
+		t.Helper()
+		if _, err := store.Append(created.ID, "message.assistant.delta", "turn_1",
+			mustMarshal(t, map[string]any{"text": text, "method": "item/agentMessage/delta"})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendDelta("Hello")
+	id, event := readSSEFrame(t, reader)
+	if id != 3 || deltaEventText(t, event) != "Hello" {
+		t.Fatalf("first delta frame = %d %+v", id, event)
+	}
+	appendDelta("!")
+	id, event = readSSEFrame(t, reader)
+	if id != 3 || deltaEventText(t, event) != "Hello!" {
+		t.Fatalf("replacement frame = %d %+v, want id 3 with merged text", id, event)
+	}
+	if _, err := store.Append(created.ID, "turn.completed", "turn_1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := readSSEFrame(t, reader); id != 4 {
+		t.Fatalf("frame after replacement id = %d, want 4", id)
+	}
+	cancel()
+}
+
+func readSSEFrame(t *testing.T, reader *bufio.Reader) (int64, session.Event) {
+	t.Helper()
+	var idLine, dataLine string
+	for dataLine == "" {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		trimmed := strings.TrimSuffix(line, "\n")
+		switch {
+		case strings.HasPrefix(trimmed, "id: "):
+			idLine = trimmed
+		case strings.HasPrefix(trimmed, "data: "):
+			dataLine = trimmed
+		}
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(idLine, "id: "), 10, 64)
+	if err != nil {
+		t.Fatalf("invalid SSE id line %q: %v", idLine, err)
+	}
+	var event session.Event
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(dataLine, "data: ")), &event); err != nil {
+		t.Fatal(err)
+	}
+	return id, event
+}
+
+func deltaEventText(t *testing.T, event session.Event) string {
+	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal(event.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	text, _ := data["text"].(string)
+	return text
+}
+
 // When the server starts shutting down, live SSE streams must end on their
 // own so http.Server.Shutdown is not blocked until its deadline by clients
 // that keep the connection open.
@@ -1779,6 +1877,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 	}
 	wantCapabilities := []string{
 		CapabilityEventsLosslessReplay,
+		CapabilityEventsDeltaMerge,
 		CapabilitySessionSource,
 		CapabilityEventsCanonicalTerminal,
 		CapabilityRecoveryClosedTurns,
@@ -1857,7 +1956,7 @@ func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CapabilityEventsLosslessReplay, CapabilitySessionSource}
+	want := []string{CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilitySessionSource}
 	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
 		t.Fatalf("capabilities = %v, want %v", body.Capabilities, want)
 	}

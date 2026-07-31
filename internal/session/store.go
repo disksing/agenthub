@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -47,6 +48,9 @@ const (
 	DefaultEventPageSize = 500
 	MaxEventPageSize     = 1000
 	subscriptionBuffer   = 256
+	// maxMergedDeltaEventBytes caps the accumulated payload of one merged
+	// delta event. See mergeableDeltaEvent for why the cap exists.
+	maxMergedDeltaEventBytes = 32 << 10
 )
 
 var sessionIDPattern = regexp.MustCompile(`^ses_[a-z0-9]+$`)
@@ -327,6 +331,14 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 		TurnID:    turnID,
 		Data:      append(json.RawMessage(nil), data...),
 	}
+	if last, mergedData, ok := mergeableDeltaEvent(state, event); ok {
+		merged, done, err := s.mergeDeltaLocked(state, last, mergedData, event)
+		if done || err != nil {
+			return merged, err
+		}
+		// The durable tail no longer matched the in-memory event, so the
+		// merge was skipped; fall through to the plain append path.
+	}
 	encoded, err := json.Marshal(event)
 	if err != nil {
 		return Event{}, err
@@ -345,6 +357,153 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 		return Event{}, fmt.Errorf("write session snapshot: %w", err)
 	}
 	return event, nil
+}
+
+// mergeableDeltaEvent reports whether event is a streaming text delta that
+// continues the session's last durable event. Consecutive assistant or
+// reasoning deltas of one provider message are pure text fragments, so they
+// fold into the preceding event: the log keeps one event per message
+// instead of one per fragment, which shrinks the durable log and speeds up
+// history loads. Merging requires the same type, turn, and an identical
+// payload shape (every key except text equal, including the provider
+// method) so no provider-specific field is ever dropped. It returns the
+// last event plus its payload with the merged text.
+//
+// Merging stops once the accumulated payload reaches
+// maxMergedDeltaEventBytes: each merge rewrites the tail line, so the cap
+// bounds the rewrite cost of one event and keeps merged events well below
+// the scanner limits of history and stream readers.
+func mergeableDeltaEvent(state *sessionState, event Event) (Event, map[string]any, bool) {
+	if event.Type != "message.assistant.delta" && event.Type != "message.reasoning.delta" {
+		return Event{}, nil, false
+	}
+	if len(state.events) == 0 {
+		return Event{}, nil, false
+	}
+	last := state.events[len(state.events)-1]
+	if last.Type != event.Type || last.TurnID != event.TurnID {
+		return Event{}, nil, false
+	}
+	if len(last.Data) >= maxMergedDeltaEventBytes {
+		return Event{}, nil, false
+	}
+	var lastData, eventData map[string]any
+	if err := json.Unmarshal(last.Data, &lastData); err != nil {
+		return Event{}, nil, false
+	}
+	if err := json.Unmarshal(event.Data, &eventData); err != nil {
+		return Event{}, nil, false
+	}
+	if len(lastData) != len(eventData) {
+		return Event{}, nil, false
+	}
+	lastText, ok := lastData["text"].(string)
+	if !ok {
+		return Event{}, nil, false
+	}
+	eventText, ok := eventData["text"].(string)
+	if !ok {
+		return Event{}, nil, false
+	}
+	for key, value := range eventData {
+		if key == "text" {
+			continue
+		}
+		other, present := lastData[key]
+		if !present || !reflect.DeepEqual(other, value) {
+			return Event{}, nil, false
+		}
+	}
+	lastData["text"] = lastText + eventText
+	return last, lastData, true
+}
+
+// mergeDeltaLocked folds a delta event into the session's last durable event
+// while the caller holds state.mu. The merged event keeps its original id, so
+// the log stays contiguous and REST cursors are unaffected; the event time
+// moves to the newest fragment so session UpdatedAt keeps tracking provider
+// activity. Live subscribers receive the updated event again as a
+// replacement for the id they already have.
+//
+// done reports whether the durable log was updated. When the on-disk tail no
+// longer matches the in-memory event, done is false and the caller falls
+// back to a plain append; once the rewrite succeeded, done is true and any
+// later error (projection, snapshot) is final, mirroring appendLocked.
+func (s *Store) mergeDeltaLocked(state *sessionState, last Event, mergedData map[string]any, event Event) (merged Event, done bool, err error) {
+	data, err := json.Marshal(mergedData)
+	if err != nil {
+		return Event{}, false, err
+	}
+	merged = last
+	merged.Time = event.Time
+	merged.Data = data
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return Event{}, false, err
+	}
+	oldEncoded, err := json.Marshal(last)
+	if err != nil {
+		return Event{}, false, err
+	}
+	if err := rewriteLastEventLine(s.eventsPath(last.SessionID), append(oldEncoded, '\n'), append(encoded, '\n')); err != nil {
+		return Event{}, false, nil
+	}
+	projected := cloneSession(state.session)
+	if err := applyEvent(&projected, merged); err != nil {
+		return Event{}, true, fmt.Errorf("project event: %w", err)
+	}
+	state.session = projected
+	state.events[len(state.events)-1] = merged
+	if err := writeJSONAtomic(s.snapshotPath(last.SessionID), state.session); err != nil {
+		return Event{}, true, fmt.Errorf("write session snapshot: %w", err)
+	}
+	return merged, true, nil
+}
+
+// rewriteLastEventLine replaces the final line of the event log with the
+// merged encoding of the same event. The file tail must match oldLine byte
+// for byte before anything is written; any mismatch or I/O failure returns
+// an error with the log left untouched so the caller can fall back to a
+// plain append. A crash between the write and the sync can tear the tail
+// line; the next Open repairs it by dropping that trailing event, which is
+// safe here because only transient streaming deltas are ever rewritten.
+func rewriteLastEventLine(path string, oldLine, newLine []byte) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	if stat.Size() < int64(len(oldLine)) {
+		_ = file.Close()
+		return errors.New("event log shorter than the last event line")
+	}
+	offset := stat.Size() - int64(len(oldLine))
+	tail := make([]byte, len(oldLine))
+	if _, err := file.ReadAt(tail, offset); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if !bytes.Equal(tail, oldLine) {
+		_ = file.Close()
+		return errors.New("event log tail does not match the last event")
+	}
+	if _, err := file.WriteAt(newLine, offset); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Truncate(offset + int64(len(newLine))); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 // Archive moves a session's whole directory from the active store into

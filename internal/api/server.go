@@ -28,6 +28,7 @@ const (
 	CapabilitySessionLaunchEnvironment = "session.launch-environment"
 	CapabilitySessionStrictStopped     = "session.strict-stopped"
 	CapabilityEventsLosslessReplay     = "events.lossless-replay"
+	CapabilityEventsDeltaMerge         = "events.delta-merge"
 	CapabilityEventsCanonicalTerminal  = "events.canonical-turn-terminals"
 	CapabilityRecoveryClosedTurns      = "recovery.closed-turns"
 )
@@ -199,6 +200,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) capabilities() []string {
 	capabilities := []string{
 		CapabilityEventsLosslessReplay,
+		CapabilityEventsDeltaMerge,
 		CapabilitySessionSource,
 	}
 	if s.runtime != nil {
@@ -988,6 +990,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 				return
 			}
 			if event.ID <= lastSent {
+				// The store folds consecutive text deltas into the tail event
+				// and republishes it under the id the client already has.
+				// Forward the replacement so live readers see the merged
+				// content; only a new id may advance the cursor.
+				if err := writeSSE(w, event); err != nil {
+					return
+				}
+				flusher.Flush()
 				continue
 			}
 			if event.ID != lastSent+1 {
