@@ -593,7 +593,25 @@ func TestSSEReplaysFromCursor(t *testing.T) {
 	}
 	defer response.Body.Close()
 	reader := bufio.NewReader(response.Body)
+	// The first frame re-sends the cursor event with its current durable
+	// content so clients heal tail events that merged while disconnected.
 	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "id: 1\n" {
+		t.Fatalf("SSE replay must re-send the cursor event first: %q", line)
+	}
+	for {
+		line, err = reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\n" {
+			break
+		}
+	}
+	line, err = reader.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,8 +776,10 @@ func TestSSEStopsImmediatelyAfterSubscriberOverflow(t *testing.T) {
 	}
 
 	// Reconnect from the last contiguous id. The missing tail comes from the
-	// durable log, not the discarded in-memory subscriber queue.
-	resume := newSSERecorder(257, 0)
+	// durable log, not the discarded in-memory subscriber queue. The replay
+	// starts by re-sending the cursor event (id 2) so tail merges that
+	// happened while disconnected reach the client.
+	resume := newSSERecorder(258, 0)
 	resumeCtx, resumeCancel := context.WithCancel(context.Background())
 	resumeRequest := httptest.NewRequest(
 		http.MethodGet,
@@ -774,7 +794,11 @@ func TestSSEStopsImmediatelyAfterSubscriberOverflow(t *testing.T) {
 	waitClosed(t, resume.reached, "overflow reconnect replay")
 	resumeCancel()
 	waitClosed(t, resumeDone, "overflow reconnect handler")
-	assertContiguousIDs(t, resume.IDs(), 3, 259)
+	resumeIDs := resume.IDs()
+	if len(resumeIDs) != 258 || resumeIDs[0] != 2 {
+		t.Fatalf("reconnect replay must start with the cursor event: %v", resumeIDs[:min(4, len(resumeIDs))])
+	}
+	assertContiguousIDs(t, resumeIDs[1:], 3, 259)
 }
 
 func TestEventsRecoverAfterStoreRestart(t *testing.T) {
@@ -803,7 +827,7 @@ func TestEventsRecoverAfterStoreRestart(t *testing.T) {
 	if page.LatestCursor != 25 || page.NextAfter != 15 || !page.HasMore {
 		t.Fatalf("restart REST page = %+v", page)
 	}
-	writer := newSSERecorder(15, 0)
+	writer := newSSERecorder(16, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?stream=true&after=10", nil).WithContext(ctx)
 	done := make(chan struct{})
@@ -814,7 +838,11 @@ func TestEventsRecoverAfterStoreRestart(t *testing.T) {
 	waitClosed(t, writer.reached, "restart SSE replay")
 	cancel()
 	waitClosed(t, done, "restart SSE handler")
-	assertContiguousIDs(t, writer.IDs(), 11, 25)
+	if ids := writer.IDs(); len(ids) != 16 || ids[0] != 10 {
+		t.Fatalf("restart replay must start with the cursor event: %v", ids)
+	} else {
+		assertContiguousIDs(t, ids[1:], 11, 25)
+	}
 }
 
 // Every event — including types a consumer has never heard of — must arrive
@@ -902,10 +930,10 @@ func TestSSEStreamsUnknownEventTypes(t *testing.T) {
 }
 
 // Consecutive text deltas merge into one durable event; the live stream
-// forwards the merged event again under the id the client already has, so
-// readers can swap in the accumulated content, and the cursor still
-// advances normally on the next new event.
-func TestSSEForwardsDeltaMergeReplacements(t *testing.T) {
+// forwards small append patches under the id the client already has, and
+// reconnecting at that id first re-sends the event's full accumulated
+// content so fragments missed while disconnected are healed.
+func TestSSEForwardsDeltaMergePatches(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -950,16 +978,47 @@ func TestSSEForwardsDeltaMergeReplacements(t *testing.T) {
 	}
 	appendDelta("!")
 	id, event = readSSEFrame(t, reader)
-	if id != 3 || deltaEventText(t, event) != "Hello!" {
-		t.Fatalf("replacement frame = %d %+v, want id 3 with merged text", id, event)
+	if id != 3 {
+		t.Fatalf("patch frame id = %d, want 3", id)
+	}
+	var patchData map[string]any
+	if err := json.Unmarshal(event.Data, &patchData); err != nil {
+		t.Fatal(err)
+	}
+	if patchData["append"] != true || patchData["text"] != "!" {
+		t.Fatalf("live frame = %+v, want append patch with only the new fragment", patchData)
 	}
 	if _, err := store.Append(created.ID, "turn.completed", "turn_1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if id, _ := readSSEFrame(t, reader); id != 4 {
-		t.Fatalf("frame after replacement id = %d, want 4", id)
+		t.Fatalf("frame after patch id = %d, want 4", id)
 	}
 	cancel()
+
+	// Reconnect from the merged tail event: the replay must first re-send it
+	// with the full accumulated content, then continue with newer events.
+	reconnect, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/sessions/"+created.ID+"/events?stream=true&after=3", nil)
+	reconnectResponse, err := http.DefaultClient.Do(reconnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconnectResponse.Body.Close()
+	reconnectReader := bufio.NewReader(reconnectResponse.Body)
+	id, event = readSSEFrame(t, reconnectReader)
+	if id != 3 || deltaEventText(t, event) != "Hello!" {
+		t.Fatalf("reconnect first frame = %d %q, want the full merged event 3", id, deltaEventText(t, event))
+	}
+	var resent map[string]any
+	if err := json.Unmarshal(event.Data, &resent); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasAppend := resent["append"]; hasAppend {
+		t.Fatalf("replayed events must not carry the append flag: %+v", resent)
+	}
+	if id, _ := readSSEFrame(t, reconnectReader); id != 4 {
+		t.Fatalf("reconnect second frame id = %d, want 4", id)
+	}
 }
 
 func readSSEFrame(t *testing.T, reader *bufio.Reader) (int64, session.Event) {

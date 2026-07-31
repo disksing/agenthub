@@ -5,7 +5,7 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "./api";
 import { archiveDisabledReason, archiveListError, isArchived, isArchivable, pickActiveAfterArchive, sessionStatusLabel, sessionsQuery } from "./archive.js";
-import { catchUpEvents, projectLiveEvent } from "./events.js";
+import { catchUpEvents, mergeIncomingEvents, projectLiveEvent } from "./events.js";
 import { buildTimeline } from "@agenthub/event-timeline";
 import { displayTime } from "./display.js";
 import { Timeline } from "./Timeline.jsx";
@@ -98,23 +98,9 @@ export function App() {
     let cursor = 0;
     let recovering = false;
     const project = (incoming) => {
-      setEvents((current) => {
-        // Delta-merge replacements republish an id the list already holds:
-        // swap the stored event for the merged content in place and append
-        // genuinely new ids in arrival order.
-        const next = [...current];
-        const indexById = new Map(next.map((event, index) => [event.id, index]));
-        for (const event of incoming) {
-          const index = indexById.get(event.id);
-          if (index === undefined) {
-            indexById.set(event.id, next.length);
-            next.push(event);
-          } else {
-            next[index] = event;
-          }
-        }
-        return next;
-      });
+      // New ids append in order; repeated ids are full replacements
+      // (reconnect cursor re-sends) or append patches (live delta merges).
+      setEvents((current) => mergeIncomingEvents(current, incoming));
     };
     const refreshForEvent = (event) => {
       if (/^(session|turn|approval)\./.test(event.type)) {

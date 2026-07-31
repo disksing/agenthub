@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   EventCursorGapError,
   catchUpEvents,
+  mergeIncomingEvents,
   projectLiveEvent,
 } from "../src/events.js";
 
@@ -76,4 +77,38 @@ test("delta-merge replacements are projected again under the same id", async () 
   });
   assert.equal(nextCursor, 6);
   assert.deepEqual(projected, [event(5, "message.assistant.delta"), event(6, "future.event.type")]);
+});
+
+test("mergeIncomingEvents appends, replaces, and extends events", () => {
+  const stored = [
+    { id: 1, time: "t1", type: "turn.started" },
+    { id: 2, time: "t2", type: "message.assistant.delta", data: { text: "Hello", method: "m" } },
+  ];
+
+  // Append patches extend the stored event text and move its time.
+  const patched = mergeIncomingEvents(stored, [
+    { id: 2, time: "t3", type: "message.assistant.delta", data: { text: ", ", method: "m", append: true } },
+    { id: 2, time: "t4", type: "message.assistant.delta", data: { text: "world", method: "m", append: true } },
+  ]);
+  assert.equal(patched.length, 2);
+  assert.equal(patched[1].data.text, "Hello, world");
+  assert.equal(patched[1].data.method, "m");
+  assert.equal(patched[1].time, "t4");
+  assert.equal(patched[1].data.append, undefined);
+  // The input list is never mutated.
+  assert.equal(stored[1].data.text, "Hello");
+
+  // Full replacements (history replays, reconnect cursor re-sends) swap the
+  // whole event and heal any missed patches.
+  const healed = mergeIncomingEvents(patched, [
+    { id: 2, time: "t5", type: "message.assistant.delta", data: { text: "Hello, world!", method: "m" } },
+  ]);
+  assert.equal(healed[1].data.text, "Hello, world!");
+
+  // New ids append in arrival order.
+  const appended = mergeIncomingEvents(healed, [
+    { id: 3, time: "t6", type: "turn.completed" },
+  ]);
+  assert.equal(appended.length, 3);
+  assert.equal(appended[2].type, "turn.completed");
 });

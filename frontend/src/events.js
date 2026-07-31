@@ -38,8 +38,9 @@ export async function catchUpEvents(sessionId, after = 0, request = api) {
 // resumes projection.
 //
 // The store folds consecutive text deltas into the tail event and republishes
-// the merged event under the id the client already has. Such replacement
-// frames (event.id <= cursor) are projected again so the host swaps in the
+// frames under the id the client already has: append patches carrying only the
+// new fragment live, and the full accumulated event when a stream reconnect
+// replays the cursor. Both are projected again so the host converges on the
 // merged content; the cursor only advances on new ids.
 export async function projectLiveEvent({
   sessionId,
@@ -59,4 +60,36 @@ export async function projectLiveEvent({
   const caughtUp = await catchUpEvents(sessionId, cursor, request);
   project(caughtUp.events);
   return caughtUp.cursor;
+}
+
+// mergeIncomingEvents folds incoming frames into the stored contiguous event
+// list. New ids append in arrival order. A repeated id is either a full
+// replacement (history replays and reconnect cursor re-sends) or an append
+// patch (data.append === true) whose text fragment extends the stored event;
+// patches also move the stored event time to the newest fragment.
+export function mergeIncomingEvents(current, incoming) {
+  const next = [...current];
+  const indexById = new Map(next.map((event, index) => [event.id, index]));
+  for (const event of incoming) {
+    const index = indexById.get(event.id);
+    if (index === undefined) {
+      indexById.set(event.id, next.length);
+      next.push(event);
+    } else if (event.data?.append === true) {
+      next[index] = appendEventFragment(next[index], event);
+    } else {
+      next[index] = event;
+    }
+  }
+  return next;
+}
+
+function appendEventFragment(existing, patch) {
+  const current = typeof existing.data?.text === "string" ? existing.data.text : "";
+  const fragment = typeof patch.data?.text === "string" ? patch.data.text : "";
+  return {
+    ...existing,
+    time: patch.time || existing.time,
+    data: { ...existing.data, text: current + fragment },
+  };
 }
