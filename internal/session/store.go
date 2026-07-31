@@ -66,6 +66,12 @@ type sessionState struct {
 	mu      sync.Mutex
 	session Session
 	events  []Event
+	// eventsLoaded reports whether events holds the full durable history.
+	// Sessions opened from a trusted session.json snapshot start unloaded
+	// and parse events.jsonl only when history is first read or appended
+	// to, which keeps Open proportional to the number of sessions instead
+	// of the total event-log size.
+	eventsLoaded bool
 	// archived reports whether the session directory lives under Archive/.
 	// It is the in-memory record of the physical location, which is the
 	// authoritative archive signal.
@@ -214,7 +220,7 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
-	state := &sessionState{session: value}
+	state := &sessionState{session: value, eventsLoaded: true}
 	dir := s.sessionDir(id)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return Session{}, fmt.Errorf("create session directory: %w", err)
@@ -311,6 +317,10 @@ func (s *Store) Append(id, eventType, turnID string, data []byte) (Event, error)
 	if state.session.State == StateArchived {
 		state.mu.Unlock()
 		return Event{}, ErrArchived
+	}
+	if err := s.ensureEventsLocked(state, id); err != nil {
+		state.mu.Unlock()
+		return Event{}, err
 	}
 	event, broadcast, err := s.appendLocked(state, id, eventType, turnID, data)
 	state.mu.Unlock()
@@ -615,6 +625,9 @@ func (s *Store) EventsPage(id string, after int64, limit int) (EventPage, error)
 		return EventPage{After: after, Limit: limit, NextAfter: after, LatestCursor: latest},
 			fmt.Errorf("%w: %d > %d", ErrEventCursorAhead, after, latest)
 	}
+	if err := s.ensureEventsLocked(state, id); err != nil {
+		return EventPage{}, err
+	}
 	start := sort.Search(len(state.events), func(index int) bool {
 		return state.events[index].ID > after
 	})
@@ -649,6 +662,9 @@ func (s *Store) EventsThrough(id string, after, highWater int64, limit int) ([]E
 	limit = normalizeEventLimit(limit)
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if err := s.ensureEventsLocked(state, id); err != nil {
+		return nil, err
+	}
 	start := sort.Search(len(state.events), func(index int) bool {
 		return state.events[index].ID > after
 	})
@@ -711,6 +727,9 @@ func normalizeEventLimit(limit int) int {
 }
 
 func (s *Store) loadSession(dir, id string) (*sessionState, error) {
+	if snapshot, ok := loadTrustedSnapshot(dir, id); ok {
+		return &sessionState{session: snapshot}, nil
+	}
 	events, err := readEventsRepairTail(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
 		return nil, err
@@ -730,7 +749,100 @@ func (s *Store) loadSession(dir, id string) (*sessionState, error) {
 	if err := writeJSONAtomic(filepath.Join(dir, "session.json"), projected); err != nil {
 		return nil, err
 	}
-	return &sessionState{session: projected, events: events}, nil
+	return &sessionState{session: projected, events: events, eventsLoaded: true}, nil
+}
+
+// snapshotTailWindow bounds the tail read used to validate a session.json
+// snapshot against its event log. Merged delta events stay well below
+// maxMergedDeltaEventBytes, but other event types can be larger, so a last
+// record that does not fit the window falls back to a full replay instead
+// of guessing.
+const snapshotTailWindow = 1 << 20
+
+// loadTrustedSnapshot returns the persisted session.json projection when it
+// is provably consistent with the durable event log: the log must end
+// cleanly (no torn tail from an interrupted write) and its last record must
+// match the snapshot's cursor. Appends always write the log first and the
+// snapshot second, so a matching watermark proves the snapshot covers every
+// durable event. The event log remains the source of truth: it is still
+// parsed in full on first actual use (history read, append, provider
+// process scan fallback), and any inconsistency found here sends the
+// session through the replay-and-repair path.
+func loadTrustedSnapshot(dir, id string) (Session, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, "session.json"))
+	if err != nil {
+		return Session{}, false
+	}
+	var snapshot Session
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return Session{}, false
+	}
+	if snapshot.ID != id || snapshot.LastEventID <= 0 {
+		return Session{}, false
+	}
+	last, ok := readLastEventRecord(filepath.Join(dir, "events.jsonl"), snapshotTailWindow)
+	if !ok {
+		return Session{}, false
+	}
+	if last.ID != snapshot.LastEventID || last.SessionID != id {
+		return Session{}, false
+	}
+	return snapshot, true
+}
+
+// readLastEventRecord reads the final complete record of an event log. ok
+// is false when the file is missing, empty, ends in a torn (partially
+// written) record, or its last record does not fit the tail window.
+func readLastEventRecord(path string, window int64) (Event, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Event{}, false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() == 0 {
+		return Event{}, false
+	}
+	offset := info.Size() - window
+	if offset < 0 {
+		offset = 0
+	}
+	data := make([]byte, info.Size()-offset)
+	if _, err := file.ReadAt(data, offset); err != nil {
+		return Event{}, false
+	}
+	if data[len(data)-1] != '\n' {
+		return Event{}, false
+	}
+	lineStart := bytes.LastIndexByte(data[:len(data)-1], '\n') + 1
+	if lineStart == 0 && offset > 0 {
+		// The final record is larger than the window.
+		return Event{}, false
+	}
+	var event Event
+	if err := json.Unmarshal(data[lineStart:len(data)-1], &event); err != nil {
+		return Event{}, false
+	}
+	return event, true
+}
+
+// ensureEventsLocked loads the durable event history on first use; callers
+// must hold state.mu. Sessions opened from a trusted snapshot defer this
+// full parse until history is actually read or appended to.
+func (s *Store) ensureEventsLocked(state *sessionState, id string) error {
+	if state.eventsLoaded {
+		return nil
+	}
+	events, err := readEventsRepairTail(s.eventsPathFor(state, id))
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		return errors.New("session has no events")
+	}
+	state.events = events
+	state.eventsLoaded = true
+	return nil
 }
 
 func applyEvent(projected *Session, event Event) error {
@@ -830,6 +942,9 @@ func (s *Store) OpenProviderProcess(id string) (ProviderProcessEventData, bool, 
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if !state.eventsLoaded {
+		return scanProviderProcessTail(s.eventsPathFor(state, id))
+	}
 	var process ProviderProcessEventData
 	open := false
 	for _, event := range state.events {
@@ -847,6 +962,130 @@ func (s *Store) OpenProviderProcess(id string) (ProviderProcessEventData, bool, 
 		}
 	}
 	return process, open, nil
+}
+
+// providerProcessTailChunk is the read granularity of scanProviderProcessTail.
+const providerProcessTailChunk = 256 << 10
+
+// scanProviderProcessTail answers OpenProviderProcess for a session whose
+// events are not loaded, without parsing the whole log: it scans records
+// from the tail backwards until the newest provider.process.started or
+// stopped session.state settles the outcome. The result matches the forward
+// scan exactly; only the read direction differs. Stopped sessions converge
+// with their terminal record near the tail, so recovery-time scans stay
+// cheap even for multi-gigabyte logs.
+func scanProviderProcessTail(path string) (ProviderProcessEventData, bool, error) {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ProviderProcessEventData{}, false, nil
+	}
+	if err != nil {
+		return ProviderProcessEventData{}, false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return ProviderProcessEventData{}, false, err
+	}
+	remaining := info.Size()
+	var buf []byte
+	// A log whose final record was torn by an interrupted write is not
+	// expected here (trusted snapshots require a clean tail), but skip the
+	// partial trailing segment defensively instead of misparsing it.
+	skipPartial := remaining > 0
+	if skipPartial {
+		last := make([]byte, 1)
+		if _, err := file.ReadAt(last, remaining-1); err != nil {
+			return ProviderProcessEventData{}, false, err
+		}
+		skipPartial = last[0] != '\n'
+	}
+	for {
+		for {
+			nl := bytes.LastIndexByte(buf, '\n')
+			if nl < 0 {
+				break
+			}
+			line := buf[nl+1:]
+			buf = buf[:nl]
+			if len(line) == 0 {
+				// The trailing newline at the end of the file, or a
+				// blank separator; keep scanning.
+				continue
+			}
+			if skipPartial {
+				skipPartial = false
+				continue
+			}
+			process, open, matched, err := providerProcessFromRecord(line)
+			if err != nil {
+				return ProviderProcessEventData{}, false, err
+			}
+			if matched {
+				return process, open, nil
+			}
+		}
+		if remaining == 0 {
+			// buf holds the first record of the log (no preceding
+			// newline). If the partial tail was never separated by a
+			// newline, the whole remainder is partial and no complete
+			// record exists.
+			if len(buf) == 0 || skipPartial {
+				return ProviderProcessEventData{}, false, nil
+			}
+			line := buf
+			buf = nil
+			process, open, matched, err := providerProcessFromRecord(line)
+			if err != nil {
+				return ProviderProcessEventData{}, false, err
+			}
+			if matched {
+				return process, open, nil
+			}
+			return ProviderProcessEventData{}, false, nil
+		}
+		n := int64(providerProcessTailChunk)
+		if remaining < n {
+			n = remaining
+		}
+		remaining -= n
+		chunk := make([]byte, n)
+		if _, err := file.ReadAt(chunk, remaining); err != nil {
+			return ProviderProcessEventData{}, false, err
+		}
+		buf = append(chunk, buf...)
+	}
+}
+
+// providerProcessFromRecord inspects one raw event-log line. matched is
+// true when the record settles the provider-process question: a
+// provider.process.started record (open reports whether it carries a live
+// process group) or a session.state record reaching stopped. Records of
+// any other type — and state records that fail to parse, mirroring the
+// forward scan — leave matched false so the caller keeps scanning older
+// records.
+func providerProcessFromRecord(line []byte) (process ProviderProcessEventData, open, matched bool, err error) {
+	var envelope struct {
+		ID   int64           `json:"id"`
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return ProviderProcessEventData{}, false, false, fmt.Errorf("invalid event log record: %w", err)
+	}
+	switch envelope.Type {
+	case "provider.process.started":
+		if err := json.Unmarshal(envelope.Data, &process); err != nil {
+			return ProviderProcessEventData{}, false, false, fmt.Errorf("event %d: %w", envelope.ID, err)
+		}
+		return process, process.PID > 0 && process.ProcessGroupID > 0, true, nil
+	case "session.state":
+		var data StateEventData
+		if json.Unmarshal(envelope.Data, &data) == nil && data.State == StateStopped {
+			return ProviderProcessEventData{}, false, true, nil
+		}
+	}
+	return ProviderProcessEventData{}, false, false, nil
 }
 
 func readEventsRepairTail(path string) ([]Event, error) {
@@ -999,6 +1238,19 @@ func (s *Store) removeSession(id string) {
 
 func (s *Store) sessionDir(id string) string {
 	return filepath.Join(s.root, id)
+}
+
+// sessionDirFor locates a session directory, honoring the physical archive
+// location recorded in memory.
+func (s *Store) sessionDirFor(state *sessionState, id string) string {
+	if state.archived {
+		return filepath.Join(s.archiveRoot(), id)
+	}
+	return s.sessionDir(id)
+}
+
+func (s *Store) eventsPathFor(state *sessionState, id string) string {
+	return filepath.Join(s.sessionDirFor(state, id), "events.jsonl")
 }
 
 func (s *Store) snapshotPath(id string) string {
