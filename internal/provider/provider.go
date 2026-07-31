@@ -312,9 +312,15 @@ func (r *jsonRPC) requestLongRunning(method string, params any) (json.RawMessage
 }
 
 func (r *jsonRPC) requestWithTimeout(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	// Registering the request and writing it must be atomic with respect to
+	// close: otherwise close can shut stdin after the request appears in
+	// waiting but before it is written, surfacing a raw write error instead
+	// of the deterministic provider-exit result.
+	r.writeMu.Lock()
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
+		r.writeMu.Unlock()
 		return nil, errors.New("provider process is closed")
 	}
 	id := r.nextID
@@ -323,7 +329,9 @@ func (r *jsonRPC) requestWithTimeout(method string, params any, timeout time.Dur
 	ch := make(chan rpcResult, 1)
 	r.waiting[key] = ch
 	r.mu.Unlock()
-	if err := r.write(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+	err := r.writeRawLocked(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	r.writeMu.Unlock()
+	if err != nil {
 		r.mu.Lock()
 		delete(r.waiting, key)
 		r.mu.Unlock()
@@ -366,12 +374,19 @@ func (r *jsonRPC) respondError(id json.RawMessage, code int, message string) err
 
 func (r *jsonRPC) write(value any) error { return r.writeRaw(value) }
 func (r *jsonRPC) writeRaw(value any) error {
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
+	return r.writeRawLocked(value)
+}
+
+// writeRawLocked writes with writeMu already held so callers can combine the
+// write with other state changes (e.g. request registration) atomically
+// against close.
+func (r *jsonRPC) writeRawLocked(value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	r.writeMu.Lock()
-	defer r.writeMu.Unlock()
 	if r.stdin == nil {
 		return errors.New("provider stdin is unavailable")
 	}
@@ -450,10 +465,18 @@ func (r *jsonRPC) finish(processErr error) {
 }
 
 func (r *jsonRPC) close() error {
+	// Lock order is writeMu then mu everywhere: requestWithTimeout holds
+	// writeMu across registration and the stdin write, so closing stdin here
+	// under writeMu keeps an in-flight request from racing the shutdown.
+	r.writeMu.Lock()
 	r.mu.Lock()
 	if r.closed {
 		cmd, pgid, stdin, done := r.cmd, r.pgid, r.stdin, r.done
 		r.mu.Unlock()
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		r.writeMu.Unlock()
 		if cmd != nil {
 			return terminateChildProcess(cmd, pgid, stdin, done)
 		}
@@ -465,6 +488,7 @@ func (r *jsonRPC) close() error {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
+	r.writeMu.Unlock()
 	return terminateChildProcess(cmd, pgid, stdin, r.done)
 }
 
