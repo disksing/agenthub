@@ -25,6 +25,10 @@ export function App() {
   const [defaultAgentName, setDefaultAgentName] = useState("");
   const [activeId, setActiveId] = useState("");
   const [events, setEvents] = useState([]);
+  // True while the durable history of a newly selected session is being
+  // fetched; the conversation shows a loading placeholder instead of the
+  // previous session's events.
+  const [eventsLoading, setEventsLoading] = useState(false);
   const [eventReloadKey, setEventReloadKey] = useState(0);
   const [draft, setDraft] = useState("");
   const [resumingId, setResumingId] = useState("");
@@ -91,8 +95,19 @@ export function App() {
       .catch((value) => setError(value.message));
   }, []);
 
+  // Tracks which session the events below belong to; a change means the
+  // visible events are stale and must be dropped before the new history
+  // arrives. A resume reload (same activeId, bumped eventReloadKey) keeps
+  // the current events to avoid flashing a placeholder over live content.
+  const eventsSessionRef = useRef("");
+
   useEffect(() => {
-    if (!activeId) { setEvents([]); return undefined; }
+    if (!activeId) { eventsSessionRef.current = ""; setEvents([]); setEventsLoading(false); return undefined; }
+    if (eventsSessionRef.current !== activeId) {
+      eventsSessionRef.current = activeId;
+      setEvents([]);
+      setEventsLoading(true);
+    }
     let source;
     let disposed = false;
     let cursor = 0;
@@ -139,10 +154,15 @@ export function App() {
       .then((history) => {
         if (disposed) return;
         setEvents(history.events);
+        setEventsLoading(false);
         cursor = history.cursor;
         connect();
       })
-      .catch((value) => setError(value.message));
+      .catch((value) => {
+        if (disposed) return;
+        setEventsLoading(false);
+        setError(value.message);
+      });
     return () => { disposed = true; source?.close(); };
   }, [activeId, eventReloadKey]);
 
@@ -333,7 +353,9 @@ export function App() {
 
         <div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>
           {error && <div className="error-banner">{error}<button aria-label="Dismiss error" onClick={() => setError("")}><X size={15} /></button></div>}
-          {timeline.length ? (
+          {eventsLoading ? (
+            <div className="events-loading" role="status"><CircleNotch className="spin" size={24} /><p>Loading events…</p></div>
+          ) : timeline.length ? (
             <Timeline items={timeline} agent={activeSession?.agentName || "Agent"} onApproval={resolveApproval} />
           ) : (
             <div className="empty-state"><span className="empty-icon"><Plus size={24} /></span><h2>Start a new Session</h2><p>Pick a local agent, set a working directory, and start the conversation.</p></div>
