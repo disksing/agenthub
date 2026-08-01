@@ -497,15 +497,10 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title     string          `json:"title"`
-		Cwd       string          `json:"cwd"`
-		AgentName string          `json:"agentName"`
-		Source    *session.Source `json:"source"`
-		// AgentID is the removed reference form. It is still accepted for one
-		// compatibility window: the daemon resolves it through the id → name
-		// mapping recorded when the legacy configuration was migrated, and
-		// rejects ids it cannot map. New clients must use agentName.
-		AgentID           string            `json:"agentId"`
+		Title             string            `json:"title"`
+		Cwd               string            `json:"cwd"`
+		AgentName         string            `json:"agentName"`
+		Source            *session.Source   `json:"source"`
 		LaunchEnvironment map[string]string `json:"launchEnvironment"`
 		InitialMessage    *struct {
 			Text string `json:"text"`
@@ -516,22 +511,6 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agentName := strings.TrimSpace(body.AgentName)
-	if id := strings.TrimSpace(body.AgentID); id != "" {
-		if agentName != "" {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request", "send agentName or the deprecated agentId, not both", nil)
-			return
-		}
-		if s.runtime == nil {
-			writeAPIError(w, http.StatusUnprocessableEntity, "agent_id_removed", "agentId is no longer supported: agents are referenced by their unique name; send agentName instead", nil)
-			return
-		}
-		mapped, ok := s.runtime.ResolveLegacyAgentName(id)
-		if !ok {
-			writeAPIError(w, http.StatusUnprocessableEntity, "agent_id_removed", fmt.Sprintf("agentId %q cannot be resolved: agents are now referenced by their unique name; send agentName instead (list names with GET /v1/agents or 'agenthub agents')", id), nil)
-			return
-		}
-		agentName = mapped
-	}
 	if agentName == "" {
 		writeAPIError(w, http.StatusUnprocessableEntity, "agent_required", "agentName is required: sessions are always created with an explicit agent", nil)
 		return

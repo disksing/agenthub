@@ -140,9 +140,7 @@ A session object looks like:
 ```
 
 `state` is one of `starting`, `ready`, `busy`, `waiting_approval`,
-`stopping`, `stopped` or `archived`. Legacy logs may replay `failed` briefly
-during daemon recovery, but current runtimes preserve the failure in events
-and converge to `stopped`. A stopped session may include `stopReason`:
+`stopping`, `stopped` or `archived`. A stopped session may include `stopReason`:
 `requested`, `completed`, `provider_error`, `startup_error` or
 `daemon_recovery`. Optional fields (`agentName`, `source`,
 `launchEnvironment`, `provider`, `stopReason`, `providerSessionId`,
@@ -481,17 +479,11 @@ turn before the response returns.
     Session API, so never put a secret here unless you intend it to be stored.**
   - `initialMessage.text` (optional) — first user message; when non-empty
     the first turn starts immediately.
-  - `agentId` (deprecated, do not use) — agent ids were removed in favor of
-    name-only agents. For one compatibility window an id recorded by a
-    migrated legacy configuration still resolves through the stored
-    id → name mapping; any other id is rejected. Send `agentName` instead,
-    and never both.
 - **Success `201`:** `{"session": {...}}` with a
   `Location: /v1/sessions/{id}` header.
-- **Errors:** `400 invalid_request` (malformed body, or both `agentName`
-  and `agentId`), `415 json_required`, `422 agent_required`,
+- **Errors:** `400 invalid_request` (malformed body or removed/unknown fields), `415 json_required`, `422 agent_required`,
   `422 invalid_agent` (unknown agent or disabled provider),
-  `422 agent_id_removed` (unresolvable legacy id), `422 invalid_cwd`,
+  `422 invalid_cwd`,
   `422 invalid_launch_environment` (an environment name is empty or contains
   `=`/NUL, or a value contains NUL),
   `500 session_create_failed`,

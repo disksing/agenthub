@@ -19,11 +19,6 @@ type Manager struct {
 	cfg     config.Config
 	running map[string]*active
 	factory func(provider.Options) (provider.Session, error)
-	// legacyAgentNames maps agent ids recorded by old sessions to the agent
-	// names that replaced them. It is captured when a legacy config file is
-	// migrated (see config.LoadLegacyAgentIDs) and lets those sessions start
-	// again without guessing.
-	legacyAgentNames map[string]string
 }
 
 type active struct {
@@ -68,11 +63,8 @@ func (a *active) finishStart(err error) {
 	close(a.ready)
 }
 
-func New(store *session.Store, cfg config.Config, legacyAgentNames ...map[string]string) *Manager {
+func New(store *session.Store, cfg config.Config) *Manager {
 	manager := &Manager{store: store, cfg: cfg, running: make(map[string]*active), factory: provider.New}
-	if len(legacyAgentNames) > 0 {
-		manager.legacyAgentNames = legacyAgentNames[0]
-	}
 	for _, value := range store.List(false) {
 		manager.recover(value)
 	}
@@ -258,7 +250,7 @@ func (m *Manager) IsRunning(id string) bool {
 // applies: Text sends a custom free-text reply (the question is dismissed and
 // the text is delivered as the next user message once the current turn
 // closes), OptionID selects one of the options offered by the request, and
-// Decision alone keeps the legacy coarse outcomes.
+// Decision selects a coarse outcome.
 type ApprovalReply struct {
 	Decision string
 	OptionID string
@@ -335,14 +327,13 @@ func (m *Manager) ensure(id string) (*active, error) {
 	}
 	_, _ = m.store.Append(id, "session.state", "", marshal(session.StateEventData{State: session.StateStarting}))
 	cfg := cloneConfig(m.cfg)
-	legacyNames := m.legacyAgentNames
 	if value.AgentName == "" {
 		err := fmt.Errorf("session %s has no agent: it was created before explicit agent selection and cannot be started; create a new session with an explicit agent", id)
 		m.convergeStored(id, session.StopReasonStartupError, err)
 		m.mu.Unlock()
 		return nil, err
 	}
-	agent, providerConfig, err := resolveAgent(cfg, legacyNames, value.AgentName)
+	agent, providerConfig, err := resolveAgent(cfg, value.AgentName)
 	if err != nil {
 		err = fmt.Errorf("session %s: %w", id, err)
 		m.convergeStored(id, session.StopReasonStartupError, err)
@@ -548,7 +539,6 @@ func (m *Manager) recover(value session.Session) {
 		value.State == session.StateBusy ||
 		value.State == session.StateWaitingApproval ||
 		value.State == session.StateStopping ||
-		value.State == session.StateFailed ||
 		open ||
 		value.CurrentTurnID != "" ||
 		len(value.PendingApprovalIDs) > 0
@@ -572,36 +562,8 @@ func (m *Manager) recover(value session.Session) {
 	m.convergeStored(value.ID, session.StopReasonDaemonRecovery, errors.New("provider work was interrupted by daemon restart"))
 }
 
-// resolveAgent finds the agent a session refers to. Current sessions store
-// the agent name and resolve directly (case-insensitively). Sessions
-// recorded before agent ids were removed store the old id; those resolve
-// through the id → name mapping captured during config migration, and only
-// when the mapped name still exists. Anything else fails with a clear error
-// instead of being guessed onto a different agent.
-func resolveAgent(cfg config.Config, legacyNames map[string]string, reference string) (config.Agent, config.Provider, error) {
-	agent, providerConfig, err := cfg.Agent(reference)
-	if err == nil {
-		return agent, providerConfig, nil
-	}
-	if mapped, ok := legacyNames[reference]; ok {
-		if agent, providerConfig, mappedErr := cfg.Agent(mapped); mappedErr == nil {
-			return agent, providerConfig, nil
-		} else {
-			return config.Agent{}, config.Provider{}, fmt.Errorf("agent %q was migrated to %q, which is no longer available: %w", reference, mapped, mappedErr)
-		}
-	}
-	return config.Agent{}, config.Provider{}, err
-}
-
-// ResolveLegacyAgentName maps an agent id from a migrated legacy
-// configuration to its replacement name, reporting whether the mapping
-// exists. It backs the one-time compatibility path for clients that still
-// submit agentId when creating a session.
-func (m *Manager) ResolveLegacyAgentName(id string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	name, ok := m.legacyAgentNames[id]
-	return name, ok
+func resolveAgent(cfg config.Config, reference string) (config.Agent, config.Provider, error) {
+	return cfg.Agent(reference)
 }
 
 func marshal(value any) []byte {

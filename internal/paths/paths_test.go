@@ -14,9 +14,6 @@ func TestDefaultLayoutLivesUnderDotAgentHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Isolated {
-		t.Error("default layout must not be marked isolated")
-	}
 	root := filepath.Join(home, ".agenthub")
 	want := map[string]string{
 		"ConfigDir":   root,
@@ -57,9 +54,6 @@ func TestAgentHubHomeKeepsExplicitIsolatedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resolved.Isolated {
-		t.Error("AGENTHUB_HOME layout must be marked isolated")
-	}
 	if resolved.ConfigFile != filepath.Join(root, "config", "config.json") {
 		t.Errorf("config file = %q", resolved.ConfigFile)
 	}
@@ -71,49 +65,6 @@ func TestAgentHubHomeKeepsExplicitIsolatedLayout(t *testing.T) {
 	}
 	if resolved.LogsDir != filepath.Join(root, "logs") {
 		t.Errorf("logs dir = %q", resolved.LogsDir)
-	}
-}
-
-func TestLegacyDefaultsMatchPlatform(t *testing.T) {
-	home := string(filepath.Separator) + "home/user"
-	empty := func(string) string { return "" }
-
-	darwin := LegacyFor(home, "darwin", empty)
-	if darwin.DataDir != filepath.Join(home, "Library", "Application Support", "agenthub") {
-		t.Errorf("darwin data = %q", darwin.DataDir)
-	}
-	if darwin.LogsDir != filepath.Join(home, "Library", "Logs", "AgentHub") {
-		t.Errorf("darwin logs = %q", darwin.LogsDir)
-	}
-
-	windows := LegacyFor(home, "windows", func(key string) string {
-		if key == "LOCALAPPDATA" {
-			return `C:\Users\user\AppData\Local`
-		}
-		return ""
-	})
-	if windows.DataDir != filepath.Join(`C:\Users\user\AppData\Local`, "agenthub") {
-		t.Errorf("windows data = %q", windows.DataDir)
-	}
-	if windows.LogsDir != "" {
-		t.Errorf("windows logs = %q, want empty", windows.LogsDir)
-	}
-	if missing := LegacyFor(home, "windows", empty); missing.DataDir != "" {
-		t.Errorf("windows without LOCALAPPDATA = %q, want empty", missing.DataDir)
-	}
-
-	linux := LegacyFor(home, "linux", empty)
-	if linux.DataDir != filepath.Join(home, ".local", "share", "agenthub") {
-		t.Errorf("linux data = %q", linux.DataDir)
-	}
-	xdg := LegacyFor(home, "linux", func(key string) string {
-		if key == "XDG_DATA_HOME" {
-			return "/xdg/data"
-		}
-		return ""
-	})
-	if xdg.DataDir != filepath.Join("/xdg/data", "agenthub") {
-		t.Errorf("linux XDG data = %q", xdg.DataDir)
 	}
 }
 

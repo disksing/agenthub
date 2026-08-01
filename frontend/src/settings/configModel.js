@@ -87,9 +87,7 @@ function cleanOptions(options) {
 
 // normalizeConfig deep-copies config from any source and normalizes it into a
 // fixed shape: missing arrays become empty, values become strings, blank
-// option keys and empty optional fields are dropped. Removed legacy fields
-// (agentProfiles, defaultChatAgentId, agent id) are tolerated in the input
-// and dropped.
+// option keys and empty optional fields are dropped.
 export function normalizeConfig(config = {}) {
   const providers = (Array.isArray(config.agentProviders) ? config.agentProviders : []).map((provider) => {
     const result = {

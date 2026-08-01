@@ -946,24 +946,20 @@ func (s *Store) ensureEventsLocked(state *sessionState, id string) error {
 func applyEvent(projected *Session, event Event) error {
 	switch event.Type {
 	case "session.created":
-		// The created snapshot is the Session itself. Legacy records carry
-		// agentId instead of agentName; the id is kept in the projection so
-		// the runtime can resolve it through the recorded id → name mapping.
-		var created struct {
-			Session
-			LegacyAgentID string `json:"agentId"`
-		}
-		if err := json.Unmarshal(event.Data, &created); err != nil {
+		var created Session
+		if err := decodeCurrentEvent(event.Data, &created); err != nil {
 			return err
 		}
-		*projected = created.Session
-		if projected.AgentName == "" {
-			projected.AgentName = created.LegacyAgentID
-		}
+		*projected = created
 	case "session.state":
 		var data StateEventData
-		if err := json.Unmarshal(event.Data, &data); err != nil {
+		if err := decodeCurrentEvent(event.Data, &data); err != nil {
 			return err
+		}
+		switch data.State {
+		case StateStarting, StateReady, StateBusy, StateWaitingApproval, StateStopping, StateStopped, StateArchived:
+		default:
+			return fmt.Errorf("unsupported session state %q", data.State)
 		}
 		projected.State = data.State
 		if data.State == StateStopped {
@@ -973,10 +969,10 @@ func applyEvent(projected *Session, event Event) error {
 		}
 	case "session.provider":
 		var data ProviderEventData
-		if err := json.Unmarshal(event.Data, &data); err != nil {
+		if err := decodeCurrentEvent(event.Data, &data); err != nil {
 			return err
 		}
-		projected.AgentName = data.ResolvedAgentName()
+		projected.AgentName = data.AgentName
 		projected.Provider = data.Provider
 		projected.ProviderSessionID = data.ProviderSessionID
 	case "session.agent":
@@ -1037,6 +1033,12 @@ func applyEvent(projected *Session, event Event) error {
 	projected.LastEventID = event.ID
 	projected.UpdatedAt = event.Time
 	return nil
+}
+
+func decodeCurrentEvent(data json.RawMessage, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
 }
 
 // OpenProviderProcess returns the newest provider process group that has not

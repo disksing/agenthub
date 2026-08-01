@@ -532,13 +532,3 @@ test("history rebuild and live streaming produce the same timeline", () => {
   const rebuilt = buildTimeline(streamed.map((item, index) => ({ ...item, id: index + 1 })));
   assert.deepEqual(rebuilt, live);
 });
-
-// Events recorded before agent ids were removed still render their legacy
-// agentId reference.
-test("legacy session.provider agentId still renders", () => {
-  reset();
-  const items = buildTimeline([
-    event("session.provider", { agentId: "codex-default", provider: "codex" }),
-  ]);
-  assert.equal(items[0].text, "Agent connected · codex-default · via codex");
-});

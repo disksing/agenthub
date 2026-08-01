@@ -461,8 +461,7 @@ export function buildTimeline(events) {
         items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Session created" });
         break;
       case "session.provider": {
-        // agentId is the legacy field written before agent ids were removed.
-        const agent = firstString(data.agentName, data.agentId);
+        const agent = firstString(data.agentName);
         const providerName = firstString(data.provider);
         const parts = ["Agent connected"];
         if (agent) parts.push(agent);

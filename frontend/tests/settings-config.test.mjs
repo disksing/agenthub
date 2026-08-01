@@ -40,15 +40,6 @@ test("normalizeConfig normalizes the structure and drops blank fields", () => {
   });
 });
 
-test("normalizeConfig drops removed agent ids", () => {
-  const normalized = normalizeConfig({
-    agentProviders: [{ id: "codex", name: "Codex", type: "codex", enabled: true }],
-    agents: [{ id: "main", name: "Main", providerId: "codex" }],
-  });
-  assert.equal("id" in normalized.agents[0], false);
-  assert.equal(normalized.agents[0].name, "Main");
-});
-
 test("normalizeConfig tolerates empty config and missing arrays", () => {
   assert.deepEqual(normalizeConfig(undefined), {
     version: 1,
@@ -56,17 +47,6 @@ test("normalizeConfig tolerates empty config and missing arrays", () => {
     agents: [],
   });
   assert.deepEqual(normalizeConfig({ agentProviders: "x", agents: 1 }), normalizeConfig({}));
-});
-
-test("normalizeConfig drops removed legacy fields", () => {
-  const legacy = {
-    ...sampleConfig(),
-    defaultChatAgentId: "main",
-    agentProfiles: [{ key: "fast", agentId: "main", description: "Quick lane" }],
-  };
-  const normalized = normalizeConfig(legacy);
-  assert.equal("defaultChatAgentId" in normalized, false);
-  assert.equal("agentProfiles" in normalized, false);
 });
 
 test("createDraft/buildPayload round-trip the source config losslessly", () => {

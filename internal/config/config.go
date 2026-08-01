@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,31 +48,6 @@ type Config struct {
 	Agents         []Agent    `json:"agents"`
 }
 
-// legacyFields mirrors the config keys removed with the Agent Profile and tag
-// routing model. They are tolerated on read and dropped for good on the next
-// save; Load rewrites the file once to complete the migration.
-type legacyFields struct {
-	DefaultChatAgentID string          `json:"defaultChatAgentId"`
-	AgentProfiles      json.RawMessage `json:"agentProfiles"`
-}
-
-// legacyAgentIDs detects agents that still carry the removed id field. Agent
-// IDs were dropped in favor of the unique name as the single reference key;
-// Load migrates such files once, recording the id → name mapping in a
-// sidecar file so sessions persisted with an agent id stay resumable.
-type legacyAgentIDs struct {
-	Agents []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"agents"`
-}
-
-// LegacyAgentMapFile is the name of the sidecar file, written next to the
-// config file, that preserves the id → name mapping of a migrated legacy
-// configuration. It is written once during migration and read afterwards to
-// resolve sessions recorded with an agent id.
-const LegacyAgentMapFile = "legacy-agent-names.json"
-
 type Probe struct {
 	ProviderID string `json:"providerId"`
 	Type       string `json:"type"`
@@ -93,108 +69,18 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
-	var legacyAgents legacyAgentIDs
-	idMap := map[string]string{}
-	if err := json.Unmarshal(data, &legacyAgents); err == nil {
-		for _, agent := range legacyAgents.Agents {
-			if id := strings.TrimSpace(agent.ID); id != "" {
-				name := strings.TrimSpace(agent.Name)
-				if name == "" {
-					return Config{}, fmt.Errorf("cannot migrate legacy agent id %q: the agent has no name; add a unique name to every agent in %s", id, path)
-				}
-				idMap[id] = name
-			}
-		}
+	if cfg.Version != 1 {
+		return Config{}, fmt.Errorf("unsupported config version %d; expected 1", cfg.Version)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
-	rewrite := false
-	if len(idMap) > 0 {
-		// One-time migration from agent ids to name-only agents: record the
-		// id → name mapping first so existing sessions recorded with an id
-		// stay resumable, then rewrite the config without the id fields.
-		if err := SaveLegacyAgentIDs(path, idMap); err != nil {
-			return Config{}, fmt.Errorf("migrate legacy agent ids: %w", err)
-		}
-		rewrite = true
-	}
-	var legacy legacyFields
-	if err := json.Unmarshal(data, &legacy); err == nil && legacy.hasLegacy() {
-		// One-time migration: rewrite the file without the removed profile
-		// routing fields. Providers and agents are kept untouched.
-		rewrite = true
-	}
-	if rewrite {
-		if err := Save(path, cfg); err != nil {
-			return Config{}, fmt.Errorf("migrate legacy config fields: %w", err)
-		}
-	}
 	return cfg, nil
-}
-
-// SaveLegacyAgentIDs atomically writes the id → name mapping recorded while
-// migrating a legacy configuration. The file is only written once, during
-// migration; afterwards it is read-only compatibility data.
-func SaveLegacyAgentIDs(configPath string, mapping map[string]string) error {
-	if len(mapping) == 0 {
-		return nil
-	}
-	data, err := json.MarshalIndent(map[string]any{"version": 1, "agentIds": mapping}, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	target := filepath.Join(filepath.Dir(configPath), LegacyAgentMapFile)
-	tmp, err := os.CreateTemp(filepath.Dir(configPath), ".legacy-agents-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, target)
-}
-
-// LoadLegacyAgentIDs reads the id → name mapping recorded by a legacy config
-// migration. A missing file is not an error: it simply means the config was
-// never migrated and no session can reference an agent id.
-func LoadLegacyAgentIDs(configPath string) (map[string]string, error) {
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), LegacyAgentMapFile))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var payload struct {
-		AgentIDs map[string]string `json:"agentIds"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", LegacyAgentMapFile, err)
-	}
-	return payload.AgentIDs, nil
-}
-
-func (l legacyFields) hasLegacy() bool {
-	return l.DefaultChatAgentID != "" || len(l.AgentProfiles) > 0
 }
 
 func Save(path string, cfg Config) error {

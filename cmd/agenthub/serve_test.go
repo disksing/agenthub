@@ -1,34 +1,22 @@
 package main
 
-// End-to-end tests for `agenthub serve`: the daemon must migrate the legacy
-// default layout (macOS Application Support sessions, ~/Library/Logs
-// service logs) into the unified ~/.agenthub root before opening the store,
-// report the new paths through /v1/status, and refuse to start on a
-// conflict. Everything runs under a temporary HOME; no real user data is
-// touched.
+// End-to-end tests for `agenthub serve`. Everything runs under temporary
+// roots; no real user data is touched.
 
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/disksing/agenthub/internal/migrate"
-	hubpaths "github.com/disksing/agenthub/internal/paths"
 )
 
-// freePort reserves a loopback port that is very likely still free when the
-// daemon binds it a moment later.
 func freePort(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -42,15 +30,7 @@ func freePort(t *testing.T) string {
 	return addr
 }
 
-func writeLegacySession(t *testing.T, dir, id string) {
-	t.Helper()
-	writeLegacySessionEvents(t, dir, id, false)
-}
-
-// writeLegacySessionEvents creates a session directory the real session
-// store can open. With provider=true a session.provider event records a
-// provider-native thread id, the mapping resume depends on.
-func writeLegacySessionEvents(t *testing.T, dir, id string, provider bool) {
+func writeSessionEvents(t *testing.T, dir, id string, provider bool) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -58,31 +38,18 @@ func writeLegacySessionEvents(t *testing.T, dir, id string, provider bool) {
 	now := time.Now().UTC()
 	events := []map[string]any{
 		{
-			"id":        1,
-			"time":      now,
-			"type":      "session.created",
-			"sessionId": id,
+			"id": 1, "time": now, "type": "session.created", "sessionId": id,
 			"data": map[string]any{
-				"id":        id,
-				"title":     "legacy " + id,
-				"cwd":       t.TempDir(),
-				"agentName": "Codex",
-				"state":     "ready",
-				"createdAt": now,
-				"updatedAt": now,
+				"id": id, "title": "session " + id, "cwd": t.TempDir(), "agentName": "Codex",
+				"state": "ready", "createdAt": now, "updatedAt": now,
 			},
 		},
 	}
 	if provider {
 		events = append(events, map[string]any{
-			"id":        2,
-			"time":      now,
-			"type":      "session.provider",
-			"sessionId": id,
+			"id": 2, "time": now, "type": "session.provider", "sessionId": id,
 			"data": map[string]any{
-				"agentName":         "Codex",
-				"provider":          "codex",
-				"providerSessionId": "thread-legacy-42",
+				"agentName": "Codex", "provider": "codex", "providerSessionId": "thread-test-42",
 			},
 		})
 	}
@@ -97,29 +64,6 @@ func writeLegacySessionEvents(t *testing.T, dir, id string, provider bool) {
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// legacyHome builds a HOME with the pre-unification default layout.
-func legacyHome(t *testing.T, active, archived []string) string {
-	t.Helper()
-	home := t.TempDir()
-	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
-	dataDir := legacy.DataDir
-	for i, id := range active {
-		writeLegacySessionEvents(t, filepath.Join(dataDir, "sessions", id), id, i == 0)
-	}
-	for _, id := range archived {
-		writeLegacySession(t, filepath.Join(dataDir, "sessions", "Archive", id), id)
-	}
-	if legacy.LogsDir != "" {
-		if err := os.MkdirAll(legacy.LogsDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(legacy.LogsDir, "stdout.log"), []byte("old log\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return home
 }
 
 func serveAsync(t *testing.T, addr string) chan error {
@@ -149,9 +93,9 @@ func waitForStatus(t *testing.T, addr string) map[string]any {
 	return nil
 }
 
-func stopDaemon(t *testing.T, home string, done chan error) {
+func stopDaemon(t *testing.T, root string, done chan error) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, ".agenthub", "server.json"))
+	data, err := os.ReadFile(filepath.Join(root, "state", "server.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,163 +118,12 @@ func stopDaemon(t *testing.T, home string, done chan error) {
 	}
 }
 
-func TestServeMigratesLegacyLayoutIntoDotAgentHub(t *testing.T) {
-	home := legacyHome(t, []string{"ses_aaa111"}, []string{"ses_zzz999"})
-	t.Setenv("HOME", home)
-	t.Setenv("AGENTHUB_HOME", "")
-	t.Setenv("AGENTHUB_CODEX_CLI", "definitely-missing-codex")
-	t.Setenv("AGENTHUB_KIMI_CLI", "definitely-missing-kimi")
-	t.Setenv("AGENTHUB_PI_CLI", "definitely-missing-pi")
-	t.Setenv("AGENTHUB_OPENCODE_CLI", "definitely-missing-opencode")
-	addr := freePort(t)
-	done := serveAsync(t, addr)
-
-	status := waitForStatus(t, addr)
-	root := filepath.Join(home, ".agenthub")
-	paths, _ := status["paths"].(map[string]any)
-	wantPaths := map[string]string{
-		"config":   filepath.Join(root, "config.json"),
-		"sessions": filepath.Join(root, "sessions"),
-		"archive":  filepath.Join(root, "sessions", "Archive"),
-		"logs":     filepath.Join(root, "logs"),
-	}
-	for key, want := range wantPaths {
-		if paths[key] != want {
-			t.Errorf("status paths.%s = %v, want %q", key, paths[key], want)
-		}
-	}
-
-	// Both sessions migrated and are listed: active visible by default,
-	// archived hidden unless requested.
-	get := func(path string) map[string]any {
-		t.Helper()
-		response, err := http.Get("http://" + addr + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		var body map[string]any
-		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		return body
-	}
-	sessions := get("/v1/sessions")["sessions"].([]any)
-	if len(sessions) != 1 || sessions[0].(map[string]any)["id"] != "ses_aaa111" {
-		t.Fatalf("active sessions = %+v", sessions)
-	}
-	archived := get("/v1/sessions?archived=true")["sessions"].([]any)
-	if len(archived) != 1 || archived[0].(map[string]any)["id"] != "ses_zzz999" {
-		t.Fatalf("archived sessions = %+v", archived)
-	}
-	events := get("/v1/sessions/ses_aaa111/events")["events"].([]any)
-	if len(events) != 2 || events[0].(map[string]any)["type"] != "session.created" {
-		t.Fatalf("events = %+v", events)
-	}
-	// The provider-native thread mapping survived the migration, so the
-	// session stays resumable.
-	detail := get("/v1/sessions/ses_aaa111")
-	sessionBody, _ := detail["session"].(map[string]any)
-	if sessionBody["providerSessionId"] != "thread-legacy-42" || sessionBody["provider"] != "codex" {
-		t.Fatalf("provider mapping lost: %+v", sessionBody)
-	}
-	// Archiving a migrated session works and keeps it readable.
-	stopRequest, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/sessions/ses_aaa111/stop", strings.NewReader("{}"))
-	stopRequest.Header.Set("Content-Type", "application/json")
-	stopResponse, err := http.DefaultClient.Do(stopRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stopResponse.Body.Close()
-	if stopResponse.StatusCode != http.StatusOK {
-		t.Fatalf("stop migrated session: %s", stopResponse.Status)
-	}
-	request, _ := http.NewRequest(http.MethodDelete, "http://"+addr+"/v1/sessions/ses_aaa111", nil)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("archive migrated session: %s", response.Status)
-	}
-	if _, err := os.Stat(filepath.Join(root, "sessions", "Archive", "ses_aaa111", "events.jsonl")); err != nil {
-		t.Fatal(err)
-	}
-	archived = get("/v1/sessions?archived=true")["sessions"].([]any)
-	if len(archived) != 2 {
-		t.Fatalf("archived after archiving = %+v", archived)
-	}
-
-	// The legacy store is gone, the service log moved, and the journal
-	// recorded completion.
-	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
-	if _, err := os.Stat(legacy.DataDir); !os.IsNotExist(err) {
-		t.Error("legacy data directory still exists")
-	}
-	if legacy.LogsDir != "" {
-		if data, err := os.ReadFile(filepath.Join(root, "logs", "stdout.log")); err != nil || string(data) != "old log\n" {
-			t.Errorf("migrated log = %q, %v", data, err)
-		}
-	}
-	journal, err := os.ReadFile(filepath.Join(root, "migration.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(journal), `"state": "completed"`) {
-		t.Errorf("journal not completed: %s", journal)
-	}
-
-	stopDaemon(t, home, done)
-
-	// A restart is idempotent: the daemon comes up on the migrated data
-	// without touching anything.
-	done = serveAsync(t, addr)
-	status = waitForStatus(t, addr)
-	storeInfo, _ := status["sessionStore"].(map[string]any)
-	if storeInfo["sessionCount"].(float64) != 2 {
-		t.Fatalf("sessionStore after restart = %+v", storeInfo)
-	}
-	stopDaemon(t, home, done)
-}
-
-func TestServeRefusesToStartOnMigrationConflict(t *testing.T) {
-	home := legacyHome(t, []string{"ses_old111"}, nil)
-	// The new store already holds a different session: a real conflict.
-	writeLegacySession(t, filepath.Join(home, ".agenthub", "sessions", "ses_new222"), "ses_new222")
-	t.Setenv("HOME", home)
-	t.Setenv("AGENTHUB_HOME", "")
-	err := runServe([]string{"--addr", freePort(t)})
-	var conflict *migrate.ConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("err = %v", err)
-	}
-	for _, want := range []string{"ses_old111", "ses_new222", "never merges"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("conflict error missing %q:\n%s", want, err)
-		}
-	}
-	// Both sides are untouched.
-	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
-	for _, path := range []string{
-		filepath.Join(legacy.DataDir, "sessions", "ses_old111"),
-		filepath.Join(home, ".agenthub", "sessions", "ses_new222"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("%s: %v", path, err)
-		}
-	}
-}
-
-// SIGTERM must stop the daemon promptly and cleanly even while an SSE
-// client keeps an event stream open: the stream ends when Shutdown begins,
-// and any straggler connection is force-closed instead of turning the exit
-// into a crash error.
+// SIGTERM must stop the daemon promptly and cleanly even while an SSE client
+// keeps an event stream open.
 func TestServeSIGTERMClosesSSEAndExitsCleanly(t *testing.T) {
 	home := t.TempDir()
 	isolated := t.TempDir()
-	writeLegacySessionEvents(t, filepath.Join(isolated, "data", "sessions", "ses_sse001"), "ses_sse001", false)
+	writeSessionEvents(t, filepath.Join(isolated, "data", "sessions", "ses_sse001"), "ses_sse001", false)
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTHUB_HOME", isolated)
 	t.Setenv("AGENTHUB_CODEX_CLI", "definitely-missing-codex")
@@ -393,53 +186,5 @@ func TestServeSIGTERMClosesSSEAndExitsCleanly(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		_ = response.Body.Close()
 		t.Fatal("SSE stream did not end after daemon shutdown")
-	}
-}
-
-func TestServeSkipsMigrationUnderAgentHubHome(t *testing.T) {
-	home := legacyHome(t, []string{"ses_old111"}, nil)
-	isolated := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("AGENTHUB_HOME", isolated)
-	t.Setenv("AGENTHUB_CODEX_CLI", "definitely-missing-codex")
-	t.Setenv("AGENTHUB_KIMI_CLI", "definitely-missing-kimi")
-	t.Setenv("AGENTHUB_PI_CLI", "definitely-missing-pi")
-	t.Setenv("AGENTHUB_OPENCODE_CLI", "definitely-missing-opencode")
-	addr := freePort(t)
-	done := serveAsync(t, addr)
-	status := waitForStatus(t, addr)
-	paths, _ := status["paths"].(map[string]any)
-	if !strings.HasPrefix(fmt.Sprint(paths["sessions"]), isolated) {
-		t.Fatalf("isolated sessions path = %v", paths["sessions"])
-	}
-	// The legacy layout under HOME is untouched.
-	legacy := hubpaths.LegacyFor(home, runtime.GOOS, func(string) string { return "" })
-	if _, err := os.Stat(filepath.Join(legacy.DataDir, "sessions", "ses_old111")); err != nil {
-		t.Error("legacy session moved despite AGENTHUB_HOME isolation")
-	}
-	if _, err := os.Stat(filepath.Join(home, ".agenthub", "migration.json")); !os.IsNotExist(err) {
-		t.Error("migration journal written despite AGENTHUB_HOME isolation")
-	}
-	// Stop via the isolated server.json.
-	data, err := os.ReadFile(filepath.Join(isolated, "state", "server.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state struct {
-		PID int `json:"pid"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Kill(state.PID, syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("serve returned: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("daemon did not shut down")
 	}
 }

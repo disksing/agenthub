@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -563,52 +562,6 @@ func TestProviderMappingIsProjectedAndRebuilt(t *testing.T) {
 	}
 }
 
-// Events written by the profile-routing era carry selection objects inside
-// session.created and session.provider payloads. Replaying them must keep
-// working: unknown fields are ignored and the agent mapping recorded by the
-// session.provider event is preserved, so the session stays resumable.
-func TestLegacySelectionEventsStillReplay(t *testing.T) {
-	root := t.TempDir()
-	id := "ses_legacy"
-	dir := filepath.Join(root, id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	created, err := json.Marshal(map[string]any{
-		"id": id, "title": "Legacy", "cwd": t.TempDir(), "state": StateReady,
-		"selection":   map[string]any{"mode": "auto", "requestedTags": []string{"fast"}},
-		"lastEventId": 1, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider, err := json.Marshal(map[string]any{
-		"agentId": "codex-fast", "provider": "codex", "providerSessionId": "native-9",
-		"selection": map[string]any{"mode": "auto", "requestedTags": []string{"fast"}, "reason": "matched profile fast"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	log := ""
-	log += fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 1, Time: time.Now().UTC(), Type: "session.created", SessionID: id, Data: created}))
-	log += fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 2, Time: time.Now().UTC(), Type: "session.provider", SessionID: id, Data: provider}))
-	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(log), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := store.Get(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value.AgentName != "codex-fast" || value.Provider != "codex" || value.ProviderSessionID != "native-9" {
-		t.Fatalf("legacy agent mapping was not preserved: %+v", value)
-	}
-}
-
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
@@ -703,7 +656,7 @@ func TestArchiveMovesWholeSessionDirectory(t *testing.T) {
 }
 
 func TestArchiveRejectsEveryNonStoppedState(t *testing.T) {
-	for _, state := range []string{StateReady, StateStarting, StateBusy, StateWaitingApproval, StateStopping, StateFailed} {
+	for _, state := range []string{StateReady, StateStarting, StateBusy, StateWaitingApproval, StateStopping} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			store, err := Open(root)
@@ -745,7 +698,7 @@ func TestArchiveRejectsEveryNonStoppedState(t *testing.T) {
 	}
 }
 
-func TestStoppedReasonProjectsAndLegacyStoppedEventStillReplays(t *testing.T) {
+func TestStoppedReasonProjectsAndMissingReasonDefaults(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -777,7 +730,7 @@ func TestStoppedReasonProjectsAndLegacyStoppedEventStillReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	if value.State != StateStopped || value.StopReason != "" {
-		t.Fatalf("legacy stopped event is incompatible: %+v", value)
+		t.Fatalf("stopped event without reason is incompatible: %+v", value)
 	}
 }
 
@@ -951,29 +904,6 @@ func TestOpenLoadsArchivedSessionsAndIgnoresArchiveDir(t *testing.T) {
 	if len(reopened.List(false)) != 0 {
 		t.Fatalf("default list is not empty: %+v", reopened.List(false))
 	}
-	// A session whose event log predates the archived event is archived by
-	// location alone.
-	legacy := "ses_legacyarchived"
-	legacyDir := filepath.Join(root, ArchiveDirName, legacy)
-	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	createdData := mustJSON(t, Session{ID: legacy, Title: "Legacy", Cwd: t.TempDir(), State: StateReady, LastEventID: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
-	log := fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 1, Time: time.Now().UTC(), Type: "session.created", SessionID: legacy, Data: createdData}))
-	if err := os.WriteFile(filepath.Join(legacyDir, "events.jsonl"), []byte(log), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err = Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err = reopened.Get(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value.State != StateArchived {
-		t.Fatalf("legacy archived session state = %q, want archived", value.State)
-	}
 }
 
 func TestOpenRejectsSessionDuplicatedInArchive(t *testing.T) {
@@ -1014,37 +944,6 @@ func copyDir(t *testing.T, src, dst string) {
 	}
 }
 
-// Events recorded before agent ids were removed carry agentId inside
-// session.created. The projection keeps that reference verbatim so the
-// runtime can resolve it through the recorded id → name mapping.
-func TestLegacyCreatedAgentIDFallsBackIntoAgentName(t *testing.T) {
-	root := t.TempDir()
-	id := "ses_legacycreated"
-	dir := filepath.Join(root, id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	created := mustJSON(t, map[string]any{
-		"id": id, "title": "Legacy", "cwd": t.TempDir(), "state": StateReady,
-		"agentId": "codex-default",
-	})
-	log := fmt.Sprintf("%s\n", mustJSON(t, Event{ID: 1, Time: time.Now().UTC(), Type: "session.created", SessionID: id, Data: created}))
-	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(log), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := store.Get(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value.AgentName != "codex-default" {
-		t.Fatalf("legacy agentId was not preserved in the projection: %+v", value)
-	}
-}
-
 // A session.agent event (appended when a configured agent is renamed)
 // re-points the projection at the new name.
 func TestAgentRenameEventUpdatesProjection(t *testing.T) {
@@ -1073,7 +972,7 @@ func TestAgentRenameEventUpdatesProjection(t *testing.T) {
 	}
 }
 
-// New session.created snapshots write agentName and no legacy agentId key.
+// New session.created snapshots write the current agentName field.
 func TestCreatedEventWritesAgentNameOnly(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)

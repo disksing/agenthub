@@ -398,9 +398,8 @@ func TestCreateSessionRequiresExplicitAgent(t *testing.T) {
 		// A valid name passes validation (case-insensitively) and only
 		// fails later because the test provider cannot start.
 		{"agent name matches case-insensitively", `{"cwd":"` + cwd + `","agentName":"pi agent"}`, http.StatusBadGateway, "provider_start_failed"},
-		{"unresolvable legacy agentId", `{"cwd":"` + cwd + `","agentId":"agent"}`, http.StatusUnprocessableEntity, "agent_id_removed"},
-		{"both reference forms", `{"cwd":"` + cwd + `","agentName":"Pi Agent","agentId":"agent"}`, http.StatusBadRequest, "invalid_request"},
-		{"legacy selector field", `{"cwd":"` + cwd + `","agentName":"Pi Agent","selector":{"tags":["fast"]}}`, http.StatusBadRequest, "invalid_request"},
+		{"removed agentId field", `{"cwd":"` + cwd + `","agentId":"agent"}`, http.StatusBadRequest, "invalid_request"},
+		{"removed selector field", `{"cwd":"` + cwd + `","agentName":"Pi Agent","selector":{"tags":["fast"]}}`, http.StatusBadRequest, "invalid_request"},
 	}
 	for _, item := range cases {
 		status, code := post(item.body)
@@ -1845,50 +1844,6 @@ func TestCreateSessionProviderFailureSurfacesError(t *testing.T) {
 	value := getSession(t, server, parsed.Error.Details.SessionID)
 	if value.State != session.StateStopped || value.StopReason != session.StopReasonStartupError {
 		t.Fatalf("unexpected session terminal state: %+v", value)
-	}
-}
-
-// A deprecated agentId still resolves through the id → name mapping recorded
-// by the legacy config migration; the session is created with the name.
-func TestCreateSessionResolvesLegacyAgentID(t *testing.T) {
-	root := t.TempDir()
-	store, err := session.Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		Version:        1,
-		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true, Command: "missing-test-command"}},
-		Agents:         []config.Agent{{Name: "Pi Agent", ProviderID: "provider"}},
-	}
-	manager := runtime.New(store, cfg, map[string]string{"agent-old": "Pi Agent"})
-	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager, ConfigPath: filepath.Join(root, "config.json")}).Handler())
-	defer server.Close()
-
-	body, _ := json.Marshal(map[string]any{"cwd": t.TempDir(), "agentId": "agent-old"})
-	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusBadGateway {
-		t.Fatalf("unexpected status: %s", response.Status)
-	}
-	var parsed struct {
-		Error struct {
-			Details struct {
-				SessionID string `json:"sessionId"`
-			} `json:"details"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
-		t.Fatal(err)
-	}
-	value := getSession(t, server, parsed.Error.Details.SessionID)
-	if value.AgentName != "Pi Agent" {
-		t.Fatalf("legacy agentId did not resolve to the configured name: %+v", value)
 	}
 }
 

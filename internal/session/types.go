@@ -15,11 +15,7 @@ const (
 	StateWaitingApproval = "waiting_approval"
 	StateStopping        = "stopping"
 	StateStopped         = "stopped"
-	// StateFailed is retained for replaying legacy event logs. Current
-	// runtimes preserve failures with provider.error and turn.failed events,
-	// then converge the session to StateStopped.
-	StateFailed   = "failed"
-	StateArchived = "archived"
+	StateArchived        = "archived"
 )
 
 const (
@@ -159,21 +155,9 @@ type LaunchEnvironmentEventData struct {
 }
 
 // ProviderEventData is the payload of the session.provider event. AgentName
-// names the agent configuration the session runs with. AgentID is read-only
-// compatibility for events recorded before agent ids were removed; it is
-// never written by current code.
+// names the agent configuration the session runs with.
 type ProviderEventData struct {
 	AgentName         string `json:"agentName,omitempty"`
-	AgentID           string `json:"agentId,omitempty"`
 	Provider          string `json:"provider"`
 	ProviderSessionID string `json:"providerSessionId,omitempty"`
-}
-
-// ResolvedAgentName returns the recorded agent reference, preferring the
-// current agentName field and falling back to the legacy agentId.
-func (d ProviderEventData) ResolvedAgentName() string {
-	if d.AgentName != "" {
-		return d.AgentName
-	}
-	return d.AgentID
 }

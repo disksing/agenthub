@@ -322,10 +322,8 @@ func TestManagerStartFailureCleansUp(t *testing.T) {
 	}
 }
 
-// Sessions created before explicit agent selection (auto routing) and never
-// started have no determinable agent. They must fail clearly instead of being
-// guessed onto some configured agent.
-func TestManagerRejectsLegacySessionWithoutAgent(t *testing.T) {
+// A session without an explicit agent cannot be started.
+func TestManagerRejectsSessionWithoutAgent(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -890,82 +888,5 @@ func TestDaemonRecoveryKillsRecordedProcessGroupAndClosesWork(t *testing.T) {
 	after, _ := os.Stat(marker)
 	if before != nil && after != nil && before.Size() != after.Size() {
 		t.Fatal("recovered provider wrote after stopped was published")
-	}
-}
-
-func TestLegacyFailedStateRecoversToStopped(t *testing.T) {
-	store, err := session.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = store.Append(value.ID, "session.state", "", mustJSON(session.StateEventData{State: session.StateFailed}))
-	_ = New(store, testConfig())
-	recovered, err := store.Get(value.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recovered.State != session.StateStopped || recovered.StopReason != session.StopReasonDaemonRecovery {
-		t.Fatalf("legacy failed state did not recover: %+v", recovered)
-	}
-}
-
-// Sessions recorded with a legacy agent id start again through the id → name
-// mapping captured during config migration; the provider receives the
-// canonical agent and the session.provider event records the name.
-func TestManagerResolvesLegacyAgentIDThroughMapping(t *testing.T) {
-	root := t.TempDir()
-	store, err := session.Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "fast-agent"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := New(store, testConfig(), map[string]string{"fast-agent": "Fast Agent"})
-	var created *fakeSession
-	manager.factory = func(options provider.Options) (provider.Session, error) {
-		if options.Agent.Name != "Fast Agent" {
-			t.Errorf("factory received wrong agent: %+v", options.Agent)
-		}
-		created = &fakeSession{hooks: options.Hooks}
-		return created, nil
-	}
-	result, err := manager.Start(value.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.AgentName != "Fast Agent" || result.ProviderSessionID != "native-session" {
-		t.Fatalf("unexpected result: %+v", result)
-	}
-}
-
-// An id the mapping does not know, or whose target disappeared, fails
-// clearly instead of being guessed onto another agent.
-func TestManagerRejectsUnmappedLegacyAgentID(t *testing.T) {
-	store, err := session.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "gone-agent"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := New(store, testConfig(), map[string]string{"other-agent": "Fast Agent"})
-	manager.factory = func(options provider.Options) (provider.Session, error) {
-		return &fakeSession{hooks: options.Hooks}, nil
-	}
-	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "unknown agent") {
-		t.Fatalf("expected an unknown agent error, got %v", err)
-	}
-
-	// The mapped target no longer exists: the error must say so.
-	manager = New(store, testConfig(), map[string]string{"gone-agent": "Removed Agent"})
-	if _, err := manager.Start(value.ID); err == nil || !strings.Contains(err.Error(), "Removed Agent") {
-		t.Fatalf("expected a migrated-target error, got %v", err)
 	}
 }

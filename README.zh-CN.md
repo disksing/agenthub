@@ -148,11 +148,9 @@ Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` �
 
 在 Web 设置中，Agent 的 **Model** 字段是由该端点加载的下拉框，不再是自由文本输入：先选择 Provider，再选择模型。空的“Provider default”选项表示不设置 `model` 选项。已保存但当前列表中不存在的模型会保留为明确的“saved, not currently listed”选项，直到用户主动更换；加载、重试、空列表和 Provider 停用状态都会内联展示。
 
-### 旧配置迁移
+### 已移除的旧格式
 
-早期版本支持 agent profile、基于 tag 的路由和 `defaultChatAgentId` 回退，这些能力已移除：Session 现在始终显式指定 Agent。仍含有遗留 `agentProfiles` 或 `defaultChatAgentId` 键的配置文件可以继续使用——这些键在读取时被忽略，daemon 启动时会把配置文件一次性重写为不含这些键的形式。Provider 和 Agent 数据原样保留。在此变更之前记录的 Session 只要已确定 Agent 就仍可查看和恢复；从未启动过（因而没有 Agent）的旧 Session 会返回明确错误，而不会猜测到某个已配置的 Agent 上。
-
-早期版本还在 `name` 之外为每个 Agent 提供独立的 `id`。id 已被移除：唯一名称现在是唯一引用键。仍含 Agent `id` 字段的配置文件会在启动时迁移一次——id 从文件中删除，id → name 映射记录到配置旁边的 `legacy-agent-names.json`，因此用 Agent id 记录的 Session 仍可通过该映射读取和恢复。迁移绝不猜测：旧 Agent 缺少 name，或名称在大小写不敏感比较下冲突时，daemon 会停止并给出可操作错误，原文件保持不动。Session 事件日志从不在原地改写；投影同时读取现行的 `agentName` 和遗留的 `agentId` 字段。在一个兼容窗口内，`POST /v1/sessions` 仍接受已弃用的 `agentId` 并通过记录的映射解析（无法映射的 id 会明确失败）；新客户端必须使用 `agentName`。
+Session 现在只使用显式 Agent 名称作为身份。Agent Profile、tag 路由、`defaultChatAgentId`、Agent `id` 字段，以及 `POST /v1/sessions` 的 `agentId` 字段均不再接受。daemon 不会重写旧配置、创建 id 映射 sidecar，也不会回放使用旧身份字段的事件 payload。升级到此版本前，请先把旧配置和 Session 数据完成一次性转换或备份。
 
 命令发现顺序为：provider 的 `command`、`AGENTHUB_*_CLI`、`PATH`。支持：
 
@@ -160,7 +158,7 @@ Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` �
 - `AGENTHUB_OPENCODE_CLI`
 - `AGENTHUB_KIMI_CLI`
 - `AGENTHUB_PI_CLI`
-`AGENTHUB_HOME=/path` 可把配置、数据和 runtime 状态全部隔离到一个目录，配置文件此时位于 `/path/config/config.json`，适合测试。隔离布局是显式选择，daemon 不会改写或迁移它。
+`AGENTHUB_HOME=/path` 可把配置、数据和 runtime 状态全部隔离到一个目录，配置文件此时位于 `/path/config/config.json`，适合测试。该布局由用户显式选择，daemon 按原样读取。
 
 ## API
 
@@ -243,9 +241,7 @@ CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --a
 启动失败使用 `startup_error`；显式 stop 和 daemon 优雅关闭使用
 `requested`。daemon 被 SIGKILL 后，新 daemon 使用持久化的
 `provider.process.started` 证据终止遗留进程组，确定性取消 pending
-approval 与 open turn，最后使用 `daemon_recovery`。旧 `failed` 状态和
-不带 reason 的旧 `session.state` 事件仍可读取，并会恢复到同一 stopped
-边界。
+approval 与 open turn，最后使用 `daemon_recovery`。
 
 ## 数据与安全
 
@@ -254,8 +250,6 @@ approval 与 open turn，最后使用 `daemon_recovery`。旧 `failed` 状态和
 ```text
 ~/.agenthub/
 ├── config.json                 （provider 与 agent 配置）
-├── legacy-agent-names.json     （仅在旧配置迁移后存在）
-├── migration.json              （数据布局迁移 journal）
 ├── sessions/<session-id>/
 │     session.json
 │     events.jsonl
@@ -265,21 +259,13 @@ approval 与 open turn，最后使用 `daemon_recovery`。旧 `failed` 状态和
 └── server.lock                 （临时单 daemon 锁）
 ```
 
-`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；启动时可修复被截断的日志尾行。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。目录默认 `0700`，敏感文件默认 `0600`。
+`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；当前写入中断造成的最后半行可在启动时修复。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。目录默认 `0700`，敏感文件默认 `0600`。
 
 `agenthub status`（以及 `GET /v1/status`）会报告当前生效的配置、Session Store、归档与日志路径，便于升级后确认布局。
 
-### 数据布局迁移
+### 数据布局
 
-统一之前的版本把 Session 存放在操作系统用户数据目录（macOS 为 `~/Library/Application Support/agenthub`），服务日志存放在 `~/Library/Logs/AgentHub`。当前版本的 daemon 首次启动时会在打开 Session Store 之前自动完成迁移：
-
-- Session 目录（活动与归档）整体迁移，文件内容、权限与层级不变——provider 原生 session/thread id 与 agent 名称映射保持有效，迁移后的 Session 可读、可恢复、可归档。同一文件系统使用原子 rename；跨文件系统经过 staging 逐项校验复制，全部校验通过后才删除旧数据。
-- 服务日志迁入 `~/.agenthub/logs/`；目标名已被占用时，旧文件保留为 `<name>.migrated-<时间戳>` 备份，绝不覆盖仍在写入的日志。
-- `~/.agenthub/migration.json` journal 记录各迁移阶段（只含路径与计数，不含 Session 内容），中断的迁移可在下次启动时续跑或安全重来，已完成的迁移幂等。
-- 如果新旧 Session Store 同时含有 Session，daemon 拒绝启动并报告冲突的 Session id。AgentHub 绝不合并、覆盖或二选一：停止 daemon，人工检查两个目录，移除或移开不需要的一侧后再启动。
-- 显式的 `AGENTHUB_HOME` 隔离布局永不迁移，保持其自选的 `config/`、`data/`、`state/` 子目录结构。
-
-迁移成功后旧 Store 不再是数据来源：其中陈旧的 `server.json`/`server.lock` 会被删除，腾空的旧目录会被移除。如果服务管理器（例如 macOS LaunchAgent）的 `StandardOutPath`/`StandardErrorPath` 仍指向旧日志目录，请更新为 `~/.agenthub/logs/`，使新 daemon 输出落入统一位置。
+daemon 只读取统一的 `~/.agenthub` 布局。旧版本可能把 Session 存放在操作系统用户数据目录（例如 macOS 的 `~/Library/Application Support/agenthub`），把日志存放在 `~/Library/Logs/AgentHub`；这些路径不再自动读取或迁移。升级前请完成一次性、可验证的复制或导出，并保留备份；daemon 不会合并多个数据根，也不会替用户选择保留哪一侧。
 
 无鉴权模式只适合本机和可信网络：默认仅监听 loopback，不发送 CORS 许可，拒绝跨 origin 的浏览器写请求，并校验请求 Host 必须指向本机地址。
 

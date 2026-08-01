@@ -126,11 +126,9 @@ Files:
   Logs       ~/.agenthub/logs/ (service stdout/stderr when installed)
   State      ~/.agenthub/server.json (daemon endpoint discovery)
 
-All persistent data lives under ~/.agenthub. Older versions stored sessions
-under the operating system's user data directory (for example ~/Library/
-Application Support/agenthub on macOS) and service logs under ~/Library/
-Logs/AgentHub; the daemon migrates that data automatically on first start
-and refuses to start rather than merge when both locations hold sessions.
+All persistent data lives under ~/.agenthub. This version reads only the
+unified layout; migrate or back up data from older releases before starting
+the daemon.
 
 Environment:
   AGENTHUB_HOME         Isolate config, data and state into one directory

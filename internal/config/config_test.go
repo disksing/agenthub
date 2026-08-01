@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,54 +112,14 @@ func TestLoadCreatesIndependentDefaults(t *testing.T) {
 	}
 }
 
-// Legacy configs written by the profile-routing era keep their providers and
-// agents; the removed fields are ignored on read and dropped from the file by
-// a one-time rewrite during Load.
-func TestLoadMigratesLegacyProfileFields(t *testing.T) {
+func TestLoadRejectsRemovedConfigFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{
-		"version": 1,
-		"defaultChatAgentId": "agent-a",
-		"agentProviders": [
-			{"id": "p", "name": "Pi", "type": "pi", "enabled": true, "command": "missing-test-command"}
-		],
-		"agents": [
-			{"name": "A", "providerId": "p", "options": {"model": "m"}},
-			{"name": "B", "providerId": "p"}
-		],
-		"agentProfiles": [
-			{"key": "fast", "description": "fast lane", "agentId": "agent-a"}
-		]
-	}`
+	legacy := `{"version":1,"agentProviders":[],"agents":[{"id":"agent-a","name":"Agent A","providerId":"p"}]}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.AgentProviders) != 1 || len(loaded.Agents) != 2 || loaded.Agents[0].Options["model"] != "m" {
-		t.Fatalf("providers/agents were not preserved: %+v", loaded)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "agentProfiles") || strings.Contains(string(data), "defaultChatAgentId") {
-		t.Fatalf("legacy fields were not dropped from the file: %s", data)
-	}
-	var rewritten map[string]any
-	if err := json.Unmarshal(data, &rewritten); err != nil {
-		t.Fatal(err)
-	}
-	if len(rewritten["agents"].([]any)) != 2 {
-		t.Fatalf("rewritten config lost agents: %s", data)
-	}
-
-	// The second load is stable and does not rewrite again.
-	if _, err := Load(path); err != nil {
-		t.Fatal(err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "id") {
+		t.Fatalf("expected removed agent id field to be rejected, got %v", err)
 	}
 }
 
@@ -242,92 +201,15 @@ func TestDefaultsCoverTheFourBuiltinProviders(t *testing.T) {
 	}
 }
 
-// Legacy configs that still carry agent ids are migrated once: the id fields
-// are dropped, the id → name mapping is recorded in a sidecar file so old
-// sessions stay resumable, and every other field is preserved.
-func TestLoadMigratesLegacyAgentIDs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{
-		"version": 1,
-		"agentProviders": [
-			{"id": "p", "name": "Pi", "type": "pi", "enabled": true, "command": "missing-test-command"}
-		],
-		"agents": [
-			{"id": "agent-a", "name": "Agent A", "providerId": "p", "options": {"model": "m"}},
-			{"id": "agent-b", "name": "Agent B", "providerId": "p"}
-		]
-	}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Agents) != 2 || loaded.Agents[0].Name != "Agent A" || loaded.Agents[0].Options["model"] != "m" {
-		t.Fatalf("agents were not preserved: %+v", loaded)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), `"id": "agent-a"`) || strings.Contains(string(data), "agent-b") {
-		t.Fatalf("agent ids were not dropped from the file: %s", data)
-	}
-
-	// The sidecar records the mapping and survives further loads untouched.
-	mapping, err := LoadLegacyAgentIDs(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mapping["agent-a"] != "Agent A" || mapping["agent-b"] != "Agent B" || len(mapping) != 2 {
-		t.Fatalf("unexpected legacy mapping: %+v", mapping)
-	}
-	if _, err := Load(path); err != nil {
-		t.Fatal(err)
-	}
-	mapping, err = LoadLegacyAgentIDs(path)
-	if err != nil || len(mapping) != 2 {
-		t.Fatalf("second load lost the mapping: %+v %v", mapping, err)
-	}
-}
-
-// A legacy agent without a name cannot be migrated safely; loading stops
-// with an actionable error and the original file is left untouched.
-func TestLoadRejectsLegacyAgentIDWithoutName(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{
-		"version": 1,
-		"agentProviders": [{"id": "p", "name": "Pi", "type": "pi", "enabled": true}],
-		"agents": [{"id": "agent-a", "providerId": "p"}]
-	}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "agent-a") || !strings.Contains(err.Error(), "no name") {
-		t.Fatalf("expected an actionable migration error, got %v", err)
-	}
-	data, readErr := os.ReadFile(path)
-	if readErr != nil || string(data) != legacy {
-		t.Fatalf("failed migration must leave the original file untouched: %v", readErr)
-	}
-	if _, statErr := os.Stat(filepath.Join(filepath.Dir(path), LegacyAgentMapFile)); !os.IsNotExist(statErr) {
-		t.Fatal("failed migration must not write the mapping sidecar")
-	}
-}
-
-// Duplicate names (case-insensitive, whitespace-normalized) are rejected
-// during migration just like in any other config; nothing is rewritten.
+// Duplicate names (case-insensitive, whitespace-normalized) are rejected.
 func TestLoadRejectsDuplicateAgentNames(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	legacy := `{
 		"version": 1,
 		"agentProviders": [{"id": "p", "name": "Pi", "type": "pi", "enabled": true}],
 		"agents": [
-			{"id": "agent-a", "name": "Codex", "providerId": "p"},
-			{"id": "agent-b", "name": " codex ", "providerId": "p"}
+			{"name": "Codex", "providerId": "p"},
+			{"name": " codex ", "providerId": "p"}
 		]
 	}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
@@ -340,14 +222,6 @@ func TestLoadRejectsDuplicateAgentNames(t *testing.T) {
 	data, readErr := os.ReadFile(path)
 	if readErr != nil || string(data) != legacy {
 		t.Fatalf("failed migration must leave the original file untouched: %v", readErr)
-	}
-}
-
-// A config without legacy ids has no mapping sidecar.
-func TestLoadLegacyAgentIDsMissingFile(t *testing.T) {
-	mapping, err := LoadLegacyAgentIDs(filepath.Join(t.TempDir(), "config.json"))
-	if err != nil || mapping != nil {
-		t.Fatalf("missing sidecar must be an empty mapping, got %+v %v", mapping, err)
 	}
 }
 
