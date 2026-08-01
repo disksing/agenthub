@@ -100,6 +100,36 @@ func TestEventsAfterPagesToInitialDurableHead(t *testing.T) {
 	}
 }
 
+func TestEventsPageBeforeSendsBackwardCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("before"); got != "931" {
+			t.Errorf("before = %q, want 931", got)
+		}
+		if got := r.URL.Query().Get("limit"); got != "100" {
+			t.Errorf("limit = %q, want 100", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"events":       []session.Event{{ID: 831}, {ID: 930}},
+			"latestCursor": 1030,
+			"page": map[string]any{
+				"after": 0, "limit": 100, "nextAfter": 930, "hasMore": true,
+				"before": 931, "nextBefore": 831, "hasMoreBefore": true,
+			},
+		})
+	}))
+	defer server.Close()
+	page, err := New(server.URL).EventsPageBefore("ses_test", 931, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Page.Before != 931 || page.Page.NextBefore != 831 || !page.Page.HasMoreBefore {
+		t.Fatalf("backward page metadata = %+v", page.Page)
+	}
+	if page.Page.NextAfter != 930 || !page.Page.HasMore || page.LatestCursor != 1030 {
+		t.Fatalf("forward metadata = %+v latest=%d", page.Page, page.LatestCursor)
+	}
+}
+
 func TestEventsAfterStopsOnCursorGap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{

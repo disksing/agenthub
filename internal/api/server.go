@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,7 @@ const (
 	CapabilitySessionStrictStopped     = "session.strict-stopped"
 	CapabilityEventsLosslessReplay     = "events.lossless-replay"
 	CapabilityEventsDeltaMerge         = "events.delta-merge"
+	CapabilityEventsBackwardPagination = "events.backward-pagination"
 	CapabilityEventsCanonicalTerminal  = "events.canonical-turn-terminals"
 	CapabilityRecoveryClosedTurns      = "recovery.closed-turns"
 )
@@ -201,6 +203,7 @@ func (s *Server) capabilities() []string {
 	capabilities := []string{
 		CapabilityEventsLosslessReplay,
 		CapabilityEventsDeltaMerge,
+		CapabilityEventsBackwardPagination,
 		CapabilitySessionSource,
 	}
 	if s.runtime != nil {
@@ -903,8 +906,39 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_event_cursor", err.Error(), nil)
 		return
 	}
-	if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") && r.URL.Query().Get("stream") != "true" {
+	before, backward, err := parseEventBackward(r.URL.Query())
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_event_cursor", err.Error(), nil)
+		return
+	}
+	if backward && explicitEventCursor(r) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_event_cursor", "before/latest cannot be combined with after", nil)
+		return
+	}
+	stream := strings.Contains(r.Header.Get("Accept"), "text/event-stream") || r.URL.Query().Get("stream") == "true"
+	if !stream {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if backward {
+			page, err := s.store.EventsPageBefore(id, before, limit)
+			if err != nil {
+				s.writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"events": page.Events,
+				"page": map[string]any{
+					"after":         page.After,
+					"limit":         page.Limit,
+					"nextAfter":     page.NextAfter,
+					"hasMore":       page.HasMore,
+					"before":        page.Before,
+					"nextBefore":    page.NextBefore,
+					"hasMoreBefore": page.HasMoreBefore,
+				},
+				"latestCursor": page.LatestCursor,
+			})
+			return
+		}
 		page, err := s.store.EventsPage(id, after, limit)
 		if err != nil {
 			if errors.Is(err, session.ErrEventCursorAhead) {
@@ -926,6 +960,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 			},
 			"latestCursor": page.LatestCursor,
 		})
+		return
+	}
+	if backward {
+		writeAPIError(w, http.StatusBadRequest, "invalid_event_cursor", "before/latest are not supported for event streams", nil)
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -1110,6 +1148,47 @@ func parseEventCursor(r *http.Request) (int64, error) {
 		return 0, fmt.Errorf("event cursor must be a non-negative integer")
 	}
 	return cursor, nil
+}
+
+// explicitEventCursor reports whether the request names a forward cursor, so
+// backward pagination can reject the ambiguous combination instead of
+// guessing which direction the caller meant.
+func explicitEventCursor(r *http.Request) bool {
+	return strings.TrimSpace(r.Header.Get("Last-Event-ID")) != "" ||
+		strings.TrimSpace(r.URL.Query().Get("after")) != ""
+}
+
+// parseEventBackward reads the backward pagination parameters. backward is
+// true when the request asks for a tail window, either with an explicit
+// exclusive before cursor or with latest=true. latest=true is equivalent to
+// before=head+1; it is expressed here as the maximum cursor so the store
+// clamps it to the durable head captured by the same request. The two forms
+// are mutually exclusive.
+func parseEventBackward(query url.Values) (before int64, backward bool, err error) {
+	value := strings.TrimSpace(query.Get("before"))
+	hasBefore := value != ""
+	if hasBefore {
+		before, err = strconv.ParseInt(value, 10, 64)
+		if err != nil || before < 1 {
+			return 0, false, fmt.Errorf("before cursor must be a positive integer")
+		}
+	}
+	latest := strings.TrimSpace(query.Get("latest"))
+	hasLatest := false
+	if latest != "" {
+		on, parseErr := strconv.ParseBool(latest)
+		if parseErr != nil {
+			return 0, false, fmt.Errorf("latest must be a boolean")
+		}
+		hasLatest = on
+	}
+	if hasBefore && hasLatest {
+		return 0, false, fmt.Errorf("before and latest are mutually exclusive")
+	}
+	if hasLatest {
+		return math.MaxInt64, true, nil
+	}
+	return before, hasBefore, nil
 }
 
 // writeSSE frames an event using the default SSE message channel instead of

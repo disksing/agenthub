@@ -103,6 +103,7 @@ Current runtime-backed daemon instances advertise:
 | `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
 | `events.lossless-replay` | Durable exclusive cursors, paginated REST catch-up and gap-free SSE replay. |
 | `events.delta-merge` | Consecutive same-message text deltas are folded into one durable event; SSE delivers live folds as append patches (`data.append: true`) under the folded event's id and re-sends the full cursor event on reconnect. |
+| `events.backward-pagination` | JSON event pages can also read the log backwards with `latest=true` or an exclusive `before` cursor. |
 | `events.canonical-turn-terminals` | Provider-independent `turn.completed`, `turn.failed` and `turn.cancelled`. |
 | `recovery.closed-turns` | Daemon recovery closes open approvals and turns before publishing `stopped`. |
 
@@ -190,8 +191,10 @@ keeps its original id, its `text` accumulates, and its `time` tracks the
 newest fragment. Folding stops at a 32 KiB accumulated payload, so one long
 message may span several events. REST pages and stream replays always serve
 the full accumulated event; live streams deliver only the new fragment as an
-append patch under the folded event's id. See SSE mode below. Core event
-types:
+append patch under the folded event's id. See SSE mode below. This holds for
+backward pages too, so a client paging up that already saw a newer copy of an
+id (for example a live append patch) treats the repeated id as a full
+replacement, never as an append. Core event types:
 
 | Type | `data` payload | Meaning |
 | --- | --- | --- |
@@ -238,6 +241,7 @@ Daemon status, effective data paths and runtime summary.
   "apiVersion": "1",
   "capabilities": [
     "events.lossless-replay",
+    "events.backward-pagination",
     "session.source",
     "events.canonical-turn-terminals",
     "recovery.closed-turns",
@@ -560,11 +564,19 @@ Plain requests return a JSON snapshot of the log after a cursor.
 - **Query parameters:**
   - `after=<event-id>` — only events with an id greater than this cursor
     (default `0`, i.e. from the beginning).
+  - `before=<event-id>` — backward pagination: the last `limit` events with
+    an id smaller than this exclusive cursor. A `before` value past the
+    durable head is clamped to `latestCursor+1` instead of rejected, so a
+    tail read can never silently skip future events. Mutually exclusive
+    with `after` and `latest`.
+  - `latest=true` — equivalent to `before=<latestCursor+1>`: returns the
+    last `limit` events of the log. Mutually exclusive with `after` and
+    `before`.
   - `limit=<n>` — maximum number of events returned (default `500`,
     values above `1000` are clamped to the page size).
-- **Success `200`:** events are in ascending id order. `after` and
-  `nextAfter` are exclusive cursors; `latestCursor` is the durable head
-  captured for this response.
+- **Success `200`:** events are in ascending id order in both directions.
+  `after` and `nextAfter` are exclusive cursors; `latestCursor` is the
+  durable head captured for this response.
 
   ```json
   {
@@ -583,19 +595,50 @@ Plain requests return a JSON snapshot of the log after a cursor.
   that need a stable catch-up target should retain the first response's
   `latestCursor`; events appended later can be consumed by a subsequent
   request or SSE.
-- **Errors:** `400 invalid_event_cursor`, `404 session_not_found`,
-  `409 event_cursor_ahead` (the supplied cursor is newer than this session's
-  durable head; the error details include `latestCursor`).
+
+  Backward pages (requested with `before` or `latest`) additionally carry
+  `before` (the clamped exclusive cursor used), `nextBefore` and
+  `hasMoreBefore` in `page`; forward pages never include these fields.
+
+  ```json
+  {
+    "events": [],
+    "page": {
+      "after": 0,
+      "limit": 100,
+      "nextAfter": 1030,
+      "hasMore": false,
+      "before": 1031,
+      "nextBefore": 931,
+      "hasMoreBefore": true
+    },
+    "latestCursor": 1030
+  }
+  ```
+
+  Page backward with `page.nextBefore` while `page.hasMoreBefore` is true.
+  `nextAfter`, `hasMore` and `latestCursor` stay populated, so a tail page
+  can hand `page.nextAfter` to a subsequent `after` request or SSE stream
+  directly.
+- **Errors:** `400 invalid_event_cursor` (malformed cursor, or `before` /
+  `latest` combined with each other or with an explicit `after`),
+  `404 session_not_found`, `409 event_cursor_ahead` (the supplied `after`
+  cursor is newer than this session's durable head; the error details
+  include `latestCursor`).
 
 ```bash
 curl -s "$BASE/v1/sessions/$SESSION/events"
 curl -s "$BASE/v1/sessions/$SESSION/events?after=100&limit=200"
+curl -s "$BASE/v1/sessions/$SESSION/events?latest=true&limit=100"
+curl -s "$BASE/v1/sessions/$SESSION/events?before=931&limit=100"
 ```
 
 #### SSE mode
 
 Send `Accept: text/event-stream` (or append `?stream=true`) to keep the
-connection open and receive events as they happen.
+connection open and receive events as they happen. Backward pagination is
+a JSON-mode feature: streams reject `before` and `latest` with
+`400 invalid_event_cursor`.
 
 - **Headers:** `Accept: text/event-stream`; optional `Last-Event-ID` with
   the id of the last event already processed (the standard SSE resume

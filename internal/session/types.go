@@ -84,14 +84,20 @@ type Event struct {
 
 // EventPage is a stable snapshot page of a session's durable event log.
 // After and NextAfter use exclusive cursor semantics: a subsequent request
-// passes NextAfter as its After value.
+// passes NextAfter as its After value. Before and NextBefore are the
+// backward counterpart, populated only by backward pages (EventsPageBefore):
+// a subsequent backward request passes NextBefore as its Before value. They
+// are zero on forward pages and omitted from their JSON encoding.
 type EventPage struct {
-	Events       []Event `json:"events"`
-	After        int64   `json:"after"`
-	Limit        int     `json:"limit"`
-	NextAfter    int64   `json:"nextAfter"`
-	HasMore      bool    `json:"hasMore"`
-	LatestCursor int64   `json:"latestCursor"`
+	Events        []Event `json:"events"`
+	After         int64   `json:"after"`
+	Limit         int     `json:"limit"`
+	NextAfter     int64   `json:"nextAfter"`
+	HasMore       bool    `json:"hasMore"`
+	Before        int64   `json:"before,omitempty"`
+	NextBefore    int64   `json:"nextBefore,omitempty"`
+	HasMoreBefore bool    `json:"hasMoreBefore,omitempty"`
+	LatestCursor  int64   `json:"latestCursor"`
 }
 
 type CreateInput struct {
