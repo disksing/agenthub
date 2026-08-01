@@ -245,8 +245,14 @@ export function App() {
   // archiveFromList is the one-click archive offered on hover/focus inside
   // the default session list; it is the only archive entry point in the UI.
   // It calls the daemon archive API directly, with no confirmation dialog.
+  // The button stays clickable for non-archivable sessions so the click
+  // always produces explicit feedback instead of a silently dead control.
   const archiveFromList = async (session) => {
-    if (!session || archivedView || !isArchivable(session)) return;
+    if (!session || archivedView) return;
+    if (!isArchivable(session)) {
+      setError(archiveDisabledReason(session));
+      return;
+    }
     if (listArchivingIds.has(session.id)) return;
     setError("");
     setListArchivingIds((current) => new Set(current).add(session.id));
@@ -307,11 +313,11 @@ export function App() {
                   {!archivedView && (
                     <button
                       type="button"
-                      className="session-row-archive"
+                      className={`session-row-archive${itemArchivable ? "" : " session-row-archive-muted"}`}
                       aria-label={`Archive session ${item.title || item.id}`}
                       aria-busy={itemArchiving || undefined}
                       title={archiveDisabledReason(item) || `Archive session ${item.title || item.id}`}
-                      disabled={itemArchiving || !itemArchivable}
+                      disabled={itemArchiving}
                       onClick={(event) => { event.stopPropagation(); archiveFromList(item); }}
                       onDoubleClick={(event) => event.stopPropagation()}
                       onMouseDown={(event) => event.stopPropagation()}

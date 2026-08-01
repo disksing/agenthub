@@ -39,15 +39,19 @@ test("list archive button uses stable IDs, blocks parent events and is list-only
   // The request targets the stable session ID, never the title.
   assert.match(app, /api\(`\/v1\/sessions\/\$\{session\.id\}`, \{ method: "DELETE"/);
   // Row selection, navigation and double-click must not fire from the button.
-  const buttonBlock = app.slice(app.indexOf('className="session-row-archive"'));
+  const buttonBlock = app.slice(app.indexOf("session-row-archive${"));
   assert.match(buttonBlock, /onClick=\{\(event\) => \{ event\.stopPropagation\(\); archiveFromList\(item\); \}\}/);
   assert.match(buttonBlock, /onDoubleClick=\{\(event\) => event\.stopPropagation\(\)\}/);
   assert.match(buttonBlock, /onMouseDown=\{\(event\) => event\.stopPropagation\(\)\}/);
   // Accessible name and tooltip follow the "Archive session <title>" contract.
   assert.match(buttonBlock, /aria-label=\{`Archive session \$\{item\.title \|\| item\.id\}`\}/);
   assert.match(buttonBlock, /aria-busy=\{itemArchiving \|\| undefined\}/);
-  // In-progress and non-archivable rows cannot submit.
-  assert.match(buttonBlock, /disabled=\{itemArchiving \|\| !itemArchivable\}/);
+  // Only in-progress rows are disabled. Every other row stays clickable so a
+  // click on a non-archivable session surfaces the reason instead of dying
+  // silently; the muted class keeps the visual hint for the extra step.
+  assert.match(buttonBlock, /disabled=\{itemArchiving\}/);
+  assert.match(buttonBlock, /session-row-archive\$\{itemArchivable \? "" : " session-row-archive-muted"\}/);
+  assert.match(app, /if \(!isArchivable\(session\)\) \{\s*setError\(archiveDisabledReason\(session\)\);\s*return;\s*\}/);
   // Duplicate submissions are blocked by the per-session pending set.
   assert.match(app, /if \(listArchivingIds\.has\(session\.id\)\) return;/);
   // Failure keeps the item and surfaces the error; success converges selection.
@@ -68,6 +72,9 @@ test("list archive button is hover/focus revealed without layout shifts", async 
   assert.match(css, /\.session-row-archive:focus-visible/);
   // Hover-less devices keep a visible entry point on the selected row.
   assert.match(css, /@media \(hover: none\) \{\s*\.session-row\.active \.session-row-archive/);
+  // Non-archivable rows get a muted tint but stay clickable for feedback.
+  assert.match(css, /\.session-row-archive-muted \{\s*color: #b3b9b8;/);
+  assert.match(css, /\.session-row-archive-muted:hover/);
 });
 
 // Regression guards: the details panel must not offer a second archive entry

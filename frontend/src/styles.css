@@ -237,6 +237,17 @@ select {
   cursor: default;
 }
 
+/* Sessions that cannot be archived yet keep the button clickable so the
+   click surfaces the reason; the muted tint hints the extra step needed. */
+.session-row-archive-muted {
+  color: #b3b9b8;
+}
+
+.session-row-archive-muted:hover:not(:disabled) {
+  background: #e2e7e5;
+  color: #7c8282;
+}
+
 .session-row:hover {
   background: #f1f3f2;
 }
