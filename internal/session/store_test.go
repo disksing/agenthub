@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,142 @@ func TestStoreRejectsInvalidLaunchEnvironment(t *testing.T) {
 		if _, err := store.Create(CreateInput{Cwd: t.TempDir(), LaunchEnvironment: environment}); err == nil {
 			t.Fatalf("accepted invalid environment: %#v", environment)
 		}
+	}
+}
+
+func TestUpdateLaunchEnvironmentOverlaysAndSurvivesReplay(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Codex",
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := map[string]string{"FORGE_SESSION_ID": "forge-new", "ADDED": "yes"}
+	updated, err := store.UpdateLaunchEnvironment(created.ID, overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The overlay replaces same-named entries and keeps the rest; it never
+	// deletes keys it does not mention.
+	want := map[string]string{"FORGE_SESSION_ID": "forge-new", "KEEP": "original", "ADDED": "yes"}
+	if !maps.Equal(updated.LaunchEnvironment, want) {
+		t.Fatalf("merged environment = %+v, want %+v", updated.LaunchEnvironment, want)
+	}
+	// The store owns a deep copy of the overlay.
+	overlay["FORGE_SESSION_ID"] = "mutated"
+	unchanged, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(unchanged.LaunchEnvironment, want) {
+		t.Fatalf("overlay was aliased: %+v", unchanged.LaunchEnvironment)
+	}
+
+	// The durable event carries the full merged map; session.created keeps
+	// the original environment untouched.
+	events, err := store.EventsAfter(created.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Type != "session.launch-environment" {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+	var createdData struct {
+		LaunchEnvironment map[string]string `json:"launchEnvironment"`
+	}
+	if err := json.Unmarshal(events[0].Data, &createdData); err != nil {
+		t.Fatal(err)
+	}
+	if createdData.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-old" {
+		t.Fatalf("session.created was rewritten: %+v", createdData.LaunchEnvironment)
+	}
+	var environmentData LaunchEnvironmentEventData
+	if err := json.Unmarshal(events[1].Data, &environmentData); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(environmentData.Environment, want) {
+		t.Fatalf("event payload = %+v, want %+v", environmentData.Environment, want)
+	}
+
+	// A second overlay merges onto the newest environment.
+	again, err := store.UpdateLaunchEnvironment(created.ID, map[string]string{"ADDED": "updated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want["ADDED"] = "updated"
+	if !maps.Equal(again.LaunchEnvironment, want) {
+		t.Fatalf("second overlay = %+v, want %+v", again.LaunchEnvironment, want)
+	}
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(replayed.LaunchEnvironment, want) {
+		t.Fatalf("environment after replay = %+v, want %+v", replayed.LaunchEnvironment, want)
+	}
+}
+
+func TestUpdateLaunchEnvironmentRejectsInvalidOverlayAndArchived(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Codex",
+		LaunchEnvironment: map[string]string{"KEEP": "original"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, overlay := range []map[string]string{
+		{"": "value"},
+		{"BAD=NAME": "value"},
+		{"NAME": "bad\x00value"},
+	} {
+		if _, err := store.UpdateLaunchEnvironment(created.ID, overlay); err == nil {
+			t.Fatalf("accepted invalid overlay: %#v", overlay)
+		}
+	}
+	value, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.LastEventID != 1 || !maps.Equal(value.LaunchEnvironment, map[string]string{"KEEP": "original"}) {
+		t.Fatalf("invalid overlay changed the session: %+v", value)
+	}
+	if _, err := store.UpdateLaunchEnvironment("ses_missing", map[string]string{"A": "b"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown session error = %v, want ErrNotFound", err)
+	}
+
+	// Archived sessions are read-only.
+	if _, err := store.Append(created.ID, "session.state", "", []byte(`{"state":"stopped","reason":"requested"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Archive(created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateLaunchEnvironment(created.ID, map[string]string{"A": "b"}); !errors.Is(err, ErrArchived) {
+		t.Fatalf("archived update error = %v, want ErrArchived", err)
+	}
+	archived, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(archived.LaunchEnvironment, map[string]string{"KEEP": "original"}) {
+		t.Fatalf("archived environment changed: %+v", archived.LaunchEnvironment)
 	}
 }
 

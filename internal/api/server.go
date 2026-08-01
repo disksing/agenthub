@@ -27,12 +27,15 @@ const APIVersion = "1"
 const (
 	CapabilitySessionSource            = "session.source"
 	CapabilitySessionLaunchEnvironment = "session.launch-environment"
-	CapabilitySessionStrictStopped     = "session.strict-stopped"
-	CapabilityEventsLosslessReplay     = "events.lossless-replay"
-	CapabilityEventsDeltaMerge         = "events.delta-merge"
-	CapabilityEventsBackwardPagination = "events.backward-pagination"
-	CapabilityEventsCanonicalTerminal  = "events.canonical-turn-terminals"
-	CapabilityRecoveryClosedTurns      = "recovery.closed-turns"
+	// CapabilitySessionLaunchEnvironmentUpdate reports that resume accepts
+	// an optional launchEnvironment overlay persisted before provider start.
+	CapabilitySessionLaunchEnvironmentUpdate = "session.launch-environment-update"
+	CapabilitySessionStrictStopped           = "session.strict-stopped"
+	CapabilityEventsLosslessReplay           = "events.lossless-replay"
+	CapabilityEventsDeltaMerge               = "events.delta-merge"
+	CapabilityEventsBackwardPagination       = "events.backward-pagination"
+	CapabilityEventsCanonicalTerminal        = "events.canonical-turn-terminals"
+	CapabilityRecoveryClosedTurns            = "recovery.closed-turns"
 )
 
 // ModelLister enumerates the models of a built-in provider and can drop its
@@ -211,6 +214,7 @@ func (s *Server) capabilities() []string {
 			CapabilityEventsCanonicalTerminal,
 			CapabilityRecoveryClosedTurns,
 			CapabilitySessionLaunchEnvironment,
+			CapabilitySessionLaunchEnvironmentUpdate,
 			CapabilitySessionStrictStopped,
 		)
 	}
@@ -700,12 +704,25 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 	writeJSON(w, http.StatusAccepted, map[string]any{"session": value})
 }
 
-func (s *Server) resumeSession(w http.ResponseWriter, _ *http.Request, id string) {
+func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request, id string) {
 	if s.rejectArchivedSession(w, id) {
 		return
 	}
 	if s.runtime == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
+		return
+	}
+	// The body is optional: an empty body (or {}) resumes with the recorded
+	// environment, while launchEnvironment overlays entries onto it.
+	var body struct {
+		LaunchEnvironment map[string]string `json:"launchEnvironment"`
+	}
+	if err := decodeOptionalJSON(r, &body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	if err := session.ValidateLaunchEnvironment(body.LaunchEnvironment); err != nil {
+		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_launch_environment", err.Error(), nil)
 		return
 	}
 	current, err := s.store.Get(id)
@@ -716,6 +733,20 @@ func (s *Server) resumeSession(w http.ResponseWriter, _ *http.Request, id string
 	if current.State == session.StateStopping {
 		writeAPIError(w, http.StatusConflict, "session_stopping", "session provider is stopping", nil)
 		return
+	}
+	// Persist the overlay before starting the runtime so the provider picks
+	// up the merged environment when it (re)starts. The update stays durable
+	// even if the provider then fails to start, mirroring session creation.
+	if len(body.LaunchEnvironment) > 0 {
+		if _, err := s.store.UpdateLaunchEnvironment(id, body.LaunchEnvironment); err != nil {
+			switch {
+			case errors.Is(err, session.ErrArchived):
+				writeAPIError(w, http.StatusConflict, "session_archived", "session is archived and read-only", nil)
+			default:
+				s.writeStoreError(w, err)
+			}
+			return
+		}
 	}
 	value, err := s.runtime.Start(id)
 	if err != nil {
@@ -1106,6 +1137,22 @@ func decodeJSON(r *http.Request, target any) error {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return errors.New("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+// decodeOptionalJSON decodes like decodeJSON but accepts an empty body,
+// leaving target untouched. Endpoints with an all-optional body (resume)
+// stay compatible with clients that send no body at all.
+func decodeOptionalJSON(r *http.Request, target any) error {
+	if r.Body == nil || r.ContentLength == 0 {
+		return nil
+	}
+	if err := decodeJSON(r, target); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
 		}
 		return err
 	}

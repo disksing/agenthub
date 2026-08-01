@@ -145,3 +145,38 @@ func TestEventsAfterStopsOnCursorGap(t *testing.T) {
 		t.Fatalf("gap error = %#v", err)
 	}
 }
+
+// TestResumeWithEnvironmentSendsOverlay pins the client request shape: an
+// overlay goes out as launchEnvironment, while Resume (and a nil overlay)
+// send the same empty object older clients always sent.
+func TestResumeWithEnvironmentSendsOverlay(t *testing.T) {
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/sessions/ses_test/resume" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		var body json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		_ = json.NewEncoder(w).Encode(map[string]any{"session": session.Session{ID: "ses_test"}})
+	}))
+	defer server.Close()
+	client := New(server.URL)
+	if _, err := client.ResumeWithEnvironment("ses_test", map[string]string{"FORGE_SESSION_ID": "forge-new"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Resume("ses_test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("requests = %d, want 2", len(bodies))
+	}
+	if bodies[0] != `{"launchEnvironment":{"FORGE_SESSION_ID":"forge-new"}}` {
+		t.Fatalf("overlay body = %s", bodies[0])
+	}
+	if bodies[1] != `{}` {
+		t.Fatalf("plain resume body = %s, want {}", bodies[1])
+	}
+}

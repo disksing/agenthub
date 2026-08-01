@@ -197,6 +197,31 @@ func (c *Client) SessionAction(id, action string) (session.Session, error) {
 	return result.Session, nil
 }
 
+// Resume restarts a stopped session's provider with the launch environment
+// recorded on the session.
+func (c *Client) Resume(id string) (session.Session, error) {
+	return c.ResumeWithEnvironment(id, nil)
+}
+
+// ResumeWithEnvironment overlays launchEnvironment onto the session's
+// durable launch environment (same-named entries are replaced, others are
+// kept) and persists the merged result before the provider restarts, so a
+// provider resume picks up the new values. A nil or empty map behaves
+// exactly like Resume.
+func (c *Client) ResumeWithEnvironment(id string, launchEnvironment map[string]string) (session.Session, error) {
+	var result struct {
+		Session session.Session `json:"session"`
+	}
+	body := map[string]any{}
+	if len(launchEnvironment) > 0 {
+		body["launchEnvironment"] = launchEnvironment
+	}
+	if err := c.request(http.MethodPost, "/v1/sessions/"+id+"/resume", body, &result); err != nil {
+		return session.Session{}, err
+	}
+	return result.Session, nil
+}
+
 func (c *Client) ResolveApproval(id, approvalID, decision string) (session.Session, error) {
 	var result struct {
 		Session session.Session `json:"session"`

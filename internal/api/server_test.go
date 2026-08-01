@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1460,6 +1461,163 @@ func TestArchivedSessionRejectsWrites(t *testing.T) {
 			t.Fatalf("POST %s: status = %s code = %q, want 409 session_archived", path, response.Status, failure.Error.Code)
 		}
 	}
+
+	// A resume carrying a launchEnvironment overlay is rejected the same
+	// way, and the archived environment stays untouched.
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions/"+created.ID+"/resume", strings.NewReader(`{"launchEnvironment":{"FORGE_SESSION_ID":"forge-new"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("archived resume with environment: status = %s, want 409", response.Status)
+	}
+	value, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.LaunchEnvironment) != 0 {
+		t.Fatalf("archived launch environment changed: %+v", value.LaunchEnvironment)
+	}
+}
+
+// TestResumeSessionAcceptsOptionalLaunchEnvironment covers the resume
+// request contract: the body stays optional, a valid overlay is validated
+// and persisted before the provider starts (so it survives even this
+// test's failing provider), and invalid input is rejected without touching
+// the durable environment.
+func TestResumeSessionAcceptsOptionalLaunchEnvironment(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Version:        1,
+		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true, Command: "missing-test-command"}},
+		Agents:         []config.Agent{{Name: "Pi Agent", ProviderID: "provider"}},
+	}
+	manager := runtime.New(store, cfg)
+	t.Cleanup(manager.Close)
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{Runtime: manager}).Handler())
+	defer server.Close()
+	created, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Pi Agent",
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The test provider binary does not exist, so a resume that passes
+	// request validation reaches the runtime and fails there with a
+	// conflict; anything else means the request was rejected earlier.
+	postResume := func(body *string) (int, string) {
+		t.Helper()
+		var reader *strings.Reader
+		if body != nil {
+			reader = strings.NewReader(*body)
+		} else {
+			reader = strings.NewReader("")
+		}
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions/"+created.ID+"/resume", reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var parsed struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(response.Body).Decode(&parsed)
+		return response.StatusCode, parsed.Error.Code
+	}
+
+	// Empty body and {} remain valid resumes.
+	for name, body := range map[string]*string{
+		"empty body":   nil,
+		"empty object": stringPointer(`{}`),
+	} {
+		status, code := postResume(body)
+		if status != http.StatusConflict || code != "runtime_operation_failed" {
+			t.Fatalf("%s: status/code = %d/%q, want 409/runtime_operation_failed", name, status, code)
+		}
+		value, err := store.Get(created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !maps.Equal(value.LaunchEnvironment, map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"}) {
+			t.Fatalf("%s changed the environment: %+v", name, value.LaunchEnvironment)
+		}
+	}
+
+	// A valid overlay is persisted before the provider start fails, and
+	// keeps keys the overlay did not mention.
+	status, code := postResume(stringPointer(`{"launchEnvironment":{"FORGE_SESSION_ID":"forge-new","EXTRA":"x"}}`))
+	if status != http.StatusConflict || code != "runtime_operation_failed" {
+		t.Fatalf("overlay resume: status/code = %d/%q, want 409/runtime_operation_failed", status, code)
+	}
+	value, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"FORGE_SESSION_ID": "forge-new", "KEEP": "original", "EXTRA": "x"}
+	if !maps.Equal(value.LaunchEnvironment, want) {
+		t.Fatalf("environment after overlay resume = %+v, want %+v", value.LaunchEnvironment, want)
+	}
+	events, err := store.EventsAfter(created.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var environmentEvents int
+	for _, event := range events {
+		if event.Type != "session.launch-environment" {
+			continue
+		}
+		environmentEvents++
+		var data session.LaunchEnvironmentEventData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if !maps.Equal(data.Environment, want) {
+			t.Fatalf("session.launch-environment payload = %+v, want %+v", data.Environment, want)
+		}
+	}
+	if environmentEvents != 1 {
+		t.Fatalf("session.launch-environment events = %d, want 1", environmentEvents)
+	}
+
+	// Invalid input is rejected without touching the durable environment.
+	for name, item := range map[string]struct {
+		body   string
+		status int
+		code   string
+	}{
+		"invalid variable name": {`{"launchEnvironment":{"BAD=NAME":"v"}}`, http.StatusUnprocessableEntity, "invalid_launch_environment"},
+		"malformed JSON":        {`{"launchEnvironment":`, http.StatusBadRequest, "invalid_request"},
+		"unknown field":         {`{"environment":{}}`, http.StatusBadRequest, "invalid_request"},
+	} {
+		status, code := postResume(&item.body)
+		if status != item.status || code != item.code {
+			t.Fatalf("%s: status/code = %d/%q, want %d/%s", name, status, code, item.status, item.code)
+		}
+	}
+	value, err = store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(value.LaunchEnvironment, want) {
+		t.Fatalf("rejected resume changed the environment: %+v", value.LaunchEnvironment)
+	}
 }
 
 // newToggleTestServer starts a daemon whose config holds a single built-in
@@ -1942,6 +2100,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		CapabilityEventsCanonicalTerminal,
 		CapabilityRecoveryClosedTurns,
 		CapabilitySessionLaunchEnvironment,
+		CapabilitySessionLaunchEnvironmentUpdate,
 		CapabilitySessionStrictStopped,
 	}
 	if strings.Join(status.Capabilities, ",") != strings.Join(wantCapabilities, ",") {
@@ -2115,6 +2274,7 @@ func TestSessionConflictCodesAreStable(t *testing.T) {
 		{"active turn", "/v1/sessions/" + active.ID + "/messages", `{"text":"next"}`, http.StatusConflict, "turn_active"},
 		{"interrupt without turn", "/v1/sessions/" + stopping.ID + "/interrupt", `{}`, http.StatusConflict, "turn_not_active"},
 		{"resume while stopping", "/v1/sessions/" + stopping.ID + "/resume", `{}`, http.StatusConflict, "session_stopping"},
+		{"resume with environment while stopping", "/v1/sessions/" + stopping.ID + "/resume", `{"launchEnvironment":{"A":"b"}}`, http.StatusConflict, "session_stopping"},
 		{"invalid approval decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"decision":"maybe"}`, http.StatusBadRequest, "invalid_approval_decision"},
 		{"approval text with decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"text":"hi","decision":"accept"}`, http.StatusBadRequest, "invalid_approval_decision"},
 		{"approval option with decision", "/v1/sessions/" + active.ID + "/approvals/approval-1", `{"optionId":"opt-1","decision":"accept"}`, http.StatusBadRequest, "invalid_approval_decision"},
