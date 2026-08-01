@@ -437,7 +437,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		capabilities[raw.(string)] = true
 	}
 	for _, required := range []string{
-		"session.source", "session.launch-environment", "session.strict-stopped",
+		"session.source", "session.launch-environment", "session.launch-environment-update", "session.strict-stopped",
 		"events.lossless-replay", "events.canonical-turn-terminals", "recovery.closed-turns",
 	} {
 		if !capabilities[required] {

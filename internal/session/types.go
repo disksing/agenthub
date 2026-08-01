@@ -149,6 +149,15 @@ type AgentRenameEventData struct {
 	AgentName string `json:"agentName"`
 }
 
+// LaunchEnvironmentEventData is the payload of the
+// session.launch-environment event. It carries the session's full effective
+// launch environment after an overlay was merged, so replay replaces the
+// projected map with the payload verbatim instead of re-applying the
+// overlay. The historical session.created snapshot is never rewritten.
+type LaunchEnvironmentEventData struct {
+	Environment map[string]string `json:"environment"`
+}
+
 // ProviderEventData is the payload of the session.provider event. AgentName
 // names the agent configuration the session runs with. AgentID is read-only
 // compatibility for events recorded before agent ids were removed; it is

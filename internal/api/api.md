@@ -100,6 +100,7 @@ Current runtime-backed daemon instances advertise:
 | --- | --- |
 | `session.source` | Durable caller source metadata and exact list filters. |
 | `session.launch-environment` | Durable per-session provider environment, including provider resume. |
+| `session.launch-environment-update` | Resume accepts a `launchEnvironment` overlay, persisted before provider start. |
 | `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
 | `events.lossless-replay` | Durable exclusive cursors, paginated REST catch-up and gap-free SSE replay. |
 | `events.delta-merge` | Consecutive same-message text deltas are folded into one durable event; SSE delivers live folds as append patches (`data.append: true`) under the folded event's id and re-sends the full cursor event on reconnect. |
@@ -203,6 +204,7 @@ replacement, never as an append. Core event types:
 | `session.provider` | `{"agentName", "provider", "providerSessionId"}` | The provider-native session/thread id was established; used for resume. |
 | `provider.process.started` | `{"pid", "processGroupId"}` | Internal process-group evidence used to clean up after daemon crashes. |
 | `session.agent` | `{"agentName"}` | The configured agent was renamed; the session now references the new name. |
+| `session.launch-environment` | `{"environment": {...}}` | The session's launch environment was overlaid at resume; the payload is the full merged map, replacing the projected environment. |
 | `session.archived` | — | The session was archived (moved to the archive store). |
 | `message.user` | `{"text"}` | A user message started a new turn. |
 | `message.user.steer` | `{"text"}` | A steer message was injected into the active turn. |
@@ -246,6 +248,7 @@ Daemon status, effective data paths and runtime summary.
     "events.canonical-turn-terminals",
     "recovery.closed-turns",
     "session.launch-environment",
+    "session.launch-environment-update",
     "session.strict-stopped"
   ],
   "version": "0.1.0",
@@ -735,10 +738,23 @@ the session recorded a provider-native session/thread id, the provider
 resumes that native conversation, so context survives daemon and provider
 restarts. Safe to call when the provider is already running.
 
-- **Request body:** empty (`{}`).
+- **Request body:** optional. An empty body (or `{}`) resumes with the
+  session's recorded launch environment. `launchEnvironment` (optional) is a
+  string-to-string overlay onto that durable environment: supplied entries
+  replace same-named values, keys the overlay omits are kept, and nothing is
+  deleted. The merged map is validated and persisted as a
+  `session.launch-environment` event (carrying the full merged
+  `environment` map) **before** the provider starts, so the provider resume
+  picks it up; the historical `session.created` snapshot is never rewritten.
+  The update stays durable even if the provider then fails to start, and it
+  is visible to any client that can read the session — never put secrets
+  here. When the provider is already running, the overlay is recorded and
+  takes effect on the next provider start.
 - **Success `200`:** `{"session": {...}}`.
-- **Errors:** `415 json_required`, `404 session_not_found`,
-  `409 session_archived`, `409 session_stopping`,
+- **Errors:** `415 json_required`, `400 invalid_request` (malformed JSON or
+  unknown fields), `404 session_not_found`,
+  `422 invalid_launch_environment` (an empty variable name, `=` or NUL in a
+  name, or NUL in a value), `409 session_archived`, `409 session_stopping`,
   `409 runtime_operation_failed` (the provider could not start, for example
   because the recorded agent no longer exists),
   `503 runtime_unavailable`.
@@ -746,6 +762,10 @@ restarts. Safe to call when the provider is already running.
 ```bash
 curl -s -X POST "$BASE/v1/sessions/$SESSION/resume" \
   -H "Content-Type: application/json" -d '{}'
+
+curl -s -X POST "$BASE/v1/sessions/$SESSION/resume" \
+  -H "Content-Type: application/json" \
+  -d '{"launchEnvironment": {"FORGE_SESSION_ID": "session-456"}}'
 ```
 
 ### POST /v1/sessions/{id}/interrupt

@@ -605,6 +605,52 @@ func (s *Store) moveToArchive(id string, state *sessionState) error {
 	return nil
 }
 
+// UpdateLaunchEnvironment overlays entries onto the session's durable
+// launch environment: overlay values replace same-named entries, and keys
+// absent from the overlay keep their current values (the update never
+// deletes). The merged map is recorded as a session.launch-environment
+// event before the call returns, so a runtime started afterwards reads the
+// new environment from the projection. The historical session.created
+// snapshot is left untouched; replay applies the newest environment event.
+// Archived sessions are read-only and reject the update with ErrArchived.
+func (s *Store) UpdateLaunchEnvironment(id string, overlay map[string]string) (Session, error) {
+	if err := ValidateLaunchEnvironment(overlay); err != nil {
+		return Session{}, err
+	}
+	state, err := s.state(id)
+	if err != nil {
+		return Session{}, err
+	}
+	state.mu.Lock()
+	if state.session.State == StateArchived {
+		state.mu.Unlock()
+		return Session{}, ErrArchived
+	}
+	merged := cloneEnvironment(state.session.LaunchEnvironment)
+	if merged == nil {
+		merged = make(map[string]string, len(overlay))
+	}
+	for key, value := range overlay {
+		merged[key] = value
+	}
+	data, err := json.Marshal(LaunchEnvironmentEventData{Environment: merged})
+	if err != nil {
+		state.mu.Unlock()
+		return Session{}, err
+	}
+	if err := s.ensureEventsLocked(state, id); err != nil {
+		state.mu.Unlock()
+		return Session{}, err
+	}
+	_, broadcast, err := s.appendLocked(state, id, "session.launch-environment", "", data)
+	state.mu.Unlock()
+	if err != nil {
+		return Session{}, err
+	}
+	s.publish(broadcast)
+	return s.Get(id)
+}
+
 func (s *Store) EventsAfter(id string, after int64, limit int) ([]Event, error) {
 	page, err := s.EventsPage(id, after, limit)
 	return page.Events, err
@@ -941,6 +987,15 @@ func applyEvent(projected *Session, event Event) error {
 			return err
 		}
 		projected.AgentName = data.AgentName
+	case "session.launch-environment":
+		// The payload is the full effective environment after the caller's
+		// overlay was merged, so replay replaces the projected map with the
+		// payload verbatim; the merge itself is never re-run.
+		var data LaunchEnvironmentEventData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return err
+		}
+		projected.LaunchEnvironment = cloneEnvironment(data.Environment)
 	case "session.archived":
 		projected.State = StateArchived
 	case "turn.started":

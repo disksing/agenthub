@@ -158,6 +158,46 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	}
 }
 
+// TestManagerStartSeesUpdatedLaunchEnvironment pins the ordering the resume
+// endpoint relies on: the environment overlay is durable before the runtime
+// starts, so the provider factory observes the merged environment — the new
+// FORGE_SESSION_ID plus every key the overlay did not mention.
+func TestManagerStartSeesUpdatedLaunchEnvironment(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Fast Agent",
+		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateLaunchEnvironment(value.ID, map[string]string{"FORGE_SESSION_ID": "forge-new"}); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	defer manager.Close()
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		if options.Environment["FORGE_SESSION_ID"] != "forge-new" {
+			t.Errorf("factory FORGE_SESSION_ID = %q, want forge-new (%+v)", options.Environment["FORGE_SESSION_ID"], options.Environment)
+		}
+		if options.Environment["KEEP"] != "original" {
+			t.Errorf("factory lost an overlaid key: %+v", options.Environment)
+		}
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+	started, err := manager.Start(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-new" || started.LaunchEnvironment["KEEP"] != "original" {
+		t.Fatalf("started session environment = %+v", started.LaunchEnvironment)
+	}
+}
+
 func TestManagerKeepsParallelSessionEnvironmentsIndependent(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {
