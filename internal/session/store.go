@@ -652,6 +652,58 @@ func (s *Store) EventsPage(id string, after int64, limit int) (EventPage, error)
 	}, nil
 }
 
+// EventsPageBefore returns the last limit events before an exclusive durable
+// cursor, in ascending id order, plus enough metadata to page further back.
+// Unlike EventsPage, a cursor past the durable head is clamped to head+1
+// instead of rejected, so a tail read can never silently skip future events;
+// before == head+1 therefore reads the log tail. Before, NextBefore and
+// HasMoreBefore are populated only on these backward pages; NextAfter and
+// HasMore stay valid so a tail page can hand its NextAfter to a live stream.
+func (s *Store) EventsPageBefore(id string, before int64, limit int) (EventPage, error) {
+	state, err := s.state(id)
+	if err != nil {
+		return EventPage{}, err
+	}
+	limit = normalizeEventLimit(limit)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	latest := state.session.LastEventID
+	if before < 1 {
+		before = 1
+	}
+	if before > latest+1 {
+		before = latest + 1
+	}
+	if err := s.ensureEventsLocked(state, id); err != nil {
+		return EventPage{}, err
+	}
+	end := sort.Search(len(state.events), func(index int) bool {
+		return state.events[index].ID >= before
+	})
+	start := max(end-limit, 0)
+	events := make([]Event, 0, end-start)
+	for _, event := range state.events[start:end] {
+		events = append(events, cloneEvent(event))
+	}
+	next := before - 1
+	if len(events) > 0 {
+		next = events[len(events)-1].ID
+	}
+	page := EventPage{
+		Events:       events,
+		Limit:        limit,
+		NextAfter:    next,
+		HasMore:      next < latest,
+		Before:       before,
+		LatestCursor: latest,
+	}
+	if len(events) > 0 {
+		page.NextBefore = events[0].ID
+		page.HasMoreBefore = events[0].ID > 1
+	}
+	return page, nil
+}
+
 // EventsThrough returns at most limit events after after, never crossing the
 // supplied durable high-water mark.
 func (s *Store) EventsThrough(id string, after, highWater int64, limit int) ([]Event, error) {

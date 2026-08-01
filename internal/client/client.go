@@ -61,6 +61,13 @@ type EventPage struct {
 		Limit     int   `json:"limit"`
 		NextAfter int64 `json:"nextAfter"`
 		HasMore   bool  `json:"hasMore"`
+		// Backward pagination fields, populated only on pages requested
+		// with before/latest. NextBefore is the exclusive cursor for the
+		// next older page; HasMoreBefore reports whether older events
+		// remain.
+		Before        int64 `json:"before"`
+		NextBefore    int64 `json:"nextBefore"`
+		HasMoreBefore bool  `json:"hasMoreBefore"`
 	} `json:"page"`
 	LatestCursor int64 `json:"latestCursor"`
 }
@@ -204,6 +211,19 @@ func (c *Client) ResolveApproval(id, approvalID, decision string) (session.Sessi
 func (c *Client) EventsPage(id string, after int64, limit int) (EventPage, error) {
 	var result EventPage
 	path := fmt.Sprintf("/v1/sessions/%s/events?after=%d&limit=%d", id, after, limit)
+	if err := c.request(http.MethodGet, path, nil, &result); err != nil {
+		return EventPage{}, err
+	}
+	return result, nil
+}
+
+// EventsPageBefore returns the last limit events before an exclusive cursor,
+// in ascending id order. A cursor past the durable head is clamped to
+// head+1, so math.MaxInt64 reads the current tail (the latest=true form).
+// Page backward by passing Page.NextBefore while Page.HasMoreBefore is true.
+func (c *Client) EventsPageBefore(id string, before int64, limit int) (EventPage, error) {
+	var result EventPage
+	path := fmt.Sprintf("/v1/sessions/%s/events?before=%d&limit=%d", id, before, limit)
 	if err := c.request(http.MethodGet, path, nil, &result); err != nil {
 		return EventPage{}, err
 	}
