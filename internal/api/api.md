@@ -186,14 +186,16 @@ present on events that belong to a turn.
 Consecutive `message.assistant.delta` or `message.reasoning.delta` fragments
 of one provider message (same type, turn, and provider method) are folded
 into a single durable event instead of one event per fragment: the event
-keeps its original id, its `text` accumulates, and its `time` tracks the
-newest fragment. Folding stops at a 32 KiB accumulated payload, so one long
-message may span several events. REST pages and stream replays always serve
-the full accumulated event; live streams deliver only the new fragment as an
-append patch under the folded event's id. See SSE mode below. This holds for
-backward pages too, so a client paging up that already saw a newer copy of an
-id (for example a live append patch) treats the repeated id as a full
-replacement, never as an append. Core event types:
+keeps its original id, its `text` accumulates, its `time` tracks the newest
+fragment, and its optional `startTime` records the first fragment time.
+`startTime` is present once a delta has been folded and is omitted from
+events that contain only one fragment. Folding stops at a 32 KiB accumulated
+payload, so one long message may span several events. REST pages and stream
+replays always serve the full accumulated event; live streams deliver only
+the new fragment as an append patch under the folded event's id. See SSE
+mode below. This holds for backward pages too, so a client paging up that
+already saw a newer copy of an id (for example a live append patch) treats
+the repeated id as a full replacement, never as an append. Core event types:
 
 | Type | `data` payload | Meaning |
 | --- | --- | --- |

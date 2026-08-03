@@ -82,6 +82,9 @@ func TestAppendMergesConsecutiveAssistantDeltas(t *testing.T) {
 	if merged.ID != first.ID || merged.Type != "message.assistant.delta" || merged.TurnID != "turn_1" {
 		t.Fatalf("unexpected merged event: %+v", merged)
 	}
+	if merged.StartTime == nil || !merged.StartTime.Equal(first.Time) {
+		t.Fatalf("merged start time = %v, want first fragment time %v", merged.StartTime, first.Time)
+	}
 	if text := deltaTextOf(t, merged); text != "Hello, world!" {
 		t.Fatalf("merged text = %q, want %q", text, "Hello, world!")
 	}
@@ -105,6 +108,9 @@ func TestAppendMergesConsecutiveAssistantDeltas(t *testing.T) {
 	}
 	if len(replayed) != 3 || deltaTextOf(t, replayed[2]) != "Hello, world!" {
 		t.Fatalf("replayed events = %+v", replayed)
+	}
+	if replayed[2].StartTime == nil || !replayed[2].StartTime.Equal(first.Time) {
+		t.Fatalf("replayed start time = %v, want first fragment time %v", replayed[2].StartTime, first.Time)
 	}
 }
 
@@ -334,6 +340,9 @@ func TestDeltaMergePublishesAppendPatch(t *testing.T) {
 	}
 	if patchData["method"] != "item/agentMessage/delta" {
 		t.Fatalf("patch method = %q", patchData["method"])
+	}
+	if patch.StartTime == nil || !patch.StartTime.Equal(first.Time) {
+		t.Fatalf("append patch start time = %v, want first fragment time %v", patch.StartTime, first.Time)
 	}
 }
 

@@ -69,9 +69,13 @@ type Source struct {
 	ExternalID string `json:"externalId,omitempty"`
 }
 
+// Event is a durable canonical session event. StartTime is populated for a
+// delta event folded with at least one following fragment; it preserves the
+// first fragment timestamp while Time continues to track the newest fragment.
 type Event struct {
 	ID        int64           `json:"id"`
 	Time      time.Time       `json:"time"`
+	StartTime *time.Time      `json:"startTime,omitempty"`
 	Type      string          `json:"type"`
 	SessionID string          `json:"sessionId"`
 	TurnID    string          `json:"turnId,omitempty"`

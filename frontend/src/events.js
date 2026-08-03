@@ -66,7 +66,8 @@ export async function projectLiveEvent({
 // list. New ids append in arrival order. A repeated id is either a full
 // replacement (history replays and reconnect cursor re-sends) or an append
 // patch (data.append === true) whose text fragment extends the stored event;
-// patches also move the stored event time to the newest fragment.
+// patches also move the stored event time to the newest fragment while
+// retaining the persisted first-fragment time for folded reasoning.
 export function mergeIncomingEvents(current, incoming) {
   const next = [...current];
   const indexById = new Map(next.map((event, index) => [event.id, index]));
@@ -78,7 +79,8 @@ export function mergeIncomingEvents(current, incoming) {
     } else if (event.data?.append === true) {
       next[index] = appendEventFragment(next[index], event);
     } else {
-      next[index] = event;
+      const startTime = event.startTime || next[index].startTime || "";
+      next[index] = startTime ? { ...event, startTime } : event;
     }
   }
   return next;
@@ -87,9 +89,11 @@ export function mergeIncomingEvents(current, incoming) {
 function appendEventFragment(existing, patch) {
   const current = typeof existing.data?.text === "string" ? existing.data.text : "";
   const fragment = typeof patch.data?.text === "string" ? patch.data.text : "";
+  const startTime = patch.startTime || existing.startTime || "";
   return {
     ...existing,
     time: patch.time || existing.time,
+    ...(startTime ? { startTime } : {}),
     data: { ...existing.data, text: current + fragment },
   };
 }

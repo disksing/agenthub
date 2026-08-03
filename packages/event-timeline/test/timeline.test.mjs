@@ -67,6 +67,20 @@ test("thinking block keeps the first delta time as startTime for the duration la
   assert.equal(items[0].time, "2026-07-25T10:01:02Z");
 });
 
+test("folded reasoning events keep their persisted startTime", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "Let me think." }, {
+      turnId: "turn_1",
+      time: "2026-07-25T10:01:02Z",
+      startTime: "2026-07-25T10:00:00Z",
+    }),
+    event("message.assistant.delta", { text: "answer" }, { turnId: "turn_1" }),
+  ]);
+  assert.equal(items[0].startTime, "2026-07-25T10:00:00Z");
+  assert.equal(items[0].time, "2026-07-25T10:01:02Z");
+});
+
 test("assistant deltas without a turn id merge into one message", () => {
   reset();
   // Late provider chunks recorded after a turn terminal carry no turnId;

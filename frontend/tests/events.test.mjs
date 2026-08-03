@@ -85,15 +85,17 @@ test("mergeIncomingEvents appends, replaces, and extends events", () => {
     { id: 2, time: "t2", type: "message.assistant.delta", data: { text: "Hello", method: "m" } },
   ];
 
-  // Append patches extend the stored event text and move its time.
+  // Append patches extend the stored event text, move its time, and retain
+  // the first-fragment time used by the folded reasoning presentation.
   const patched = mergeIncomingEvents(stored, [
-    { id: 2, time: "t3", type: "message.assistant.delta", data: { text: ", ", method: "m", append: true } },
-    { id: 2, time: "t4", type: "message.assistant.delta", data: { text: "world", method: "m", append: true } },
+    { id: 2, time: "t3", startTime: "t2", type: "message.assistant.delta", data: { text: ", ", method: "m", append: true } },
+    { id: 2, time: "t4", startTime: "t2", type: "message.assistant.delta", data: { text: "world", method: "m", append: true } },
   ]);
   assert.equal(patched.length, 2);
   assert.equal(patched[1].data.text, "Hello, world");
   assert.equal(patched[1].data.method, "m");
   assert.equal(patched[1].time, "t4");
+  assert.equal(patched[1].startTime, "t2");
   assert.equal(patched[1].data.append, undefined);
   // The input list is never mutated.
   assert.equal(stored[1].data.text, "Hello");
@@ -101,9 +103,10 @@ test("mergeIncomingEvents appends, replaces, and extends events", () => {
   // Full replacements (history replays, reconnect cursor re-sends) swap the
   // whole event and heal any missed patches.
   const healed = mergeIncomingEvents(patched, [
-    { id: 2, time: "t5", type: "message.assistant.delta", data: { text: "Hello, world!", method: "m" } },
+    { id: 2, time: "t5", startTime: "t2", type: "message.assistant.delta", data: { text: "Hello, world!", method: "m" } },
   ]);
   assert.equal(healed[1].data.text, "Hello, world!");
+  assert.equal(healed[1].startTime, "t2");
 
   // New ids append in arrival order.
   const appended = mergeIncomingEvents(healed, [

@@ -456,6 +456,10 @@ func (s *Store) mergeDeltaLocked(state *sessionState, last Event, mergedData, pa
 		return Event{}, Event{}, false, err
 	}
 	merged = last
+	if merged.StartTime == nil {
+		startTime := last.Time
+		merged.StartTime = &startTime
+	}
 	merged.Time = event.Time
 	merged.Data = data
 	encoded, err := json.Marshal(merged)

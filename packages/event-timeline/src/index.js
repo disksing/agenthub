@@ -340,7 +340,10 @@ export function buildTimeline(events) {
         } else if (text) {
           // startTime pins the first delta so the collapsed header can show
           // how long the agent reasoned; time keeps tracking the last delta.
-          items.push({ kind: "thinking", key: event.id, turnId: event.turnId || "", text, time, startTime: time, active: false });
+          items.push({
+            kind: "thinking", key: event.id, turnId: event.turnId || "", text,
+            time, startTime: event.startTime || time, active: false,
+          });
         }
         break;
       }
