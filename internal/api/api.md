@@ -206,9 +206,10 @@ the repeated id as a full replacement, never as an append. Core event types:
 | `session.agent` | `{"agentName"}` | The configured agent was renamed; the session now references the new name. |
 | `session.launch-environment` | `{"environment": {...}}` | The session's launch environment was overlaid at resume; the payload is the full merged map, replacing the projected environment. |
 | `session.archived` | — | The session was archived (moved to the archive store). |
-| `message.user` | `{"text"}` | A user message started a new turn. |
-| `message.user.steer` | `{"text"}` | A steer message was injected into the active turn. |
-| `turn.started` | `{"text"}` | A turn began. |
+| `message.input` | `{"text", "role", "sender?", "steer", "messageId?", "replyTo?", "correlationId?"}` | The canonical inbound message and its provenance metadata. `role` is `user`, `system`, or `agent`; `sender` is caller-provided identity metadata, not an authorization boundary. |
+| `message.user` | `{"text"}` | Legacy user input event. Readers must project it as `message.input` with `role: "user"`; new writes never use this type. |
+| `message.user.steer` | `{"text"}` | Legacy steer input event. Readers must project it as `message.input` with `role: "user", "steer": true`; new writes never use this type. |
+| `turn.started` | `{}` | A turn began. This is lifecycle-only; message text and provenance come from `message.input`. |
 | `turn.completed` | `{}` | The active turn finished successfully. |
 | `turn.failed` | `{"error"}` | The active turn failed. |
 | `turn.cancelled` | `{"reason"}` | The active turn was interrupted. |
@@ -453,7 +454,7 @@ turn before the response returns.
     "instanceId": "mac-mini",
     "externalId": "project7.task26"
   },
-  "initialMessage": {"text": "Reproduce the failure first."}
+  "initialMessage": {"text": "Reproduce the failure first.", "role": "user"}
 }
 ```
 
@@ -479,8 +480,10 @@ turn before the response returns.
     remains in effect after event replay, daemon restart and provider resume.
     **It is persisted in `events.jsonl` and `session.json` and returned by the
     Session API, so never put a secret here unless you intend it to be stored.**
-  - `initialMessage.text` (optional) — first user message; when non-empty
-    the first turn starts immediately.
+  - `initialMessage` (optional) — first inbound message; it accepts the same
+    `text`, `role`, `sender`, `steer`, and reserved correlation fields as the
+    messages endpoint. An omitted role means `user`; when non-empty the first
+    turn starts immediately. `assistant` is rejected.
 - **Success `201`:** `{"session": {...}}` with a
   `Location: /v1/sessions/{id}` header.
 - **Errors:** `400 invalid_request` (malformed body or removed/unknown fields), `415 json_required`, `422 agent_required`,
@@ -508,7 +511,7 @@ curl -s -X POST "$BASE/v1/sessions" \
       "instanceId": "mac-mini",
       "externalId": "project7.task26"
     },
-    "initialMessage": {"text": "Reproduce the failure first."}
+    "initialMessage": {"text": "Reproduce the failure first.", "role": "user"}
   }'
 ```
 
@@ -698,17 +701,31 @@ curl -N -H "Accept: text/event-stream" -H "Last-Event-ID: 100" \
 
 ### POST /v1/sessions/{id}/messages
 
-Send a user message. Without an active turn this starts a new turn; with an
-active turn the message is rejected unless `steer` is set.
+Send an inbound message. Without an active turn this starts a new turn; with
+an active turn the message is rejected unless `steer` is set. The role and
+sender describe message provenance only. They are not authentication,
+authorization, trust, or instruction-priority signals. Every accepted input is
+still submitted to the selected Provider as ordinary user-level prompt text.
 
-- **Request body:** `{"text": "...", "steer": false}`
-  - `text` (required) — the message; blank text is rejected.
+- **Request body:** `{"text": "...", "role": "user", "sender": {...}, "steer": false}`
+  - `text` (required) — the original message text; blank text is rejected.
+  - `role` (optional) — `user`, `system`, or `agent`; omitted means `user`.
+    `assistant` is reserved for output events produced by the current Session
+    Provider and is rejected on inbound requests.
+  - `sender` (optional) — provenance identity object with optional `id`,
+    `name`, and `sessionId`. It is stored and displayed, but never
+    authenticated. Agent messages can omit it for compatibility.
   - `steer` (optional) — inject the message into the currently active turn
     instead of starting a new one. Providers that cannot steer an active
     prompt (the ACP providers: Kimi and OpenCode) reject steer requests.
+  - `messageId`, `replyTo`, `correlationId` (optional) — reserved string
+    fields persisted for future message correlation; AgentHub does not yet
+    implement Agent-to-Agent routing.
 - **Success `202`:** `{"session": {...}}` — the turn runs asynchronously;
   watch it through the events endpoint.
 - **Errors:** `400 invalid_request`, `415 json_required`,
+  `400 invalid_message_role`, `400 assistant_message_forbidden`,
+  `400 invalid_message_sender`, `400 invalid_message_reference`,
   `404 session_not_found`, `409 session_archived`,
   `409 session_stopping`, `409 turn_active` (an active turn exists without
   `steer=true`), `409 runtime_operation_failed` (the provider rejected the
@@ -723,6 +740,14 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
 curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
   -H "Content-Type: application/json" \
   -d '{"text": "Skip the refactor and patch the test only.", "steer": true}'
+
+curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Resume the queued work.","role":"system","sender":{"name":"Forge Scheduler"}}'
+
+curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"The worker finished its scan.","role":"agent","sender":{"name":"Review Agent","sessionId":"ses_worker"}}'
 ```
 
 ### POST /v1/sessions/{id}/resume

@@ -2257,3 +2257,54 @@ func TestSessionConflictCodesAreStable(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageSourceValidationUsesStructuredErrors(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(store, "test", time.Now()).Handler()
+
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{name: "unknown role", body: `{"text":"hello","role":"developer"}`, code: "invalid_message_role"},
+		{name: "assistant role", body: `{"text":"spoof","role":"assistant"}`, code: "assistant_message_forbidden"},
+		{name: "sender shape", body: `{"text":"notice","role":"system","sender":"scheduler"}`, code: "invalid_message_sender"},
+		{name: "empty sender", body: `{"text":"notice","role":"system","sender":{}}`, code: "invalid_message_sender"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/messages", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			var body struct {
+				Error struct {
+					Code    string          `json:"code"`
+					Details json.RawMessage `json:"details"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusBadRequest || body.Error.Code != test.code || len(body.Error.Details) == 0 {
+				t.Fatalf("response = %d %+v", response.Code, body.Error)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/messages", strings.NewReader(`{"text":"wake","role":"system","sender":{"name":"Scheduler"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("valid source request must pass validation before runtime check: status = %d", response.Code)
+	}
+}

@@ -31,6 +31,18 @@ type fakeSession struct {
 	mu           sync.Mutex
 }
 
+type sourceAwareFakeSession struct {
+	*fakeSession
+	inputs []session.MessageInput
+}
+
+func (f *sourceAwareFakeSession) PromptMessage(input session.MessageInput) error {
+	f.mu.Lock()
+	f.inputs = append(f.inputs, input)
+	f.mu.Unlock()
+	return f.fakeSession.Prompt(input.Text, input.Steer)
+}
+
 func (f *fakeSession) Start(resumeID string) error {
 	f.resumeID = resumeID
 	if f.startErr != nil {
@@ -125,7 +137,7 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	for _, event := range events {
 		types = append(types, event.Type)
 	}
-	expected := []string{"session.created", "session.state", "session.provider", "session.state", "message.user", "turn.started", "message.assistant.delta", "provider.turn.completed", "turn.completed"}
+	expected := []string{"session.created", "session.state", "session.provider", "session.state", "message.input", "turn.started", "message.assistant.delta", "provider.turn.completed", "turn.completed"}
 	if string(mustJSON(types)) != string(mustJSON(expected)) {
 		t.Fatalf("event types = %v", types)
 	}
@@ -155,6 +167,58 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	}
 	if second.resumeID != "native-session" {
 		t.Fatalf("resume id = %q", second.resumeID)
+	}
+}
+
+func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	var adapter *sourceAwareFakeSession
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter = &sourceAwareFakeSession{fakeSession: &fakeSession{hooks: options.Hooks}}
+		return adapter, nil
+	}
+	input := session.MessageInput{
+		Text:   "wake the worker",
+		Role:   session.MessageRoleAgent,
+		Sender: &session.MessageSender{Name: "Scheduler", SessionID: "ses_scheduler"},
+	}
+	if _, err := manager.SendMessage(value.ID, input); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.inputs) != 1 || adapter.inputs[0].Role != session.MessageRoleAgent ||
+		adapter.inputs[0].Sender == nil || adapter.inputs[0].Sender.SessionID != "ses_scheduler" {
+		t.Fatalf("source-aware prompt input = %+v", adapter.inputs)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found session.MessageInput
+	for _, event := range events {
+		if event.Type == session.EventMessageInput {
+			if err := json.Unmarshal(event.Data, &found); err != nil {
+				t.Fatal(err)
+			}
+			if string(event.Data) == "" || event.TurnID == "" {
+				t.Fatalf("canonical input event = %+v", event)
+			}
+		}
+		if event.Type == "turn.started" && len(event.Data) != 0 {
+			t.Fatalf("turn.started must remain lifecycle-only: %s", event.Data)
+		}
+	}
+	if found.Role != session.MessageRoleAgent || found.Text != input.Text || found.Sender == nil ||
+		found.Sender.Name != "Scheduler" || found.Sender.SessionID != "ses_scheduler" {
+		t.Fatalf("persisted message input = %+v", found)
 	}
 }
 
@@ -677,10 +741,8 @@ func TestCustomApprovalReplyIsDeliveredAfterTurnCloses(t *testing.T) {
 		switch event.Type {
 		case "approval.resolved":
 			_ = json.Unmarshal(event.Data, &resolved)
-		case "message.user":
-			var data struct {
-				Text string `json:"text"`
-			}
+		case session.EventMessageInput:
+			var data session.MessageInput
 			if _ = json.Unmarshal(event.Data, &data); data.Text == "custom answer" {
 				userMessage = map[string]any{"text": data.Text}
 			}

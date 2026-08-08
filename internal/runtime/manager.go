@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/disksing/agenthub/internal/config"
@@ -133,9 +132,18 @@ func (m *Manager) Start(id string) (session.Session, error) {
 }
 
 func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return session.Session{}, errors.New("message text is required")
+	return m.SendMessage(id, session.MessageInput{
+		Text: text, Role: session.MessageRoleUser, Steer: steer,
+	})
+}
+
+// SendMessage persists and delivers one canonical inbound message. The
+// message role is provenance metadata only; providers receive it as ordinary
+// prompt text through provider.PromptText or the source-aware adapter hook.
+func (m *Manager) SendMessage(id string, input session.MessageInput) (session.Session, error) {
+	input, err := session.NormalizeMessageInput(input)
+	if err != nil {
+		return session.Session{}, err
 	}
 	value, err := m.store.Get(id)
 	if err != nil {
@@ -148,7 +156,7 @@ func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
 		return session.Session{}, errors.New("session provider is stopping")
 	}
 	current := value.CurrentTurnID
-	if current != "" && !steer {
+	if current != "" && !input.Steer {
 		return session.Session{}, errors.New("session already has an active turn; set steer=true or wait")
 	}
 	run, err := m.ensure(id)
@@ -162,19 +170,38 @@ func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
 			return session.Session{}, err
 		}
 		run.setTurn(turnID)
-		_, _ = m.store.Append(id, "message.user", turnID, marshal(map[string]any{"text": text}))
-		if _, err := m.store.Append(id, "turn.started", turnID, marshal(map[string]any{"text": text})); err != nil {
+		if _, err := m.store.Append(id, session.EventMessageInput, turnID, marshal(input)); err != nil {
+			run.setTurn("")
+			return session.Session{}, err
+		}
+		// turn.started is lifecycle-only. The canonical message.input event is
+		// the sole durable source for message text and provenance.
+		if _, err := m.store.Append(id, "turn.started", turnID, nil); err != nil {
+			run.setTurn("")
 			return session.Session{}, err
 		}
 	} else {
-		_, _ = m.store.Append(id, "message.user.steer", turnID, marshal(map[string]any{"text": text}))
+		if _, err := m.store.Append(id, session.EventMessageInput, turnID, marshal(input)); err != nil {
+			return session.Session{}, err
+		}
 	}
-	if err := run.adapter.Prompt(text, steer); err != nil {
+	if err := promptAdapter(run.adapter, input); err != nil {
 		_, _ = m.store.Append(id, session.EventTurnFailed, turnID, marshal(session.TurnTerminalEventData{Error: err.Error()}))
 		run.setTurn("")
 		return session.Session{}, err
 	}
 	return m.store.Get(id)
+}
+
+func promptAdapter(adapter provider.Session, input session.MessageInput) error {
+	if sourceAware, ok := adapter.(provider.MessageSession); ok {
+		return sourceAware.PromptMessage(input)
+	}
+	text, err := provider.PromptText(input)
+	if err != nil {
+		return err
+	}
+	return adapter.Prompt(text, input.Steer)
 }
 
 func (m *Manager) Interrupt(id string) error {

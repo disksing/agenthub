@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/disksing/agenthub/internal/session"
 )
 
 type piSession struct {
@@ -133,6 +135,18 @@ func (p *piSession) Start(resumeID string) error {
 }
 
 func (p *piSession) Prompt(text string, steer bool) error {
+	return p.PromptMessage(session.MessageInput{Text: text, Role: session.MessageRoleUser, Steer: steer})
+}
+
+func (p *piSession) PromptMessage(value session.MessageInput) error {
+	text, err := PromptText(value)
+	if err != nil {
+		return err
+	}
+	return p.prompt(text, value.Steer)
+}
+
+func (p *piSession) prompt(text string, steer bool) error {
 	command := "prompt"
 	if steer {
 		command = "steer"

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/disksing/agenthub/internal/session"
 )
 
 type acpSession struct {
@@ -157,6 +159,18 @@ func (a *acpSession) startRequest(method string, params any) (json.RawMessage, e
 }
 
 func (a *acpSession) Prompt(text string, steer bool) error {
+	return a.PromptMessage(session.MessageInput{Text: text, Role: session.MessageRoleUser, Steer: steer})
+}
+
+func (a *acpSession) PromptMessage(value session.MessageInput) error {
+	text, err := PromptText(value)
+	if err != nil {
+		return err
+	}
+	return a.prompt(text, value.Steer)
+}
+
+func (a *acpSession) prompt(text string, steer bool) error {
 	if steer {
 		return errors.New("ACP does not support steering an active prompt")
 	}

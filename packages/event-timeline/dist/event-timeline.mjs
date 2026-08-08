@@ -50,6 +50,22 @@ function firstString(...values) {
   return "";
 }
 
+const MESSAGE_ROLES = new Set(["user", "system", "agent", "assistant"]);
+
+function normalizeMessageSender(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const sender = {};
+  for (const key of ["id", "name", "sessionId"]) {
+    if (typeof value[key] === "string" && value[key].trim()) sender[key] = value[key].trim();
+  }
+  return Object.keys(sender).length ? sender : undefined;
+}
+
+function normalizeMessageRole(value) {
+  const role = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return MESSAGE_ROLES.has(role) ? role : "user";
+}
+
 function normalizeToolStatus(status) {
   const value = String(status || "").toLowerCase();
   if (["completed", "complete", "done", "success", "succeeded"].includes(value)) return "completed";
@@ -308,6 +324,21 @@ export function buildTimeline(events) {
     const data = event?.data ?? {};
     const time = event?.time || "";
     switch (type) {
+      case "message.input": {
+        const item = {
+          kind: "message",
+          role: normalizeMessageRole(data.role),
+          key: event.id,
+          time,
+          steer: data.steer === true,
+          text: typeof data.text === "string" ? data.text : "",
+        };
+        if (event.turnId) item.turnId = event.turnId;
+        const sender = normalizeMessageSender(data.sender);
+        if (sender) item.sender = sender;
+        items.push(item);
+        break;
+      }
       case "message.user":
       case "message.user.steer":
         items.push({

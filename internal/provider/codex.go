@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/disksing/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/session"
 )
 
 type codexSession struct {
@@ -99,6 +100,18 @@ func (c *codexSession) startRequest(method string, params any) (json.RawMessage,
 }
 
 func (c *codexSession) Prompt(text string, steer bool) error {
+	return c.PromptMessage(session.MessageInput{Text: text, Role: session.MessageRoleUser, Steer: steer})
+}
+
+func (c *codexSession) PromptMessage(value session.MessageInput) error {
+	text, err := PromptText(value)
+	if err != nil {
+		return err
+	}
+	return c.prompt(text, value.Steer)
+}
+
+func (c *codexSession) prompt(text string, steer bool) error {
 	if c.thread == "" {
 		return errors.New("Codex thread is not ready")
 	}

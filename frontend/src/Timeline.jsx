@@ -13,22 +13,37 @@ function ToolStatusIcon({ status }) {
 }
 
 function MessageItem({ item, agent }) {
-  const isUser = item.role === "user";
-  return (
-    <article className={`message ${isUser ? "message-user" : "message-agent"}`}>
-      <span className={`avatar ${isUser ? "avatar-user" : "avatar-agent"}`}>
-        {isUser ? <User size={17} weight="bold" /> : <TerminalWindow size={19} weight="bold" />}
-      </span>
-      <div className="message-body">
-        <div className="message-meta">
-          <strong>{isUser ? "You" : agent}</strong>
-          {item.steer ? <span className="message-tag">steer</span> : null}
-          <span>{displayTime(item.time)}</span>
-        </div>
-        {isUser ? <p>{item.text}</p> : <MarkdownMessage text={item.text} />}
-      </div>
-    </article>
-  );
+	const role = item.role || "user";
+	const isAssistant = role === "assistant";
+	const sender = item.sender || {};
+	const senderName = sender.name || sender.id || "";
+	const name = isAssistant
+		? agent
+		: senderName || (role === "system" ? "System" : role === "agent" ? "Agent" : "You");
+	const Icon = isAssistant ? TerminalWindow : role === "system" ? Info : User;
+	const sourceSession = role === "agent"
+		? sender.sessionId || "source session unavailable"
+		: sender.sessionId || "";
+	const sourceId = sender.id && sender.name ? `id ${sender.id}` : "";
+	const sourceLabel = `${role} message from ${name}`;
+	return (
+		<article className={`message message-${role}`} aria-label={sourceLabel}>
+			<span className={`avatar avatar-${role}`} aria-hidden="true">
+				<Icon size={isAssistant ? 19 : 17} weight="bold" />
+			</span>
+			<div className="message-body">
+				<div className="message-meta">
+					<strong title={name}>{name}</strong>
+					{role === "system" || role === "agent" ? <span className="message-role-tag">{role}</span> : null}
+					{item.steer ? <span className="message-tag">steer</span> : null}
+					{sourceSession ? <span className="message-source" title={sourceSession}>{role === "agent" ? `from session ${sourceSession}` : sourceSession}</span> : null}
+					{sourceId ? <span className="message-source" title={sourceId}>{sourceId}</span> : null}
+					<span>{displayTime(item.time)}</span>
+				</div>
+				{isAssistant ? <MarkdownMessage text={item.text} /> : <p>{item.text}</p>}
+			</div>
+		</article>
+	);
 }
 
 function ThinkingItem({ item }) {

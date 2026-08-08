@@ -178,10 +178,18 @@ func (c *Client) Agents() (map[string]any, error) {
 }
 
 func (c *Client) SendMessage(id, text string, steer bool) (session.Session, error) {
+	return c.SendMessageInput(id, session.MessageInput{
+		Text: text, Role: session.MessageRoleUser, Steer: steer,
+	})
+}
+
+// SendMessageInput sends an inbound message with explicit provenance. The
+// daemon still treats every role as ordinary user-level provider input.
+func (c *Client) SendMessageInput(id string, input session.MessageInput) (session.Session, error) {
 	var result struct {
 		Session session.Session `json:"session"`
 	}
-	if err := c.request(http.MethodPost, "/v1/sessions/"+id+"/messages", map[string]any{"text": text, "steer": steer}, &result); err != nil {
+	if err := c.request(http.MethodPost, "/v1/sessions/"+id+"/messages", input, &result); err != nil {
 		return session.Session{}, err
 	}
 	return result.Session, nil

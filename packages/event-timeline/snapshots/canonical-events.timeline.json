@@ -10,7 +10,8 @@
         "key": 1,
         "time": "2026-01-02T03:04:01Z",
         "steer": false,
-        "text": "Summarize the fixture."
+        "text": "Summarize the fixture.",
+        "turnId": "turn_1"
       },
       {
         "kind": "lifecycle",
@@ -370,6 +371,34 @@
         "key": 5,
         "time": "2026-01-02T08:00:05Z",
         "text": "Session archived"
+      }
+    ],
+    "message-provenance": [
+      {
+        "kind": "message",
+        "role": "system",
+        "key": 1,
+        "time": "2026-01-02T09:00:01Z",
+        "steer": false,
+        "text": "Wake the session.",
+        "turnId": "turn_provenance",
+        "sender": {
+          "name": "Forge Scheduler"
+        }
+      },
+      {
+        "kind": "message",
+        "role": "agent",
+        "key": 2,
+        "time": "2026-01-02T09:00:02Z",
+        "steer": true,
+        "text": "The worker has finished.",
+        "turnId": "turn_provenance",
+        "sender": {
+          "id": "worker-1",
+          "name": "Worker Agent",
+          "sessionId": "ses_worker"
+        }
       }
     ]
   }

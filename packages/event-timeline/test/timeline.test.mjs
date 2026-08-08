@@ -34,6 +34,38 @@ test("user and assistant messages merge deltas per turn", () => {
   assert.equal(items[2].role, "assistant");
 });
 
+test("canonical input messages preserve provenance sender and steer metadata", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.input", {
+      text: "scheduled wake-up",
+      role: "system",
+      sender: { name: "Forge Scheduler" },
+      steer: false,
+    }, { turnId: "turn_system" }),
+    event("message.input", {
+      text: "continue from the worker",
+      role: "agent",
+      sender: { id: "worker-1", name: "Worker Agent", sessionId: "ses_worker" },
+      steer: true,
+    }, { turnId: "turn_system" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.role), ["system", "agent"]);
+  assert.equal(items[0].sender.name, "Forge Scheduler");
+  assert.equal(items[1].sender.sessionId, "ses_worker");
+  assert.equal(items[1].steer, true);
+});
+
+test("legacy user message events remain user messages", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.user", { text: "old client" }),
+    event("message.user.steer", { text: "old steer" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.role), ["user", "user"]);
+  assert.equal(items[1].steer, true);
+});
+
 test("reasoning deltas merge into a thinking block and stay active at the tail", () => {
   reset();
   const items = buildTimeline([

@@ -192,6 +192,29 @@ GET    /v1/sessions/{id}/events
 
 事件端点在普通请求下返回分页 JSON，包含 exclusive `after` cursor、`nextAfter`、`hasMore` 和最新 durable cursor；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并通过 `Last-Event-ID` 使用相同的 exclusive cursor 语义。daemon 先建立订阅并捕获 high-water mark，再分页重放完整 durable backlog，最后切换到 live；subscriber overflow 会关闭流，客户端可从最后一个连续 id 重连并从 `events.jsonl` 恢复，daemon 重启后同样有效。SSE 帧使用默认 message 通道，因此未知 event envelope 也会原样传输。
 
+### 消息来源角色
+
+`POST /v1/sessions/{id}/messages` 接受 `role: "user"`、`"system"` 或
+`"agent"`；省略 `role` 时为兼容旧客户端按 `user` 处理。可选的
+`sender` 对象可携带描述性 `id`、`name` 和 `sessionId`。这些字段只表示
+provenance（消息来源）：它们由调用方自报、不会认证，也不会改变权限、信任
+级别或指令优先级。`assistant` 只保留给当前 Provider 产生的输出事件，入站
+客户端不能伪造。
+
+新消息统一持久化为包含原始文本、role、sender 和 `steer` 的
+`message.input` 事件。历史 `message.user` 与 `message.user.steer` 事件重放
+时等价为 user 消息，不改写 Session 日志。system 与 agent 消息发给 Codex、
+Kimi、OpenCode 和 Pi 时仍是普通用户级文本，只额外携带 JSON 来源信封；信封
+不会进入公共事件时间线，也不会显示在 Web UI 中。
+
+示例：
+
+```json
+{"text":"请检查失败的测试。"}
+{"text":"恢复排队的工作。","role":"system","sender":{"name":"Forge Scheduler"}}
+{"text":"Worker 已完成扫描。","role":"agent","sender":{"name":"Review Agent","sessionId":"ses_worker"}}
+```
+
 ### 可复用 Event Timeline
 
 [`packages/event-timeline`](packages/event-timeline/README.md) 是 API v1

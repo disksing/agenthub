@@ -33,13 +33,18 @@ canonical `time` string. Kind-specific fields are:
 
 | Kind | Fields |
 | --- | --- |
-| `message` | `role` (`user` or `assistant`), `text`, optional `turnId` and `steer` |
+| `message` | `role` (`user`, `system`, `agent`, or `assistant`), `text`, optional `sender`, `turnId`, and `steer` |
 | `thinking` | `text`, `turnId`, semantic `active` flag |
 | `tools` | `calls[]`; each call has identity, label, status, output/error, method, time, and a bounded raw preview |
 | `approval` | `approvalId`, summary, `pending`/`accepted`/`declined` status, decision |
 | `lifecycle` | stable English summary plus semantic `muted`/`info`/`ok`/`danger` tone |
 | `error` | provider error text |
 | `unknown` | original event type and a bounded payload preview |
+
+`sender` is a provenance object with optional `id`, `name`, and `sessionId`.
+It identifies who supplied a system or agent message for display only; it is
+not authentication, authorization, trust, or instruction priority. Legacy
+`message.user` and `message.user.steer` events are projected as user messages.
 
 Tool status is `running`, `completed`, or `failed`. The library does not emit
 an expanded/collapsed property; hosts choose their own initial and persistent

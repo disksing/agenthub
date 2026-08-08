@@ -9,10 +9,10 @@
         {
           "id": 1,
           "time": "2026-01-02T03:04:01Z",
-          "type": "message.user",
+          "type": "message.input",
           "sessionId": "ses_fixture",
           "turnId": "turn_1",
-          "data": { "text": "Summarize the fixture." }
+          "data": { "text": "Summarize the fixture.", "role": "user", "steer": false }
         },
         {
           "id": 2,
@@ -20,7 +20,7 @@
           "type": "turn.started",
           "sessionId": "ses_fixture",
           "turnId": "turn_1",
-          "data": { "text": "Summarize the fixture." }
+          "data": {}
         },
         {
           "id": 3,
@@ -585,6 +585,38 @@
           "type": "session.archived",
           "sessionId": "ses_fixture",
           "data": {}
+        }
+      ]
+    },
+    {
+      "name": "message-provenance",
+      "events": [
+        {
+          "id": 1,
+          "time": "2026-01-02T09:00:01Z",
+          "type": "message.input",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_provenance",
+          "data": {
+            "text": "Wake the session.",
+            "role": "system",
+            "sender": { "name": "Forge Scheduler" },
+            "steer": false
+          }
+        },
+        {
+          "id": 2,
+          "time": "2026-01-02T09:00:02Z",
+          "type": "message.input",
+          "sessionId": "ses_fixture",
+          "turnId": "turn_provenance",
+          "data": {
+            "text": "The worker has finished.",
+            "role": "agent",
+            "sender": { "id": "worker-1", "name": "Worker Agent", "sessionId": "ses_worker" },
+            "steer": true,
+            "correlationId": "corr_fixture"
+          }
         }
       ]
     }

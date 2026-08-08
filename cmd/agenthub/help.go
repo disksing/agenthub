@@ -108,8 +108,11 @@ Core concepts:
              provider-native session/thread (providerSessionId). Sessions
              survive daemon restarts; the provider is re-attached on
              demand when the conversation continues.
-  Turn       One user message processed by the agent. Turn lifecycle and
+  Turn       One inbound message processed by the agent. Turn lifecycle and
              assistant output are recorded as events.
+  Provenance Message source metadata on inbound events. Roles are user,
+             system, or agent; sender identity is descriptive only and is not
+             authentication, permission, trust, or instruction priority.
   Approval   A provider request for permission (for example to run a
              command). Resolve it with "agenthub session approve" or the
              Web UI; the turn then continues. Approvals require the
@@ -351,8 +354,10 @@ Usage:
   agenthub session events <session-id>
 
 Events are the source of truth for a session: state changes, turn lifecycle,
-user and assistant messages, approvals and provider errors. The daemon also
-streams them over SSE at GET /v1/sessions/{id}/events.
+canonical message.input events, assistant messages, approvals and provider
+errors. message.input records user, system, or agent provenance; legacy
+message.user events are replayed as user messages. The daemon also streams
+events over SSE at GET /v1/sessions/{id}/events.
 
 See also: agenthub help session show
 `,

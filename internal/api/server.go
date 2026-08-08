@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -497,18 +498,25 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title             string            `json:"title"`
-		Cwd               string            `json:"cwd"`
-		AgentName         string            `json:"agentName"`
-		Source            *session.Source   `json:"source"`
-		LaunchEnvironment map[string]string `json:"launchEnvironment"`
-		InitialMessage    *struct {
-			Text string `json:"text"`
-		} `json:"initialMessage"`
+		Title             string                 `json:"title"`
+		Cwd               string                 `json:"cwd"`
+		AgentName         string                 `json:"agentName"`
+		Source            *session.Source        `json:"source"`
+		LaunchEnvironment map[string]string      `json:"launchEnvironment"`
+		InitialMessage    *inboundMessageRequest `json:"initialMessage"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
+	}
+	var initialMessage *session.MessageInput
+	if body.InitialMessage != nil && body.InitialMessage.hasMessageIntent() {
+		value, err := body.InitialMessage.messageInput()
+		if err != nil {
+			writeMessageInputError(w, err)
+			return
+		}
+		initialMessage = &value
 	}
 	agentName := strings.TrimSpace(body.AgentName)
 	if agentName == "" {
@@ -557,8 +565,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		value = started
-		if body.InitialMessage != nil && strings.TrimSpace(body.InitialMessage.Text) != "" {
-			sent, err := s.runtime.Send(value.ID, body.InitialMessage.Text, false)
+		if initialMessage != nil {
+			sent, err := s.runtime.SendMessage(value.ID, *initialMessage)
 			if err != nil {
 				writeAPIError(w, http.StatusBadGateway, "turn_start_failed", err.Error(), map[string]any{"sessionId": value.ID})
 				return
@@ -598,6 +606,82 @@ func (s *Server) sessionOps() []sessionOp {
 		{http.MethodPost, "stop", s.stopSession, "POST /v1/sessions/{id}/stop"},
 		{http.MethodPost, "approvals/{approvalId}", s.resolveApproval, "POST /v1/sessions/{id}/approvals/{approvalId}"},
 	}
+}
+
+// inboundMessageRequest is shared by the messages endpoint and the optional
+// initialMessage on session creation. Sender stays raw until it is decoded so
+// malformed JSON shapes can receive a stable invalid_message_sender error
+// instead of leaking a Go decoder type error.
+type inboundMessageRequest struct {
+	Text          string          `json:"text"`
+	Role          string          `json:"role"`
+	Sender        json.RawMessage `json:"sender"`
+	Steer         bool            `json:"steer"`
+	MessageID     string          `json:"messageId"`
+	ReplyTo       string          `json:"replyTo"`
+	CorrelationID string          `json:"correlationId"`
+}
+
+func (request inboundMessageRequest) hasMessageIntent() bool {
+	return strings.TrimSpace(request.Text) != "" ||
+		strings.TrimSpace(request.Role) != "" || request.Steer ||
+		len(bytes.TrimSpace(request.Sender)) > 0 || request.MessageID != "" ||
+		request.ReplyTo != "" || request.CorrelationID != ""
+}
+
+func (request inboundMessageRequest) messageInput() (session.MessageInput, error) {
+	sender, err := decodeMessageSender(request.Sender)
+	if err != nil {
+		return session.MessageInput{}, err
+	}
+	return session.NormalizeMessageInput(session.MessageInput{
+		Text:          request.Text,
+		Role:          session.MessageRole(request.Role),
+		Sender:        sender,
+		Steer:         request.Steer,
+		MessageID:     request.MessageID,
+		ReplyTo:       request.ReplyTo,
+		CorrelationID: request.CorrelationID,
+	})
+}
+
+func decodeMessageSender(raw json.RawMessage) (*session.MessageSender, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, nil
+	}
+	if raw[0] != '{' {
+		return nil, &session.MessageInputError{
+			Code: "invalid_message_sender", Field: "sender",
+			Message: "sender must be an object with optional id, name, or sessionId",
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var sender session.MessageSender
+	if err := decoder.Decode(&sender); err != nil {
+		return nil, &session.MessageInputError{
+			Code: "invalid_message_sender", Field: "sender",
+			Message: fmt.Sprintf("invalid sender: %v", err),
+		}
+	}
+	return &sender, nil
+}
+
+func writeMessageInputError(w http.ResponseWriter, err error) {
+	var inputErr *session.MessageInputError
+	if errors.As(err, &inputErr) {
+		details := map[string]any{"field": inputErr.Field}
+		code := inputErr.Code
+		// Preserve the long-standing invalid_request code for blank text while
+		// exposing dedicated structured codes for provenance validation.
+		if code == "invalid_message_text" {
+			code = "invalid_request"
+		}
+		writeAPIError(w, http.StatusBadRequest, code, inputErr.Message, details)
+		return
+	}
+	writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 }
 
 func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
@@ -646,20 +730,18 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 	if s.rejectArchivedSession(w, id) {
 		return
 	}
-	if s.runtime == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
-		return
-	}
-	var body struct {
-		Text  string `json:"text"`
-		Steer bool   `json:"steer"`
-	}
+	var body inboundMessageRequest
 	if err := decodeJSON(r, &body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	if strings.TrimSpace(body.Text) == "" {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "message text is required", nil)
+	input, err := body.messageInput()
+	if err != nil {
+		writeMessageInputError(w, err)
+		return
+	}
+	if s.runtime == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
 	}
 	current, err := s.store.Get(id)
@@ -671,12 +753,17 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 		writeAPIError(w, http.StatusConflict, "session_stopping", "session provider is stopping", nil)
 		return
 	}
-	if current.CurrentTurnID != "" && !body.Steer {
+	if current.CurrentTurnID != "" && !input.Steer {
 		writeAPIError(w, http.StatusConflict, "turn_active", "session already has an active turn; set steer=true or wait", map[string]any{"turnId": current.CurrentTurnID})
 		return
 	}
-	value, err := s.runtime.Send(id, body.Text, body.Steer)
+	value, err := s.runtime.SendMessage(id, input)
 	if err != nil {
+		var inputErr *session.MessageInputError
+		if errors.As(err, &inputErr) {
+			writeMessageInputError(w, err)
+			return
+		}
 		s.writeRuntimeError(w, err)
 		return
 	}
