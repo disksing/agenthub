@@ -25,9 +25,26 @@ type piSession struct {
 	writeMu sync.Mutex
 	nextID  int64
 	waiting map[string]chan piResponse
-	closed  bool
-	done    chan struct{}
-	prompts asyncOperations
+	// messageStreams records whether a content block emitted a real delta;
+	// snapshot-only providers need one normalized fallback at *_end, while a
+	// normal delta stream must not append its full end snapshot again.
+	messageStreams map[piMessageStreamKey]bool
+	closed         bool
+	done           chan struct{}
+	prompts        asyncOperations
+}
+
+type piMessageStreamKey struct {
+	kind         string
+	contentIndex int
+}
+
+type piAssistantMessageUpdate struct {
+	Type         string          `json:"type"`
+	ContentIndex int             `json:"contentIndex"`
+	Delta        string          `json:"delta"`
+	Content      string          `json:"content"`
+	ToolCall     json.RawMessage `json:"toolCall"`
 }
 
 type piResponse struct {
@@ -39,7 +56,11 @@ type piResponse struct {
 }
 
 func newPi(command string, options Options) *piSession {
-	value := &piSession{command: command, options: options, nextID: 1, waiting: make(map[string]chan piResponse), done: make(chan struct{})}
+	value := &piSession{
+		command: command, options: options, nextID: 1,
+		waiting: make(map[string]chan piResponse), messageStreams: make(map[piMessageStreamKey]bool),
+		done: make(chan struct{}),
+	}
 	processEnd := value.options.Hooks.ProcessEnd
 	value.options.Hooks.ProcessEnd = func(err error) {
 		value.prompts.stopAndWait()
@@ -304,31 +325,140 @@ func (p *piSession) readLoop(reader io.Reader) {
 func (p *piSession) event(kind string, raw json.RawMessage) {
 	event := Event{Type: "provider.event", Data: map[string]any{"method": kind, "raw": raw}}
 	var value struct {
-		AssistantMessageEvent struct {
-			Type  string `json:"type"`
-			Delta string `json:"delta"`
-		} `json:"assistantMessageEvent"`
-		ToolName string `json:"toolName"`
+		AssistantMessageEvent piAssistantMessageUpdate `json:"assistantMessageEvent"`
 	}
 	_ = json.Unmarshal(raw, &value)
 	switch kind {
+	case "message_start":
+		clear(p.messageStreams)
 	case "message_update":
-		switch value.AssistantMessageEvent.Type {
-		case "text_delta":
-			event.Type, event.Data = "message.assistant.delta", map[string]any{"text": value.AssistantMessageEvent.Delta, "method": kind}
-		case "thinking_delta":
-			event.Type, event.Data = "message.reasoning.delta", map[string]any{"text": value.AssistantMessageEvent.Delta, "method": kind}
+		var emit bool
+		event, emit = p.normalizeMessageUpdate(event, value.AssistantMessageEvent, raw)
+		if !emit {
+			return
 		}
 	case "tool_execution_start", "tool_execution_end":
 		event.Type = "tool.event"
 	case "agent_settled":
+		clear(p.messageStreams)
 		event.Type, event.TurnDone = "provider.turn.completed", true
 	case "extension_error":
+		clear(p.messageStreams)
 		event.Type, event.TurnDone, event.TurnFailed = "provider.error", true, true
 	}
 	if p.options.Hooks.Event != nil {
 		p.options.Hooks.Event(event)
 	}
+}
+
+// normalizeMessageUpdate removes Pi's cumulative message/partial snapshots
+// from known streaming updates. The returned bool reports whether the compact
+// event should reach the durable Session event stream.
+func (p *piSession) normalizeMessageUpdate(fallback Event, update piAssistantMessageUpdate, raw json.RawMessage) (Event, bool) {
+	if p.messageStreams == nil {
+		p.messageStreams = make(map[piMessageStreamKey]bool)
+	}
+	kind := strings.TrimSpace(update.Type)
+	switch kind {
+	case "text_start", "thinking_start":
+		p.messageStreams[piMessageStreamKey{kind: strings.TrimSuffix(kind, "_start"), contentIndex: update.ContentIndex}] = false
+		return Event{}, false
+	case "text_delta", "thinking_delta":
+		messageKind := strings.TrimSuffix(kind, "_delta")
+		if update.Delta == "" {
+			return Event{}, false
+		}
+		p.messageStreams[piMessageStreamKey{kind: messageKind, contentIndex: update.ContentIndex}] = true
+		return piMessageDelta(messageKind, update.Delta), true
+	case "text_end", "thinking_end":
+		messageKind := strings.TrimSuffix(kind, "_end")
+		key := piMessageStreamKey{kind: messageKind, contentIndex: update.ContentIndex}
+		hadDelta := p.messageStreams[key]
+		delete(p.messageStreams, key)
+		if hadDelta {
+			return Event{}, false
+		}
+		text := update.Content
+		if text == "" {
+			text = piPartialMessageText(raw, update.ContentIndex, messageKind)
+		}
+		if text == "" {
+			return Event{}, false
+		}
+		return piMessageDelta(messageKind, text), true
+	case "toolcall_delta":
+		// The execution lifecycle is emitted separately as tool_execution_*
+		// events. Persisting this model-side JSON assembly stream would retain
+		// a full cumulative partial/message snapshot for every tiny fragment.
+		return Event{}, false
+	case "toolcall_start", "toolcall_end":
+		data := map[string]any{"method": "message_update", "kind": kind, "contentIndex": update.ContentIndex}
+		if id, name := piToolCallIdentity(update, raw); id != "" || name != "" {
+			if id != "" {
+				data["toolCallId"] = id
+			}
+			if name != "" {
+				data["toolName"] = name
+			}
+		}
+		return Event{Type: "provider.metadata", Data: data}, true
+	default:
+		return fallback, true
+	}
+}
+
+func piMessageDelta(kind, text string) Event {
+	eventType := "message.assistant.delta"
+	if kind == "thinking" {
+		eventType = "message.reasoning.delta"
+	}
+	return Event{Type: eventType, Data: map[string]any{"text": text, "method": "message_update"}}
+}
+
+func piPartialMessageText(raw json.RawMessage, index int, kind string) string {
+	content := piPartialMessageContent(raw)
+	if index < 0 || index >= len(content) {
+		return ""
+	}
+	var block struct {
+		Text     string `json:"text"`
+		Thinking string `json:"thinking"`
+	}
+	if json.Unmarshal(content[index], &block) != nil {
+		return ""
+	}
+	if kind == "thinking" {
+		return block.Thinking
+	}
+	return block.Text
+}
+
+func piToolCallIdentity(update piAssistantMessageUpdate, eventRaw json.RawMessage) (string, string) {
+	toolCallRaw := update.ToolCall
+	if len(toolCallRaw) == 0 {
+		content := piPartialMessageContent(eventRaw)
+		if update.ContentIndex >= 0 && update.ContentIndex < len(content) {
+			toolCallRaw = content[update.ContentIndex]
+		}
+	}
+	var toolCall struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(toolCallRaw, &toolCall)
+	return toolCall.ID, toolCall.Name
+}
+
+func piPartialMessageContent(raw json.RawMessage) []json.RawMessage {
+	var value struct {
+		AssistantMessageEvent struct {
+			Partial struct {
+				Content []json.RawMessage `json:"content"`
+			} `json:"partial"`
+		} `json:"assistantMessageEvent"`
+	}
+	_ = json.Unmarshal(raw, &value)
+	return value.AssistantMessageEvent.Partial.Content
 }
 
 func (p *piSession) stderrLoop(reader io.Reader) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/disksing/agenthub/internal/config"
+	"github.com/disksing/agenthub/internal/session"
 )
 
 type writeCloser struct{ io.Writer }
@@ -247,6 +248,170 @@ func TestPiTranslatesDeltaAndSettled(t *testing.T) {
 	value.event("agent_settled", json.RawMessage(`{"type":"agent_settled"}`))
 	if len(events) != 2 || events[0].Type != "message.assistant.delta" || !events[1].TurnDone {
 		t.Fatalf("unexpected events: %+v", events)
+	}
+}
+
+func TestPiNormalizedDeltasUseStoreMerge(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(session.CreateInput{Title: "Pi delta merge", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "turn.started", "turn_1", nil); err != nil {
+		t.Fatal(err)
+	}
+	var appendErr error
+	value := newPi("unused", Options{Hooks: Hooks{Event: func(event Event) {
+		data, err := json.Marshal(event.Data)
+		if err == nil {
+			_, err = store.Append(created.ID, event.Type, "turn_1", data)
+		}
+		if err != nil && appendErr == nil {
+			appendErr = err
+		}
+	}}})
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"},"message":{"content":[{"text":"large cumulative snapshot"}]}}`))
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world"},"message":{"content":[{"text":"larger cumulative snapshot"}]}}`))
+	if appendErr != nil {
+		t.Fatal(appendErr)
+	}
+
+	events, err := store.EventsAfter(created.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("durable events = %d, want created + turn + one merged Pi message: %+v", len(events), events)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(events[2].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if events[2].Type != "message.assistant.delta" || data["text"] != "Hello world" || data["method"] != "message_update" {
+		t.Fatalf("merged Pi event = %+v data=%+v", events[2], data)
+	}
+	if bytes.Contains(events[2].Data, []byte("cumulative snapshot")) {
+		t.Fatalf("merged Pi event retained provider snapshots: %s", events[2].Data)
+	}
+}
+
+func TestPiNormalizesSnapshotOnlyMessageUpdates(t *testing.T) {
+	var events []Event
+	value := newPi("unused", Options{Hooks: Hooks{Event: func(event Event) { events = append(events, event) }}})
+	value.event("message_update", json.RawMessage(`{
+		"type":"message_update",
+		"assistantMessageEvent":{"type":"thinking_start","contentIndex":0,"partial":{"content":[{"type":"thinking","thinking":"initial"}]}},
+		"message":{"content":[{"type":"thinking","thinking":"large repeated snapshot"}]}
+	}`))
+	value.event("message_update", json.RawMessage(`{
+		"type":"message_update",
+		"assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"reasoning result","partial":{"content":[{"type":"thinking","thinking":"reasoning result"}]}},
+		"message":{"content":[{"type":"thinking","thinking":"reasoning result"}]}
+	}`))
+	value.event("message_update", json.RawMessage(`{
+		"type":"message_update",
+		"assistantMessageEvent":{"type":"text_start","contentIndex":1,"partial":{"content":[{"type":"thinking","thinking":"reasoning result"},{"type":"text","text":"initial"}]}},
+		"message":{"content":[{"type":"thinking","thinking":"reasoning result"},{"type":"text","text":"large repeated snapshot"}]}
+	}`))
+	value.event("message_update", json.RawMessage(`{
+		"type":"message_update",
+		"assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"answer result","partial":{"content":[{"type":"thinking","thinking":"reasoning result"},{"type":"text","text":"answer result"}]}},
+		"message":{"content":[{"type":"thinking","thinking":"reasoning result"},{"type":"text","text":"answer result"}]}
+	}`))
+
+	if len(events) != 2 {
+		t.Fatalf("snapshot-only updates emitted %d events, want one reasoning and one answer: %+v", len(events), events)
+	}
+	want := []struct {
+		typeName string
+		text     string
+	}{
+		{typeName: "message.reasoning.delta", text: "reasoning result"},
+		{typeName: "message.assistant.delta", text: "answer result"},
+	}
+	for i, expected := range want {
+		if events[i].Type != expected.typeName {
+			t.Fatalf("event %d type = %q, want %q", i, events[i].Type, expected.typeName)
+		}
+		data, ok := events[i].Data.(map[string]any)
+		if !ok || data["text"] != expected.text || data["method"] != "message_update" {
+			t.Fatalf("event %d data = %#v", i, events[i].Data)
+		}
+		encoded, err := json.Marshal(events[i].Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, []byte("repeated snapshot")) {
+			t.Fatalf("event %d retained the cumulative Pi snapshot: %s", i, encoded)
+		}
+	}
+}
+
+func TestPiDoesNotDuplicateMessageEndAfterDeltas(t *testing.T) {
+	var events []Event
+	value := newPi("unused", Options{Hooks: Hooks{Event: func(event Event) { events = append(events, event) }}})
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"text_start","contentIndex":2,"partial":{"content":[]}}}`))
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"text_delta","contentIndex":2,"delta":"Hello"},"message":{"content":[{"text":"large snapshot"}]}}`))
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"text_delta","contentIndex":2,"delta":" world"},"message":{"content":[{"text":"larger snapshot"}]}}`))
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"text_end","contentIndex":2,"content":"Hello world","partial":{"content":[]}},"message":{"content":[{"text":"Hello world"}]}}`))
+
+	if len(events) != 2 {
+		t.Fatalf("stream with deltas emitted %d events, want only the two fragments: %+v", len(events), events)
+	}
+	for i, expected := range []string{"Hello", " world"} {
+		data, ok := events[i].Data.(map[string]any)
+		if events[i].Type != "message.assistant.delta" || !ok || data["text"] != expected {
+			t.Fatalf("event %d = %+v, want assistant fragment %q", i, events[i], expected)
+		}
+	}
+}
+
+func TestPiDropsRedundantToolCallAssemblyDeltas(t *testing.T) {
+	var events []Event
+	value := newPi("unused", Options{Hooks: Hooks{Event: func(event Event) { events = append(events, event) }}})
+	value.event("message_update", json.RawMessage(`{
+		"type":"message_update",
+		"assistantMessageEvent":{"type":"toolcall_delta","contentIndex":3,"delta":"{\"path\":","partial":{"content":[{"type":"toolCall","id":"call_1","name":"read","partialJson":"{\"path\":","arguments":{}}]}},
+		"message":{"content":[{"type":"toolCall","id":"call_1","name":"read","partialJson":"{\"path\":","arguments":{}}]}
+	}`))
+	if len(events) != 0 {
+		t.Fatalf("redundant tool-call assembly delta must not reach persistence: %+v", events)
+	}
+	value.event("message_update", json.RawMessage(`{
+		"assistantMessageEvent":{"type":"toolcall_start","contentIndex":3,"partial":{"content":[{"type":"toolCall","id":"call_1","name":"read","arguments":{}}]}},
+		"message":{"content":[{"type":"toolCall","id":"call_1","name":"read","arguments":{}}]}
+	}`))
+	value.event("message_update", json.RawMessage(`{
+		"assistantMessageEvent":{"type":"toolcall_end","contentIndex":3,"toolCall":{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"README.md"}},"partial":{"content":[{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"README.md"}}]}},
+		"message":{"content":[{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"README.md"}}]}
+	}`))
+	if len(events) != 2 {
+		t.Fatalf("tool-call boundaries = %+v, want two compact metadata events", events)
+	}
+	for i, event := range events {
+		data, ok := event.Data.(map[string]any)
+		_, hasRaw := data["raw"]
+		if event.Type != "provider.metadata" || !ok || hasRaw {
+			t.Fatalf("tool-call boundary %d retained a cumulative snapshot: type=%s data=%#v", i, event.Type, event.Data)
+		}
+	}
+
+	value.event("tool_execution_start", json.RawMessage(`{"type":"tool_execution_start","toolCallId":"call_1","toolName":"read","args":{"path":"README.md"}}`))
+	value.event("tool_execution_end", json.RawMessage(`{"type":"tool_execution_end","toolCallId":"call_1","toolName":"read","result":{"content":[{"type":"text","text":"contents"}]}}`))
+	if len(events) != 4 || events[2].Type != "tool.event" || events[3].Type != "tool.event" {
+		t.Fatalf("tool execution visibility changed after dropping assembly deltas: %+v", events)
+	}
+}
+
+func TestPiKeepsUnknownMessageUpdatesRaw(t *testing.T) {
+	var events []Event
+	value := newPi("unused", Options{Hooks: Hooks{Event: func(event Event) { events = append(events, event) }}})
+	value.event("message_update", json.RawMessage(`{"assistantMessageEvent":{"type":"future_delta","value":42},"message":{"future":true}}`))
+	if len(events) != 1 || events[0].Type != "provider.event" {
+		t.Fatalf("unknown Pi update lost its raw fallback: %+v", events)
 	}
 }
 
