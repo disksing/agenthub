@@ -5,8 +5,8 @@ import { COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
   activityPulsesForFrame, activitySessions, companionPlacement, companionPositionFromPixels,
-  companionPositionPixels, formatDuration, normalizeCompanionPosition, noteForSession,
-  pruneActivityPulses, quotaCycleItems,
+  companionPositionPixels, formatDuration, normalizeCompanionPosition, normalizeCompanionSize,
+  noteForSession, pruneActivityPulses, quotaCycleItems, resizeCompanionSize,
 } from "./model.js";
 
 const DEFAULT_COMPANION = {
@@ -16,6 +16,7 @@ const DEFAULT_COMPANION = {
   completionSound: "completed-voice",
 };
 const POSITION_STORAGE_KEY = "agenthub.companion.position.v1";
+const SIZE_STORAGE_KEY = "agenthub.companion.size.v1";
 const DEFAULT_PILL_SIZE = { width: 236, height: 42 };
 
 function viewportSize() {
@@ -27,6 +28,14 @@ function storedPosition() {
     return normalizeCompanionPosition(JSON.parse(window.localStorage.getItem(POSITION_STORAGE_KEY) || "null"));
   } catch {
     return { x: 1, y: 1 };
+  }
+}
+
+function storedSize() {
+  try {
+    return normalizeCompanionSize(JSON.parse(window.localStorage.getItem(SIZE_STORAGE_KEY) || "null"));
+  } catch {
+    return normalizeCompanionSize(null);
   }
 }
 
@@ -84,11 +93,14 @@ export function Companion({ revision = 0, onOpenSettings }) {
   const [position, setPosition] = useState(storedPosition);
   const [viewport, setViewport] = useState(viewportSize);
   const [pillSize, setPillSize] = useState(DEFAULT_PILL_SIZE);
+  const [cardSize, setCardSize] = useState(storedSize);
   const [dragging, setDragging] = useState(false);
+  const [resizing, setResizing] = useState(false);
   const tonePlayer = useRef(new TonePlayer());
   const sequence = useRef(0);
   const pillRef = useRef(null);
   const dragState = useRef(null);
+  const resizeState = useRef(null);
   const suppressClick = useRef(false);
 
   const companion = {
@@ -100,13 +112,13 @@ export function Companion({ revision = 0, onOpenSettings }) {
   const cycleItem = cycleItems[quotaIndex % Math.max(1, cycleItems.length)];
   const activeList = useMemo(() => [...activeSessions.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [activeSessions]);
   const anchor = companionPositionPixels(position, viewport, pillSize);
-  const placement = companionPlacement(anchor, viewport, pillSize);
+  const placement = companionPlacement(anchor, viewport, pillSize, cardSize);
   const layerStyle = open ? {
     left: placement.left,
     top: placement.top == null ? "auto" : placement.top,
     bottom: placement.bottom == null ? "auto" : placement.bottom,
-    "--companion-max-height": `${placement.maxHeight}px`,
   } : { left: anchor.x, top: anchor.y, bottom: "auto" };
+  const cardStyle = { width: placement.width, height: placement.height };
 
   const loadQuota = async () => {
     setQuotaLoading(true);
@@ -174,6 +186,10 @@ export function Companion({ revision = 0, onOpenSettings }) {
   useEffect(() => {
     try { window.localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(position)); } catch { /* Position persistence is best-effort. */ }
   }, [position]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(SIZE_STORAGE_KEY, JSON.stringify(cardSize)); } catch { /* Size persistence is best-effort. */ }
+  }, [cardSize]);
 
   useEffect(() => {
     if (!companion.enableBeeping) return undefined;
@@ -287,6 +303,55 @@ export function Companion({ revision = 0, onOpenSettings }) {
     openCard();
   };
 
+  const startResize = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeState.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      size: { width: placement.width, height: placement.height },
+      placement,
+    };
+    setResizing(true);
+  };
+
+  const moveResize = (event) => {
+    const current = resizeState.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    setCardSize(resizeCompanionSize(current.size, {
+      x: event.clientX - current.startX,
+      y: event.clientY - current.startY,
+    }, current.placement));
+  };
+
+  const finishResize = (event) => {
+    const current = resizeState.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    resizeState.current = null;
+    setResizing(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const resizeWithKeyboard = (event) => {
+    const step = event.shiftKey ? 40 : 10;
+    const delta = {
+      ArrowLeft: { x: -step, y: 0 },
+      ArrowRight: { x: step, y: 0 },
+      ArrowUp: { x: 0, y: -step },
+      ArrowDown: { x: 0, y: step },
+    }[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    setCardSize(resizeCompanionSize(
+      { width: placement.width, height: placement.height },
+      delta,
+      placement,
+    ));
+  };
+
   const saveCompanion = async (patch) => {
     if (savingControl) return;
     setSavingControl(true);
@@ -324,7 +389,7 @@ export function Companion({ revision = 0, onOpenSettings }) {
 
   return (
     <div
-      className={`companion-layer ${open ? "open" : "closed"}`}
+      className={`companion-layer ${open ? "open" : "closed"} ${resizing ? "resizing" : ""}`}
       style={layerStyle}
       data-expand-vertical={open ? placement.vertical : undefined}
       data-expand-horizontal={open ? placement.horizontal : undefined}
@@ -356,7 +421,13 @@ export function Companion({ revision = 0, onOpenSettings }) {
           {companion.enableBeeping ? <SpeakerHigh size={15} /> : <SpeakerSlash size={15} className="muted" />}
         </button>
       ) : (
-        <section className="companion-card" aria-label="Activity and provider quota companion">
+        <section
+          className="companion-card"
+          style={cardStyle}
+          aria-label="Activity and provider quota companion"
+          data-width={placement.width}
+          data-height={placement.height}
+        >
           <header className="companion-card-header">
             <span className={`companion-connection ${quota.connected ? "connected" : ""}`}><i />OnWatch · {connectionLabel}</span>
             <span className="companion-updated">{quotaLoading ? "updating…" : updatedAgo(quota.updatedAt)}</span>
@@ -377,34 +448,49 @@ export function Companion({ revision = 0, onOpenSettings }) {
                 {activeList.map((session) => <span key={session.sessionId}>{session.title || session.sessionId.slice(0, 8)} {noteForSession(session.sessionId).name}</span>)}
                 {!activeList.length ? <span className="idle">Waiting for activity</span> : null}
               </div>
-              <div className="companion-control-row">
-                <div><strong>Enable beeping</strong><small>{audioBlocked ? "Click to enable audio" : "Beep while agents are active"}</small></div>
-                <button type="button" role="switch" aria-checked={companion.enableBeeping} className={`companion-switch ${companion.enableBeeping ? "on" : ""}`} disabled={savingControl} onClick={toggleBeeping}><span /></button>
-              </div>
-              {controlError ? <p className="companion-control-error" role="alert">{controlError}</p> : null}
-              <div className="companion-control-row">
-                <div><strong>On finish</strong></div>
-                <div className="companion-sound-controls">
-                  <select value={companion.completionSound} disabled={savingControl} aria-label="Completion sound" onChange={(event) => saveCompanion({ completionSound: event.target.value })}>
-                    {COMPLETION_SOUNDS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-                  </select>
-                  <button type="button" aria-label="Preview completion sound" onClick={preview}><Play size={13} weight="fill" /></button>
+              <div className="companion-controls-grid">
+                <div className="companion-control-row">
+                  <div><strong>Enable beeping</strong><small>{audioBlocked ? "Click to enable audio" : "Beep while agents are active"}</small></div>
+                  <button type="button" role="switch" aria-checked={companion.enableBeeping} className={`companion-switch ${companion.enableBeeping ? "on" : ""}`} disabled={savingControl} onClick={toggleBeeping}><span /></button>
+                </div>
+                {controlError ? <p className="companion-control-error" role="alert">{controlError}</p> : null}
+                <div className="companion-control-row">
+                  <div><strong>On finish</strong></div>
+                  <div className="companion-sound-controls">
+                    <select value={companion.completionSound} disabled={savingControl} aria-label="Completion sound" onChange={(event) => saveCompanion({ completionSound: event.target.value })}>
+                      {COMPLETION_SOUNDS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                    </select>
+                    <button type="button" aria-label="Preview completion sound" onClick={preview}><Play size={13} weight="fill" /></button>
+                  </div>
                 </div>
               </div>
 
               <div className="companion-quota-heading"><span className="companion-cap">Provider Quota</span><small>All data from OnWatch</small></div>
               {quota.error ? <div className="companion-quota-error" role="status">{quota.error}<button type="button" onClick={loadQuota}>Retry</button></div> : null}
-              {(quota.providers || []).map((provider) => (
-                <section className="companion-provider" key={provider.provider}>
-                  <header><strong>{provider.label}</strong>{provider.planLabel ? <span>{provider.planLabel}</span> : null}<em className={statusTone(provider.status)}>{provider.stale ? "Stale" : provider.status}</em></header>
-                  {provider.error ? <p className="companion-provider-error">{provider.error}</p> : null}
-                  {(provider.quotas || []).map((item) => <QuotaRow quota={item} key={`${provider.provider}-${item.kind}-${item.label}`} />)}
-                </section>
-              ))}
+              <div className="companion-provider-grid">
+                {(quota.providers || []).map((provider) => (
+                  <section className="companion-provider" key={provider.provider}>
+                    <header><strong>{provider.label}</strong>{provider.planLabel ? <span>{provider.planLabel}</span> : null}<em className={statusTone(provider.status)}>{provider.stale ? "Stale" : provider.status}</em></header>
+                    {provider.error ? <p className="companion-provider-error">{provider.error}</p> : null}
+                    {(provider.quotas || []).map((item) => <QuotaRow quota={item} key={`${provider.provider}-${item.kind}-${item.label}`} />)}
+                  </section>
+                ))}
+              </div>
               {!quotaLoading && !(quota.providers || []).length ? <p className="companion-empty-quota">No quota data</p> : null}
               <p className="companion-source-note">The marker moves left as each reset approaches.</p>
             </div>
           </div>
+          <button
+            type="button"
+            className="companion-resize-handle"
+            aria-label="Resize companion"
+            title="Drag to resize; use arrow keys for precise adjustments"
+            onPointerDown={startResize}
+            onPointerMove={moveResize}
+            onPointerUp={finishResize}
+            onPointerCancel={finishResize}
+            onKeyDown={resizeWithKeyboard}
+          />
         </section>
       )}
     </div>

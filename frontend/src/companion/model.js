@@ -160,21 +160,57 @@ export function companionPositionFromPixels(pixels, viewport, pill, gap = 12) {
   });
 }
 
-export function companionPlacement(anchor, viewport, pill, cardWidth = 380, gap = 12) {
+export const DEFAULT_COMPANION_SIZE = { width: 380, height: 520 };
+export const MIN_COMPANION_SIZE = { width: 280, height: 260 };
+
+export function normalizeCompanionSize(value) {
+  const width = Number(value?.width);
+  const height = Number(value?.height);
+  return {
+    width: Number.isFinite(width) ? Math.max(MIN_COMPANION_SIZE.width, Math.round(width)) : DEFAULT_COMPANION_SIZE.width,
+    height: Number.isFinite(height) ? Math.max(MIN_COMPANION_SIZE.height, Math.round(height)) : DEFAULT_COMPANION_SIZE.height,
+  };
+}
+
+export function companionPlacement(anchor, viewport, pill, cardSize = DEFAULT_COMPANION_SIZE, gap = 12) {
   const vertical = anchor.y + pill.height / 2 <= viewport.height / 2 ? "down" : "up";
   const horizontal = anchor.x + pill.width / 2 <= viewport.width / 2 ? "right" : "left";
-  const width = Math.min(cardWidth, Math.max(0, viewport.width - gap * 2));
-  const preferredLeft = horizontal === "right" ? anchor.x : anchor.x + pill.width - width;
-  const left = clamp(preferredLeft, gap, Math.max(gap, viewport.width - width - gap));
   const maxHeight = vertical === "down"
     ? Math.max(0, viewport.height - gap - anchor.y)
     : Math.max(0, anchor.y + pill.height - gap);
+  const maxWidth = horizontal === "right"
+    ? Math.max(0, viewport.width - gap - anchor.x)
+    : Math.max(0, anchor.x + pill.width - gap);
+  const desired = normalizeCompanionSize(cardSize);
+  const width = clamp(desired.width, Math.min(MIN_COMPANION_SIZE.width, maxWidth), maxWidth);
+  const height = clamp(desired.height, Math.min(MIN_COMPANION_SIZE.height, maxHeight), maxHeight);
   return {
     vertical,
     horizontal,
-    left,
+    left: horizontal === "right" ? anchor.x : anchor.x + pill.width - width,
     top: vertical === "down" ? anchor.y : null,
     bottom: vertical === "up" ? viewport.height - anchor.y - pill.height : null,
+    width,
+    height,
+    maxWidth,
     maxHeight,
+  };
+}
+
+export function resizeCompanionSize(size, delta, placement) {
+  const current = normalizeCompanionSize(size);
+  const horizontalDelta = (Number(delta?.x) || 0) * (placement.horizontal === "right" ? 1 : -1);
+  const verticalDelta = (Number(delta?.y) || 0) * (placement.vertical === "down" ? 1 : -1);
+  return {
+    width: Math.round(clamp(
+      current.width + horizontalDelta,
+      Math.min(MIN_COMPANION_SIZE.width, placement.maxWidth),
+      placement.maxWidth,
+    )),
+    height: Math.round(clamp(
+      current.height + verticalDelta,
+      Math.min(MIN_COMPANION_SIZE.height, placement.maxHeight),
+      placement.maxHeight,
+    )),
   };
 }

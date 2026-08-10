@@ -139,6 +139,9 @@ The floating companion can be dragged anywhere inside the viewport. Its
 normalized position is stored in browser-local storage, survives reloads and
 stays visible after a resize. Opening it chooses an upward/downward and
 leftward/rightward direction from that position so the card remains on-screen.
+The open card can be resized from its outward corner; the saved size is clamped
+to the available viewport and its controls, waveform, quota columns, and
+scrolling layout respond to narrower, shorter, or wider dimensions.
 Its activity waveform is driven by the global AgentHub activity SSE stream,
 and completion playback uses the six bundled Codex Beeper MP3 sounds.
 
@@ -169,7 +172,7 @@ In the Web settings, the agent **Model** field is a dropdown fed by this endpoin
 
 The Web UI's **Settings** panel is the recommended way to manage this configuration. The **Providers** section is intentionally minimal: exactly four switches enable or disable the built-in providers (Codex, Kimi, Grok/Pi, OpenCode). There is no provider add/delete and no editing of commands, arguments, environment variables or other advanced fields. A toggle flips only the `enabled` flag through `PUT /v1/config/providers/{id}`, so the underlying configuration survives a disable/enable cycle; a built-in provider missing from an old config is created with canonical defaults when it is first enabled. The **Agents** section keeps structured, validated forms, and provider command availability probes distinguish *enabled* from *CLI available*. All changes go through the daemon API, which remains the only writer of the config file — no manual JSON editing is required.
 
-The **General** and **Activity** sections configure the floating companion. Provider quota is fetched only by the daemon from OnWatch, normalized, cached for the configured interval, and exposed through `GET /v1/quota`; Basic Auth passwords are stored in the local `0600` config but redacted from every API response. Session activity comes only from AgentHub's own durably appended Events and is aggregated per Session into one-second frames at `GET /v1/activity/events`. The browser keeps one global EventSource, assigns a stable pitch to each active Session, and synthesizes optional beeps and completion sounds with Web Audio. AgentHub never scans Codex or another Provider's native Session files for this feature.
+The **General** and **Activity** sections configure the floating companion. Provider quota is fetched only by the daemon from OnWatch, normalized, cached for the configured interval, and exposed through `GET /v1/quota`; Basic Auth passwords are stored in the local `0600` config but redacted from every API response. Session activity comes only from AgentHub's own durably appended Events and is aggregated per Session into one-second frames at `GET /v1/activity/events`. The browser keeps one global EventSource, assigns a stable pitch to each active Session, synthesizes optional activity beeps with Web Audio, and plays the selected local MP3 completion sound. AgentHub never scans Codex or another Provider's native Session files for this feature.
 
 A disabled provider's agents are reported as unavailable (`available: false` with a reason in `GET /v1/agents`), are hidden from the new-session choices, and are rejected by the daemon on session creation and resume even when a client bypasses the Web UI. Disabling never interrupts an already running session, and existing session history stays readable.
 

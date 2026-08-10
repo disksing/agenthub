@@ -131,10 +131,12 @@ $HOME/.agenthub/config.json
     "showActivity": true,
     "enableBeeping": true,
     "beepVolume": 0.28,
-    "completionSound": "chime"
+    "completionSound": "completed-voice"
   }
 }
 ```
+
+浮动伙伴可以拖到视口内任意位置；归一化位置保存在浏览器本地存储中，刷新后仍会恢复，并会在视口缩放后保持可见。打开时，它会根据当前位置选择向上/向下展开及向左/向右对齐，确保卡片留在屏幕内。展开卡片还可以从外侧角调整宽高；保存的尺寸会按当前视口自动夹紧，内部控制项、波形、配额分栏和滚动布局会响应窄、矮或较宽的尺寸。Activity 波形由 AgentHub 全局 Activity SSE 流驱动，完成提示音使用内置的 6 个 Codex Beeper MP3。
 
 Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provider 并保存具体启动参数。Agent 没有独立的 id：它的 `name` 必填（最长 80 个字符），在去除首尾空白后大小写不敏感地唯一，并且是唯一引用键——配置、API、CLI 和 Session 记录都使用它。每个 Session 都用显式 Agent 名称创建（`POST /v1/sessions` 要求 `agentName`，CLI 要求 `--agent`）；名称匹配不区分大小写，Session 记录的是配置中的规范拼写。未知、缺失或 Provider 被禁用的 Agent 会直接返回明确错误，不会被路由到其他 Agent。
 
@@ -142,7 +144,7 @@ Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provid
 
 推荐使用 Web UI 的 **Settings** 界面管理配置。**Providers** 区块刻意保持极简：只有四个开关用于启用或停用内置 Provider（Codex、Kimi、Grok/Pi、OpenCode），不提供 Provider 增删，也不提供命令、参数、环境变量或其他高级字段的编辑。开关只通过 `PUT /v1/config/providers/{id}` 翻转 `enabled` 标志，底层配置在停用/重新启用后完整保留；旧配置中缺失的内置 Provider 会在首次启用时由 daemon 以规范默认值创建。**Agents** 区块保留结构化、带校验的表单，Provider 命令可用性探测会区分“已启用”与“CLI 可用”。所有修改都通过 daemon API 提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
 
-**General** 和 **Activity** 区块用于配置浮动伙伴。Provider 配额只由 daemon 从 OnWatch 拉取，经归一化和按配置间隔缓存后通过 `GET /v1/quota` 暴露；Basic Auth 密码保存在本机权限为 `0600` 的配置文件中，但所有 API 响应都会将其抹除。Session 活动只来自 AgentHub 自身持久化追加的事件，并在 `GET /v1/activity/events` 中按 Session 聚合为一秒一帧。浏览器只保持一条全局 EventSource，为每个活跃 Session 分配稳定音高，并通过 Web Audio 合成可选的运行与完成提示音。此功能不会扫描 Codex 或其他 Provider 的原生 Session 文件。
+**General** 和 **Activity** 区块用于配置浮动伙伴。Provider 配额只由 daemon 从 OnWatch 拉取，经归一化和按配置间隔缓存后通过 `GET /v1/quota` 暴露；Basic Auth 密码保存在本机权限为 `0600` 的配置文件中，但所有 API 响应都会将其抹除。Session 活动只来自 AgentHub 自身持久化追加的事件，并在 `GET /v1/activity/events` 中按 Session 聚合为一秒一帧。浏览器只保持一条全局 EventSource，为每个活跃 Session 分配稳定音高，通过 Web Audio 合成可选的运行蜂鸣，并播放用户选择的本地 MP3 完成提示音。此功能不会扫描 Codex 或其他 Provider 的原生 Session 文件。
 
 Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` 中 `available: false` 并附原因），不会出现在新建 Session 的选择中；即使绕过 Web UI 直接调用 API，daemon 也会拒绝用这些 Agent 创建或恢复 Session。停用不会中断已经在运行的 Session，既有 Session 历史仍可查看。
 

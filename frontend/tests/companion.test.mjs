@@ -11,9 +11,11 @@ import {
 	companionPositionFromPixels,
 	companionPositionPixels,
 	formatDuration,
+	normalizeCompanionSize,
 	noteForSession,
 	pruneActivityPulses,
 	quotaCycleItems,
+	resizeCompanionSize,
 	waveformPoints,
 } from "../src/companion/model.js";
 
@@ -59,25 +61,53 @@ test("quota labels and activity waveform helpers are deterministic", () => {
 test("companion position round-trips and card expands away from viewport edges", () => {
 	const viewport = { width: 1200, height: 800 };
 	const pill = { width: 236, height: 42 };
+	const size = { width: 380, height: 520 };
 	for (const position of [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1 }, { x: 0.37, y: 0.62 }]) {
 		const pixels = companionPositionPixels(position, viewport, pill);
 		const restored = companionPositionFromPixels(pixels, viewport, pill);
 		assert.ok(Math.abs(restored.x - position.x) < 0.0001);
 		assert.ok(Math.abs(restored.y - position.y) < 0.0001);
 	}
-	const topLeft = companionPlacement(companionPositionPixels({ x: 0, y: 0 }, viewport, pill), viewport, pill);
-	const topRight = companionPlacement(companionPositionPixels({ x: 1, y: 0 }, viewport, pill), viewport, pill);
-	const bottomLeft = companionPlacement(companionPositionPixels({ x: 0, y: 1 }, viewport, pill), viewport, pill);
-	const bottomRight = companionPlacement(companionPositionPixels({ x: 1, y: 1 }, viewport, pill), viewport, pill);
+	const topLeft = companionPlacement(companionPositionPixels({ x: 0, y: 0 }, viewport, pill), viewport, pill, size);
+	const topRight = companionPlacement(companionPositionPixels({ x: 1, y: 0 }, viewport, pill), viewport, pill, size);
+	const bottomLeft = companionPlacement(companionPositionPixels({ x: 0, y: 1 }, viewport, pill), viewport, pill, size);
+	const bottomRight = companionPlacement(companionPositionPixels({ x: 1, y: 1 }, viewport, pill), viewport, pill, size);
 	assert.deepEqual([topLeft.vertical, topLeft.horizontal], ["down", "right"]);
 	assert.deepEqual([topRight.vertical, topRight.horizontal], ["down", "left"]);
 	assert.deepEqual([bottomLeft.vertical, bottomLeft.horizontal], ["up", "right"]);
 	assert.deepEqual([bottomRight.vertical, bottomRight.horizontal], ["up", "left"]);
 	for (const placement of [topLeft, topRight, bottomLeft, bottomRight]) {
 		assert.ok(placement.left >= 12);
-		assert.ok(placement.left + 380 <= viewport.width - 12);
+		assert.ok(placement.left + placement.width <= viewport.width - 12);
+		assert.equal(placement.width, 380);
+		assert.equal(placement.height, 520);
 		assert.ok(placement.maxHeight <= viewport.height - 12);
 	}
+});
+
+test("companion resizing follows its expansion corner and clamps to available space", () => {
+	const viewport = { width: 1200, height: 800 };
+	const pill = { width: 236, height: 42 };
+	const cases = [
+		[{ x: 0, y: 0 }, { x: 100, y: 80 }],
+		[{ x: 1, y: 0 }, { x: -100, y: 80 }],
+		[{ x: 0, y: 1 }, { x: 100, y: -80 }],
+		[{ x: 1, y: 1 }, { x: -100, y: -80 }],
+	];
+	for (const [position, delta] of cases) {
+		const placement = companionPlacement(
+			companionPositionPixels(position, viewport, pill),
+			viewport,
+			pill,
+			{ width: 380, height: 520 },
+		);
+		assert.deepEqual(resizeCompanionSize({ width: 380, height: 520 }, delta, placement), { width: 480, height: 600 });
+		const maximum = resizeCompanionSize({ width: 380, height: 520 }, { x: delta.x * 20, y: delta.y * 20 }, placement);
+		assert.equal(maximum.width, placement.maxWidth);
+		assert.equal(maximum.height, placement.maxHeight);
+	}
+	assert.deepEqual(normalizeCompanionSize(null), { width: 380, height: 520 });
+	assert.deepEqual(normalizeCompanionSize({ width: 10, height: 20 }), { width: 280, height: 260 });
 });
 
 test("TonePlayer uses a suspended Web Audio context only after resume", async () => {
@@ -117,9 +147,14 @@ test("TonePlayer plays each bundled Codex Beeper completion sound", async () => 
 test("companion uses one global EventSource and never scans provider sessions", async () => {
 	const source = await readFile(path.join(frontendRoot, "src", "companion", "Companion.jsx"), "utf8");
 	const model = await readFile(path.join(frontendRoot, "src", "companion", "model.js"), "utf8");
+	const styles = await readFile(path.join(frontendRoot, "src", "styles.css"), "utf8");
 	assert.equal((source.match(/new EventSource/g) || []).length, 1);
 	assert.ok(source.includes('new EventSource("/v1/activity/events")'));
 	assert.ok(source.includes("activityPulsesForFrame(frame, receivedAt)"));
+	assert.ok(source.includes('className="companion-resize-handle"'));
+	assert.ok(source.includes("agenthub.companion.size.v1"));
+	assert.ok(styles.includes("@container companion-card (min-width: 560px)"));
+	assert.ok(styles.includes("@container companion-card (max-height: 390px)"));
 	assert.ok(!model.includes("Math.random"));
 	for (const forbidden of [".codex/sessions", "fsnotify", "/v1/sessions/${"]) {
 		assert.ok(!source.includes(forbidden), `companion must not contain ${forbidden}`);
