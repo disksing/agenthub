@@ -325,7 +325,7 @@ only writer) and applies it in memory.
       "showActivity": true,
       "enableBeeping": true,
       "beepVolume": 0.28,
-      "completionSound": "chime"
+      "completionSound": "completed-voice"
     }
   }
 }
@@ -341,7 +341,9 @@ only writer) and applies it in memory.
   enabled, a password. Because GET responses redact the password, an empty
   Basic password in PUT preserves the currently stored value.
 - **Companion constraints:** `beepVolume` is between 0 and 1 and
-  `completionSound` is `chime`, `bell`, `ding`, `marimba` or `pop`.
+  `completionSound` is `completed-voice`, `done-for-you-girl`,
+  `light-hearted-message`, `not-bad`, `slow-spring-board` or `smile`.
+  Legacy synthesized sound names are migrated to `completed-voice` when read.
 - **Rename semantics:** if an agent disappears while exactly one new agent
   with an identical provider and options appears, the change is treated as a
   rename and active sessions referencing the old name are migrated with a

@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Play } from "@phosphor-icons/react";
-import { TonePlayer } from "../companion/audio.js";
+import { COMPLETION_SOUNDS, TonePlayer } from "../companion/audio.js";
 import { Toggle } from "./fields.jsx";
 
 export function ActivityPanel({ draft, mutate }) {
@@ -24,7 +24,7 @@ export function ActivityPanel({ draft, mutate }) {
           <span>Completion sound</span>
           <div className="settings-preview-row">
             <select value={value.completionSound} onChange={(event) => update("completionSound", event.target.value)}>
-              <option value="chime">Chime</option><option value="bell">Bell</option><option value="ding">Ding</option><option value="marimba">Marimba</option><option value="pop">Pop</option>
+              {COMPLETION_SOUNDS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
             </select>
             <button type="button" className="settings-button" onClick={preview}><Play size={13} weight="fill" />Preview</button>
           </div>

@@ -46,6 +46,21 @@ type Companion struct {
 	CompletionSound string  `json:"completionSound"`
 }
 
+const DefaultCompletionSound = "completed-voice"
+
+var completionSounds = map[string]struct{}{
+	"completed-voice":       {},
+	"done-for-you-girl":     {},
+	"light-hearted-message": {},
+	"not-bad":               {},
+	"slow-spring-board":     {},
+	"smile":                 {},
+}
+
+var legacyCompletionSounds = map[string]struct{}{
+	"chime": {}, "bell": {}, "ding": {}, "marimba": {}, "pop": {},
+}
+
 // AgentNameMaxLength bounds the length of an agent name (counted in runes
 // after trimming).
 const AgentNameMaxLength = 80
@@ -99,7 +114,7 @@ func Load(path string) (Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
-	return cfg, nil
+	return cfg.WithDefaults(), nil
 }
 
 func Save(path string, cfg Config) error {
@@ -280,7 +295,7 @@ func defaultCompanion() Companion {
 		ShowActivity:    true,
 		EnableBeeping:   true,
 		BeepVolume:      0.28,
-		CompletionSound: "chime",
+		CompletionSound: DefaultCompletionSound,
 	}
 }
 
@@ -294,6 +309,8 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.Companion.CompletionSound == "" {
 		c.Companion = defaultCompanion()
+	} else if _, legacy := legacyCompletionSounds[c.Companion.CompletionSound]; legacy {
+		c.Companion.CompletionSound = DefaultCompletionSound
 	}
 	return c
 }
@@ -327,9 +344,7 @@ func (value Companion) validate() error {
 	if value.BeepVolume < 0 || value.BeepVolume > 1 {
 		return errors.New("companion.beepVolume must be between 0 and 1")
 	}
-	switch value.CompletionSound {
-	case "chime", "bell", "ding", "marimba", "pop":
-	default:
+	if _, ok := completionSounds[value.CompletionSound]; !ok {
 		return fmt.Errorf("companion.completionSound %q is unsupported", value.CompletionSound)
 	}
 	return nil

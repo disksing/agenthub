@@ -2188,8 +2188,6 @@ details[open] > summary > .note-chevron {
   --companion-line: rgba(255, 255, 255, 0.12);
   --companion-glow: #39d3c0;
   position: fixed;
-  right: 22px;
-  bottom: 20px;
   z-index: 15;
 }
 
@@ -2204,8 +2202,10 @@ details[open] > summary > .note-chevron {
   background: #131f1d;
   color: var(--companion-ink);
   box-shadow: 0 10px 30px rgba(15, 23, 23, 0.35);
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   transition: transform 150ms ease, box-shadow 150ms ease;
+  user-select: none;
 }
 
 .companion-pill:hover,
@@ -2213,6 +2213,12 @@ details[open] > summary > .note-chevron {
   transform: translateY(-2px);
   box-shadow: 0 14px 34px rgba(15, 23, 23, 0.42);
   outline: 1px solid var(--companion-glow);
+}
+
+.companion-pill.dragging {
+  cursor: grabbing;
+  transform: none;
+  box-shadow: 0 16px 42px rgba(15, 23, 23, 0.48);
 }
 
 .companion-spark {
@@ -2263,13 +2269,24 @@ details[open] > summary > .note-chevron {
 .companion-card {
   display: flex;
   flex-direction: column;
-  width: 380px;
-  max-height: calc(100vh - 48px);
+  width: min(380px, calc(100vw - 24px));
+  max-height: var(--companion-max-height, calc(100vh - 24px));
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: #fff;
   box-shadow: 0 22px 60px rgba(15, 23, 23, 0.3);
+  animation: companion-card-in 150ms ease-out;
+}
+
+.companion-layer[data-expand-vertical="down"][data-expand-horizontal="right"] .companion-card { transform-origin: top left; }
+.companion-layer[data-expand-vertical="down"][data-expand-horizontal="left"] .companion-card { transform-origin: top right; }
+.companion-layer[data-expand-vertical="up"][data-expand-horizontal="right"] .companion-card { transform-origin: bottom left; }
+.companion-layer[data-expand-vertical="up"][data-expand-horizontal="left"] .companion-card { transform-origin: bottom right; }
+
+@keyframes companion-card-in {
+  from { opacity: 0.35; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .companion-card-header {
@@ -2317,7 +2334,7 @@ details[open] > summary > .note-chevron {
 }
 
 .companion-header-actions button:hover { background: var(--soft); color: var(--ink); }
-.companion-scroll { overflow-y: auto; }
+.companion-scroll { min-height: 0; overflow-y: auto; }
 
 .companion-dark {
   min-height: 100%;
@@ -2356,7 +2373,14 @@ details[open] > summary > .note-chevron {
 .companion-thread-stat { display: flex; align-items: baseline; gap: 8px; margin: 8px 0 4px; }
 .companion-thread-stat strong { color: #fff; font-size: 21px; font-variant-numeric: tabular-nums; }
 .companion-thread-stat span { color: var(--companion-muted); font-size: 10px; }
-.companion-ecg { position: relative; overflow: hidden; }
+.companion-ecg {
+  position: relative;
+  overflow: hidden;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
 .companion-ecg svg { display: block; width: 100%; height: 86px; }
 .companion-ecg-grid line { stroke: rgba(255, 255, 255, 0.05); }
 
@@ -2367,10 +2391,7 @@ details[open] > summary > .note-chevron {
   stroke-linecap: round;
   stroke-linejoin: round;
   filter: drop-shadow(0 0 5px rgba(57, 211, 192, 0.55));
-  animation: companion-wave-in 220ms ease-out;
 }
-
-@keyframes companion-wave-in { from { opacity: 0.25; } to { opacity: 1; } }
 
 .companion-scanbar {
   position: absolute;
@@ -2475,8 +2496,7 @@ details[open] > summary > .note-chevron {
 .settings-test-row span.error { color: #9a392f; }
 
 @media (max-width: 520px) {
-  .companion-layer { right: 12px; bottom: 12px; }
-  .companion-card { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
+  .companion-card { width: calc(100vw - 24px); }
   .companion-spark { width: 40px; }
   .companion-cycle { min-width: 82px; }
 }

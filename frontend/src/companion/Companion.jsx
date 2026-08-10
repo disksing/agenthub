@@ -1,15 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { api } from "../api.js";
-import { TonePlayer } from "./audio.js";
-import { activitySessions, formatDuration, noteForSession, quotaCycleItems, waveformPoints } from "./model.js";
+import { COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio.js";
+import { ActivityWaveform } from "./ActivityWaveform.jsx";
+import {
+  activityPulsesForFrame, activitySessions, companionPlacement, companionPositionFromPixels,
+  companionPositionPixels, formatDuration, normalizeCompanionPosition, noteForSession,
+  pruneActivityPulses, quotaCycleItems,
+} from "./model.js";
 
 const DEFAULT_COMPANION = {
   showActivity: true,
   enableBeeping: true,
   beepVolume: 0.28,
-  completionSound: "chime",
+  completionSound: "completed-voice",
 };
+const POSITION_STORAGE_KEY = "agenthub.companion.position.v1";
+const DEFAULT_PILL_SIZE = { width: 236, height: 42 };
+
+function viewportSize() {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+function storedPosition() {
+  try {
+    return normalizeCompanionPosition(JSON.parse(window.localStorage.getItem(POSITION_STORAGE_KEY) || "null"));
+  } catch {
+    return { x: 1, y: 1 };
+  }
+}
 
 function statusTone(status) {
   if (status === "critical" || status === "danger") return "danger";
@@ -58,17 +77,36 @@ export function Companion({ revision = 0, onOpenSettings }) {
   const [cyclePaused, setCyclePaused] = useState(false);
   const [activityState, setActivityState] = useState("connecting");
   const [activeSessions, setActiveSessions] = useState(() => new Map());
-  const [pulseCount, setPulseCount] = useState(0);
+  const [activityPulses, setActivityPulses] = useState([]);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [savingControl, setSavingControl] = useState(false);
   const [controlError, setControlError] = useState("");
+  const [position, setPosition] = useState(storedPosition);
+  const [viewport, setViewport] = useState(viewportSize);
+  const [pillSize, setPillSize] = useState(DEFAULT_PILL_SIZE);
+  const [dragging, setDragging] = useState(false);
   const tonePlayer = useRef(new TonePlayer());
   const sequence = useRef(0);
+  const pillRef = useRef(null);
+  const dragState = useRef(null);
+  const suppressClick = useRef(false);
 
-  const companion = { ...DEFAULT_COMPANION, ...(settings.companion || {}) };
+  const companion = {
+    ...DEFAULT_COMPANION,
+    ...(settings.companion || {}),
+    completionSound: normalizeCompletionSound(settings.companion?.completionSound),
+  };
   const cycleItems = useMemo(() => quotaCycleItems(quota), [quota]);
   const cycleItem = cycleItems[quotaIndex % Math.max(1, cycleItems.length)];
   const activeList = useMemo(() => [...activeSessions.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [activeSessions]);
+  const anchor = companionPositionPixels(position, viewport, pillSize);
+  const placement = companionPlacement(anchor, viewport, pillSize);
+  const layerStyle = open ? {
+    left: placement.left,
+    top: placement.top == null ? "auto" : placement.top,
+    bottom: placement.bottom == null ? "auto" : placement.bottom,
+    "--companion-max-height": `${placement.maxHeight}px`,
+  } : { left: anchor.x, top: anchor.y, bottom: "auto" };
 
   const loadQuota = async () => {
     setQuotaLoading(true);
@@ -113,9 +151,29 @@ export function Companion({ revision = 0, onOpenSettings }) {
   }, [cycleItems.length]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setActiveSessions((current) => activitySessions(current, { sessions: [] })), 1000);
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setActiveSessions((current) => activitySessions(current, { sessions: [] }, now));
+      setActivityPulses((current) => pruneActivityPulses(current, now));
+    }, 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const onResize = () => setViewport(viewportSize());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open || !pillRef.current) return;
+    const rect = pillRef.current.getBoundingClientRect();
+    if (rect.width && rect.height) setPillSize({ width: rect.width, height: rect.height });
+  }, [open, cycleItem, companion.enableBeeping]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(position)); } catch { /* Position persistence is best-effort. */ }
+  }, [position]);
 
   useEffect(() => {
     if (!companion.enableBeeping) return undefined;
@@ -147,11 +205,15 @@ export function Companion({ revision = 0, onOpenSettings }) {
       const frame = JSON.parse(message.data);
       if (sequence.current && frame.sequence !== sequence.current + 1) {
         setActiveSessions(new Map());
-        setPulseCount(0);
+        setActivityPulses([]);
       }
       sequence.current = frame.sequence;
       setActiveSessions((current) => activitySessions(current, frame));
-      setPulseCount((current) => current + (frame.sessions?.length || 0));
+      const receivedAt = Date.now();
+      setActivityPulses((current) => pruneActivityPulses([
+        ...current,
+        ...activityPulsesForFrame(frame, receivedAt),
+      ], receivedAt));
       if (!companion.enableBeeping) return;
       const sessions = frame.sessions || [];
       const spacing = sessions.length > 1 ? Math.min(0.8 / sessions.length, 0.08) : 0;
@@ -173,6 +235,56 @@ export function Companion({ revision = 0, onOpenSettings }) {
   const openCard = async () => {
     setOpen(true);
     await resumeAudio();
+  };
+
+  const startDrag = (event) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragState.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: anchor.x,
+      originY: anchor.y,
+      moved: false,
+    };
+    setCyclePaused(true);
+  };
+
+  const moveDrag = (event) => {
+    const current = dragState.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    const dx = event.clientX - current.startX;
+    const dy = event.clientY - current.startY;
+    if (Math.hypot(dx, dy) >= 4) {
+      current.moved = true;
+      setDragging(true);
+    }
+    if (!current.moved) return;
+    setPosition(companionPositionFromPixels(
+      { x: current.originX + dx, y: current.originY + dy },
+      viewport,
+      pillSize,
+    ));
+  };
+
+  const finishDrag = (event) => {
+    const current = dragState.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    suppressClick.current = current.moved && event.type === "pointerup";
+    dragState.current = null;
+    setDragging(false);
+    setCyclePaused(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const clickPill = (event) => {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      event.preventDefault();
+      return;
+    }
+    openCard();
   };
 
   const saveCompanion = async (patch) => {
@@ -211,14 +323,24 @@ export function Companion({ revision = 0, onOpenSettings }) {
   const activityLabel = activityState === "paused" ? "Paused" : activityState === "live" ? "AgentHub Live" : "Connecting";
 
   return (
-    <div className="companion-layer">
+    <div
+      className={`companion-layer ${open ? "open" : "closed"}`}
+      style={layerStyle}
+      data-expand-vertical={open ? placement.vertical : undefined}
+      data-expand-horizontal={open ? placement.horizontal : undefined}
+    >
       {!open ? (
         <button
+          ref={pillRef}
           type="button"
-          className="companion-pill"
-          title="Open companion"
+          className={`companion-pill ${dragging ? "dragging" : ""}`}
+          title="Drag to move; click to open"
           aria-label={cycleItem ? `Open companion; showing ${cycleItem.provider} quota ${cycleItem.value}%` : "Open companion; no quota data"}
-          onClick={openCard}
+          onClick={clickPill}
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={finishDrag}
+          onPointerCancel={finishDrag}
           onMouseEnter={() => setCyclePaused(true)}
           onMouseLeave={() => setCyclePaused(false)}
           onFocus={() => setCyclePaused(true)}
@@ -250,13 +372,7 @@ export function Companion({ revision = 0, onOpenSettings }) {
                 <span className={`companion-live-state ${activityState}`}>{activityLabel}</span>
               </div>
               <div className="companion-thread-stat"><strong>{activeList.length}</strong><span>active threads · last 5 min</span></div>
-              <div className="companion-ecg">
-                <svg viewBox="0 0 700 86" preserveAspectRatio="none" aria-label="Live activity waveform">
-                  <g className="companion-ecg-grid"><line x1="0" y1="28" x2="700" y2="28" /><line x1="0" y1="57" x2="700" y2="57" /></g>
-                  <polyline key={pulseCount} className="companion-ecg-line" points={waveformPoints(pulseCount)} />
-                </svg>
-                {activityState === "live" ? <span className="companion-scanbar" /> : null}
-              </div>
+              <ActivityWaveform pulses={activityPulses} live={activityState === "live"} />
               <div className="companion-thread-chips">
                 {activeList.map((session) => <span key={session.sessionId}>{session.title || session.sessionId.slice(0, 8)} {noteForSession(session.sessionId).name}</span>)}
                 {!activeList.length ? <span className="idle">Waiting for activity</span> : null}
@@ -270,7 +386,7 @@ export function Companion({ revision = 0, onOpenSettings }) {
                 <div><strong>On finish</strong></div>
                 <div className="companion-sound-controls">
                   <select value={companion.completionSound} disabled={savingControl} aria-label="Completion sound" onChange={(event) => saveCompanion({ completionSound: event.target.value })}>
-                    <option value="chime">Chime</option><option value="bell">Bell</option><option value="ding">Ding</option><option value="marimba">Marimba</option><option value="pop">Pop</option>
+                    {COMPLETION_SOUNDS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                   </select>
                   <button type="button" aria-label="Preview completion sound" onClick={preview}><Play size={13} weight="fill" /></button>
                 </div>

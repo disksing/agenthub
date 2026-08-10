@@ -130,10 +130,17 @@ On first startup, if the config does not exist, AgentHub generates its own minim
     "showActivity": true,
     "enableBeeping": true,
     "beepVolume": 0.28,
-    "completionSound": "chime"
+    "completionSound": "completed-voice"
   }
 }
 ```
+
+The floating companion can be dragged anywhere inside the viewport. Its
+normalized position is stored in browser-local storage, survives reloads and
+stays visible after a resize. Opening it chooses an upward/downward and
+leftward/rightward direction from that position so the card remains on-screen.
+Its activity waveform is driven by the global AgentHub activity SSE stream,
+and completion playback uses the six bundled Codex Beeper MP3 sounds.
 
 A provider wraps a local agent runtime or protocol; an agent references one provider and holds its concrete launch options. An agent has no separate id: its `name` is required (up to 80 characters), is unique case-insensitively after trimming surrounding whitespace, and is the only reference key — the config, the API, the CLI and session records all use it. Every session is created with an explicit agent name (`POST /v1/sessions` requires `agentName`, and the CLI requires `--agent`); name matching is case-insensitive and sessions record the canonical configured spelling. An unknown, missing, or disabled-provider agent fails with a clear error instead of being routed elsewhere.
 

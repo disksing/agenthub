@@ -1,3 +1,5 @@
+import { COMPLETION_SOUNDS, normalizeCompletionSound } from "../companion/audio.js";
+
 // Pure data helpers with no React dependency, shared by the settings UI and tests.
 // The config model mirrors internal/config/config.go.
 
@@ -61,7 +63,7 @@ export const DEFAULT_COMPANION = {
   showActivity: true,
   enableBeeping: true,
   beepVolume: 0.28,
-  completionSound: "chime",
+  completionSound: "completed-voice",
 };
 
 // The model option is not a free-text field: the settings UI loads the
@@ -140,7 +142,7 @@ export function normalizeConfig(config = {}) {
     showActivity: rawCompanion.showActivity == null ? DEFAULT_COMPANION.showActivity : Boolean(rawCompanion.showActivity),
     enableBeeping: rawCompanion.enableBeeping == null ? DEFAULT_COMPANION.enableBeeping : Boolean(rawCompanion.enableBeeping),
     beepVolume: rawCompanion.beepVolume == null ? DEFAULT_COMPANION.beepVolume : Number(rawCompanion.beepVolume),
-    completionSound: String(rawCompanion.completionSound ?? DEFAULT_COMPANION.completionSound),
+    completionSound: normalizeCompletionSound(String(rawCompanion.completionSound ?? DEFAULT_COMPANION.completionSound)),
   };
   return {
     version: Number(config.version) || 1,
@@ -217,7 +219,7 @@ export function validateDraft(draft) {
   if (!Number.isFinite(draft.companion.beepVolume) || draft.companion.beepVolume < 0 || draft.companion.beepVolume > 1) {
     push("activity", 0, "beepVolume", "Volume must be between 0 and 1");
   }
-  if (!["chime", "bell", "ding", "marimba", "pop"].includes(draft.companion.completionSound)) {
+  if (!COMPLETION_SOUNDS.some((option) => option.value === draft.companion.completionSound)) {
     push("activity", 0, "completionSound", "Select a supported completion sound");
   }
 

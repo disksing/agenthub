@@ -123,7 +123,7 @@ test("companion settings are normalized and validated", () => {
 	});
 	assert.equal(normalized.onWatch.serverUrl, "http://localhost:9211");
 	assert.equal(normalized.onWatch.enabled, true);
-	assert.deepEqual(normalized.companion, { showActivity: false, enableBeeping: false, beepVolume: 0, completionSound: "pop" });
+	assert.deepEqual(normalized.companion, { showActivity: false, enableBeeping: false, beepVolume: 0, completionSound: "completed-voice" });
 	assert.deepEqual(validateDraft(normalized), []);
 
 	const invalid = createDraft({
@@ -134,6 +134,7 @@ test("companion settings are normalized and validated", () => {
 	assert.ok(errors.some((item) => item.section === "general" && item.field === "serverUrl"));
 	assert.ok(errors.some((item) => item.section === "general" && item.field === "username"));
 	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepVolume"));
+	assert.ok(errors.some((item) => item.section === "activity" && item.field === "completionSound"));
 });
 
 test("validateDraft reports duplicate provider ids and missing required fields", () => {
