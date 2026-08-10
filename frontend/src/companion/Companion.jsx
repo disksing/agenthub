@@ -43,7 +43,7 @@ function QuotaRow({ quota }) {
       </div>
       <div className="companion-quota-under">
         <span>{quota.resetInSeconds != null ? `resets in ${formatDuration(quota.resetInSeconds)}` : `${Math.round(quota.usedPercent || 0)}% used`}</span>
-        <span>{quota.stale ? "stale" : quota.windowPositionPercent != null ? `${Math.round(quota.windowPositionPercent)}% window` : quota.status}</span>
+        <span>{quota.stale ? "stale" : quota.windowPositionPercent != null ? `${Math.round(quota.windowPositionPercent)}% to reset` : quota.status}</span>
       </div>
     </div>
   );
@@ -286,7 +286,7 @@ export function Companion({ revision = 0, onOpenSettings }) {
                 </section>
               ))}
               {!quotaLoading && !(quota.providers || []).length ? <p className="companion-empty-quota">No quota data</p> : null}
-              <p className="companion-source-note">The marker shows the current position in each reset window.</p>
+              <p className="companion-source-note">The marker moves left as each reset approaches.</p>
             </div>
           </div>
         </section>

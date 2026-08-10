@@ -412,6 +412,9 @@ the configured refresh interval.
   `capturedAt`, optional stale/error state, and `quotas`. Each quota carries
   `kind`, `label`, `remainingPercent`, `usedPercent`, reset/window fields when
   available, `status`, and optional `used`, `limit`, rate and projection data.
+  `windowPositionPercent` is the percentage of the known reset window still
+  remaining: `100` is the right edge at the start of a window and it moves
+  toward the left edge (`0`) as reset approaches.
 - When an upstream refresh fails after a successful read, the last cached
   snapshot is returned with `connected:false`, `stale:true` and an error.
 - **Errors:** `503 runtime_unavailable`. Upstream availability is represented

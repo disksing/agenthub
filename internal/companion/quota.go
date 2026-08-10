@@ -421,7 +421,9 @@ func windowPosition(kind string, resetSeconds *int64) *float64 {
 	if !ok {
 		return nil
 	}
-	value := clamp(100*(1-float64(*resetSeconds)/duration), 0, 100)
+	// The track is a countdown: a full reset window starts at the right edge
+	// and moves toward the left edge as the reset approaches.
+	value := clamp(100*float64(*resetSeconds)/duration, 0, 100)
 	return &value
 }
 

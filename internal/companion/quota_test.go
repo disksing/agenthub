@@ -118,3 +118,24 @@ func TestBasicAuthAndCatalogResponse(t *testing.T) {
 		t.Fatalf("catalog = %+v, %v", catalog, err)
 	}
 }
+
+func TestWindowPositionMovesLeftAsResetApproaches(t *testing.T) {
+	fullWindow := int64(5 * 60 * 60)
+	halfWindow := fullWindow / 2
+	nearReset := int64(60)
+	atReset := int64(0)
+
+	fullPosition := windowPosition("5h", &fullWindow)
+	halfPosition := windowPosition("5h", &halfWindow)
+	nearPosition := windowPosition("5h", &nearReset)
+	resetPosition := windowPosition("5h", &atReset)
+	if fullPosition == nil || halfPosition == nil || nearPosition == nil || resetPosition == nil {
+		t.Fatal("known reset window did not produce marker positions")
+	}
+	if *fullPosition != 100 || *halfPosition != 50 || *resetPosition != 0 {
+		t.Fatalf("positions = full %.2f, half %.2f, reset %.2f", *fullPosition, *halfPosition, *resetPosition)
+	}
+	if !(*nearPosition < *halfPosition) {
+		t.Fatalf("near-reset position %.2f must be left of half-window position %.2f", *nearPosition, *halfPosition)
+	}
+}
