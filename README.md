@@ -142,6 +142,8 @@ leftward/rightward direction from that position so the card remains on-screen.
 The open card can be resized from its outward corner; the saved size is clamped
 to the available viewport and its controls, waveform, quota columns, and
 scrolling layout respond to narrower, shorter, or wider dimensions.
+Its header can open the same interface in a new tab at `/beeper`, where the
+responsive card fills a dedicated page and still provides settings access.
 Its activity waveform is driven by the global AgentHub activity SSE stream,
 and completion playback uses the six bundled Codex Beeper MP3 sounds.
 

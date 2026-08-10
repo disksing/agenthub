@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { api } from "../api.js";
+import { BEEPER_PATH } from "../routes.js";
 import { COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio.js";
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
@@ -77,7 +78,7 @@ function QuotaRow({ quota }) {
   );
 }
 
-export function Companion({ revision = 0, onOpenSettings }) {
+export function Companion({ revision = 0, onOpenSettings, standalone = false }) {
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState({ companion: DEFAULT_COMPANION, onWatch: {} });
   const [quota, setQuota] = useState({ configured: false, connected: false, providers: [] });
@@ -113,7 +114,8 @@ export function Companion({ revision = 0, onOpenSettings }) {
   const activeList = useMemo(() => [...activeSessions.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [activeSessions]);
   const anchor = companionPositionPixels(position, viewport, pillSize);
   const placement = companionPlacement(anchor, viewport, pillSize, cardSize);
-  const layerStyle = open ? {
+  const expanded = standalone || open;
+  const layerStyle = standalone ? undefined : open ? {
     left: placement.left,
     top: placement.top == null ? "auto" : placement.top,
     bottom: placement.bottom == null ? "auto" : placement.bottom,
@@ -178,10 +180,10 @@ export function Companion({ revision = 0, onOpenSettings }) {
   }, []);
 
   useLayoutEffect(() => {
-    if (open || !pillRef.current) return;
+    if (expanded || !pillRef.current) return;
     const rect = pillRef.current.getBoundingClientRect();
     if (rect.width && rect.height) setPillSize({ width: rect.width, height: rect.height });
-  }, [open, cycleItem, companion.enableBeeping]);
+  }, [expanded, cycleItem, companion.enableBeeping]);
 
   useEffect(() => {
     try { window.localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(position)); } catch { /* Position persistence is best-effort. */ }
@@ -389,12 +391,12 @@ export function Companion({ revision = 0, onOpenSettings }) {
 
   return (
     <div
-      className={`companion-layer ${open ? "open" : "closed"} ${resizing ? "resizing" : ""}`}
+      className={`companion-layer ${expanded ? "open" : "closed"} ${standalone ? "standalone" : ""} ${resizing ? "resizing" : ""}`}
       style={layerStyle}
-      data-expand-vertical={open ? placement.vertical : undefined}
-      data-expand-horizontal={open ? placement.horizontal : undefined}
+      data-expand-vertical={expanded && !standalone ? placement.vertical : undefined}
+      data-expand-horizontal={expanded && !standalone ? placement.horizontal : undefined}
     >
-      {!open ? (
+      {!expanded ? (
         <button
           ref={pillRef}
           type="button"
@@ -423,17 +425,18 @@ export function Companion({ revision = 0, onOpenSettings }) {
       ) : (
         <section
           className="companion-card"
-          style={cardStyle}
+          style={standalone ? undefined : cardStyle}
           aria-label="Activity and provider quota companion"
-          data-width={placement.width}
-          data-height={placement.height}
+          data-width={standalone ? undefined : placement.width}
+          data-height={standalone ? undefined : placement.height}
         >
           <header className="companion-card-header">
             <span className={`companion-connection ${quota.connected ? "connected" : ""}`}><i />OnWatch · {connectionLabel}</span>
             <span className="companion-updated">{quotaLoading ? "updating…" : updatedAgo(quota.updatedAt)}</span>
             <span className="companion-header-actions">
               <button type="button" aria-label="Open companion settings" onClick={onOpenSettings}><Gear size={15} /></button>
-              <button type="button" aria-label="Collapse companion" onClick={() => setOpen(false)}><X size={15} /></button>
+              {!standalone ? <a href={BEEPER_PATH} target="_blank" rel="noreferrer" aria-label="Open Beeper in new page" title="Open Beeper in new page"><ArrowSquareOut size={15} /></a> : null}
+              {!standalone ? <button type="button" aria-label="Collapse companion" onClick={() => setOpen(false)}><X size={15} /></button> : null}
             </span>
           </header>
           <div className="companion-scroll">
@@ -480,17 +483,19 @@ export function Companion({ revision = 0, onOpenSettings }) {
               <p className="companion-source-note">The marker moves left as each reset approaches.</p>
             </div>
           </div>
-          <button
-            type="button"
-            className="companion-resize-handle"
-            aria-label="Resize companion"
-            title="Drag to resize; use arrow keys for precise adjustments"
-            onPointerDown={startResize}
-            onPointerMove={moveResize}
-            onPointerUp={finishResize}
-            onPointerCancel={finishResize}
-            onKeyDown={resizeWithKeyboard}
-          />
+          {!standalone ? (
+            <button
+              type="button"
+              className="companion-resize-handle"
+              aria-label="Resize companion"
+              title="Drag to resize; use arrow keys for precise adjustments"
+              onPointerDown={startResize}
+              onPointerMove={moveResize}
+              onPointerUp={finishResize}
+              onPointerCancel={finishResize}
+              onKeyDown={resizeWithKeyboard}
+            />
+          ) : null}
         </section>
       )}
     </div>
