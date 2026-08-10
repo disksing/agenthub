@@ -16,6 +16,7 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
 - Session 创建、聊天、steer、interrupt、stop、resume、archive 和 approval。
 - daemon 重启后按需恢复 provider 原生 session/thread。
 - 同源 Web UI：Session 列表、实时聊天、状态、审批、停止，以及包含四个内置 Provider 开关、结构化 Agent 表单和按 Provider 加载的模型下拉框的设置界面。
+- 浮动伙伴：展示由 OnWatch 提供的 Provider 配额，以及由 AgentHub 自身事件聚合出的实时 Session 活动，可选 Web Audio 提示音。
 - Provider 模型枚举：每个内置 Provider 都能通过各自的官方接口报告当前可用模型，统一为一个只读 API。
 - CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
 - 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
@@ -117,7 +118,21 @@ $HOME/.agenthub/config.json
       "providerId": "pi",
       "options": { "mode": "build", "model": "kimi-coding/k3" }
     }
-  ]
+  ],
+  "onWatch": {
+    "enabled": false,
+    "serverUrl": "http://127.0.0.1:9211",
+    "authMode": "trusted_proxy",
+    "username": "admin",
+    "password": "",
+    "refreshIntervalSeconds": 60
+  },
+  "companion": {
+    "showActivity": true,
+    "enableBeeping": true,
+    "beepVolume": 0.28,
+    "completionSound": "chime"
+  }
 }
 ```
 
@@ -126,6 +141,8 @@ Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provid
 重命名 Agent 是安全的：当一次配置保存把某个名称替换为唯一一个其余字段完全相同的 Agent 时，daemon 会向每个引用旧名称的活动 Session 追加 `session.agent` 事件，使这些 Session 跟随重命名。歧义重命名（存在多个字段相同的候选）会被拒绝并给出可操作错误；删除 Agent 或重命名到不存在唯一目标时，旧 Session 会以清晰的“unknown agent”错误失败，而不会猜测到其他 Agent。
 
 推荐使用 Web UI 的 **Settings** 界面管理配置。**Providers** 区块刻意保持极简：只有四个开关用于启用或停用内置 Provider（Codex、Kimi、Grok/Pi、OpenCode），不提供 Provider 增删，也不提供命令、参数、环境变量或其他高级字段的编辑。开关只通过 `PUT /v1/config/providers/{id}` 翻转 `enabled` 标志，底层配置在停用/重新启用后完整保留；旧配置中缺失的内置 Provider 会在首次启用时由 daemon 以规范默认值创建。**Agents** 区块保留结构化、带校验的表单，Provider 命令可用性探测会区分“已启用”与“CLI 可用”。所有修改都通过 daemon API 提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
+
+**General** 和 **Activity** 区块用于配置浮动伙伴。Provider 配额只由 daemon 从 OnWatch 拉取，经归一化和按配置间隔缓存后通过 `GET /v1/quota` 暴露；Basic Auth 密码保存在本机权限为 `0600` 的配置文件中，但所有 API 响应都会将其抹除。Session 活动只来自 AgentHub 自身持久化追加的事件，并在 `GET /v1/activity/events` 中按 Session 聚合为一秒一帧。浏览器只保持一条全局 EventSource，为每个活跃 Session 分配稳定音高，并通过 Web Audio 合成可选的运行与完成提示音。此功能不会扫描 Codex 或其他 Provider 的原生 Session 文件。
 
 Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` 中 `available: false` 并附原因），不会出现在新建 Session 的选择中；即使绕过 Web UI 直接调用 API，daemon 也会拒绝用这些 Agent 创建或恢复 Session。停用不会中断已经在运行的 Session，既有 Session 历史仍可查看。
 
@@ -175,6 +192,9 @@ GET    /v1/health
 GET    /v1/status
 GET    /v1/config
 PUT    /v1/config
+POST   /v1/onwatch/test
+GET    /v1/quota
+GET    /v1/activity/events
 GET    /v1/agents
 GET    /v1/providers/{id}/models
 

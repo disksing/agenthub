@@ -2051,6 +2051,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		CapabilityEventsLosslessReplay,
 		CapabilityEventsDeltaMerge,
 		CapabilityEventsBackwardPagination,
+		CapabilityActivityGlobalSSE,
 		CapabilitySessionSource,
 		CapabilityEventsCanonicalTerminal,
 		CapabilityRecoveryClosedTurns,
@@ -2130,7 +2131,7 @@ func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilityEventsBackwardPagination, CapabilitySessionSource}
+	want := []string{CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilityEventsBackwardPagination, CapabilityActivityGlobalSSE, CapabilitySessionSource}
 	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
 		t.Fatalf("capabilities = %v, want %v", body.Capabilities, want)
 	}

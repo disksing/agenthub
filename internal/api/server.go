@@ -12,11 +12,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/disksing/agenthub/internal/companion"
 	"github.com/disksing/agenthub/internal/config"
 	"github.com/disksing/agenthub/internal/provider"
 	"github.com/disksing/agenthub/internal/runtime"
@@ -36,6 +38,7 @@ const (
 	CapabilityEventsDeltaMerge               = "events.delta-merge"
 	CapabilityEventsBackwardPagination       = "events.backward-pagination"
 	CapabilityEventsCanonicalTerminal        = "events.canonical-turn-terminals"
+	CapabilityActivityGlobalSSE              = "activity.global-sse"
 	CapabilityRecoveryClosedTurns            = "recovery.closed-turns"
 )
 
@@ -56,6 +59,7 @@ type Server struct {
 	webDir    string
 	listen    *ListenAddress
 	models    ModelLister
+	quotas    *companion.Service
 	// closing, when set, is closed once the HTTP server begins shutting
 	// down so long-lived handlers (SSE streams) can finish promptly.
 	closing <-chan struct{}
@@ -73,6 +77,9 @@ type Dependencies struct {
 	Listen *ListenAddress
 	// Models, when set, enables the provider model enumeration endpoint.
 	Models ModelLister
+	// QuotaHTTPClient, when set, is used for OnWatch requests. Tests inject a
+	// local upstream; production uses a bounded standard-library client.
+	QuotaHTTPClient *http.Client
 	// LogsDir is the directory service logs are written to, reported by
 	// the status endpoint.
 	LogsDir string
@@ -82,7 +89,7 @@ type Dependencies struct {
 }
 
 func New(store *session.Store, version string, startedAt time.Time, dependencies ...Dependencies) *Server {
-	server := &Server{store: store, version: version, startedAt: startedAt}
+	server := &Server{store: store, version: version, startedAt: startedAt, quotas: companion.NewService(nil)}
 	if len(dependencies) > 0 {
 		server.runtime = dependencies[0].Runtime
 		server.config = dependencies[0].ConfigPath
@@ -90,6 +97,7 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 		server.webDir = dependencies[0].WebDir
 		server.listen = dependencies[0].Listen
 		server.models = dependencies[0].Models
+		server.quotas = companion.NewService(dependencies[0].QuotaHTTPClient)
 		server.closing = dependencies[0].Closing
 	}
 	return server
@@ -114,6 +122,9 @@ func (s *Server) routes() []apiRoute {
 		{"GET /v1/config", s.getConfig, "GET /v1/config"},
 		{"PUT /v1/config", s.putConfig, "PUT /v1/config"},
 		{"PUT /v1/config/providers/{id}", s.putProviderEnabled, "PUT /v1/config/providers/{id}"},
+		{"POST /v1/onwatch/test", s.testOnWatch, "POST /v1/onwatch/test"},
+		{"GET /v1/quota", s.quota, "GET /v1/quota"},
+		{"GET /v1/activity/events", s.activityEvents, "GET /v1/activity/events"},
 		{"GET /v1/providers/{id}/models", s.providerModels, "GET /v1/providers/{id}/models"},
 		{"GET /v1/agents", s.agents, "GET /v1/agents"},
 		{"GET /v1/sessions", s.listSessions, "GET /v1/sessions"},
@@ -208,6 +219,7 @@ func (s *Server) capabilities() []string {
 		CapabilityEventsLosslessReplay,
 		CapabilityEventsDeltaMerge,
 		CapabilityEventsBackwardPagination,
+		CapabilityActivityGlobalSSE,
 		CapabilitySessionSource,
 	}
 	if s.runtime != nil {
@@ -234,7 +246,7 @@ func (s *Server) getConfig(w http.ResponseWriter, _ *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"config": s.runtime.Config()})
+	writeJSON(w, http.StatusOK, map[string]any{"config": s.runtime.Config().Redacted()})
 }
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
@@ -252,22 +264,60 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 	previous := s.runtime.Config()
-	renames, err := config.DetectRenames(previous, body.Config)
+	next := body.Config.WithDefaults().PreserveSecrets(previous)
+	renames, err := config.DetectRenames(previous, next)
 	if err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, "ambiguous_rename", err.Error(), nil)
 		return
 	}
-	if err := config.Save(s.config, body.Config); err != nil {
+	if err := config.Save(s.config, next); err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_config", err.Error(), nil)
 		return
 	}
-	_ = s.runtime.SetConfig(body.Config)
+	_ = s.runtime.SetConfig(next)
 	s.invalidateModels()
+	s.quotas.Invalidate()
 	if err := s.migrateSessionAgentReferences(renames); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "agent_rename_failed", err.Error(), nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"config": body.Config})
+	writeJSON(w, http.StatusOK, map[string]any{"config": next.Redacted()})
+}
+
+func (s *Server) quota(w http.ResponseWriter, r *http.Request) {
+	if s.runtime == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"quota": s.quotas.Snapshot(r.Context(), s.runtime.Config().OnWatch)})
+}
+
+func (s *Server) testOnWatch(w http.ResponseWriter, r *http.Request) {
+	if s.runtime == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime is unavailable", nil)
+		return
+	}
+	var body struct {
+		OnWatch config.OnWatch `json:"onWatch"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	candidate := config.Defaults()
+	candidate.OnWatch = body.OnWatch
+	candidate.OnWatch.Enabled = true
+	candidate = candidate.PreserveSecrets(s.runtime.Config())
+	if err := candidate.Validate(); err != nil {
+		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_config", err.Error(), nil)
+		return
+	}
+	catalog, err := s.quotas.TestConnection(r.Context(), candidate.OnWatch)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "onwatch_unavailable", err.Error(), nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"connected": true, "providers": catalog.Providers})
 }
 
 // migrateSessionAgentReferences re-points sessions at renamed agents by
@@ -995,6 +1045,114 @@ func (s *Server) rejectArchivedSession(w http.ResponseWriter, id string) bool {
 		return true
 	}
 	return false
+}
+
+type activitySession struct {
+	SessionID   string    `json:"sessionId"`
+	Provider    string    `json:"provider,omitempty"`
+	Title       string    `json:"title,omitempty"`
+	EventCount  int       `json:"eventCount"`
+	Completed   bool      `json:"completed"`
+	LastEventAt time.Time `json:"lastEventAt"`
+}
+
+type activityFrame struct {
+	Sequence        uint64            `json:"sequence"`
+	WindowStartedAt time.Time         `json:"windowStartedAt"`
+	WindowEndedAt   time.Time         `json:"windowEndedAt"`
+	Sessions        []activitySession `json:"sessions"`
+}
+
+func (s *Server) activityEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeAPIError(w, http.StatusInternalServerError, "stream_unsupported", "response writer does not support streaming", nil)
+		return
+	}
+	live := s.store.SubscribeAll()
+	defer live.Cancel()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	windowStartedAt := time.Now().UTC()
+	pending := make(map[string]activitySession)
+	var sequence uint64
+	window := time.NewTicker(time.Second)
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer window.Stop()
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-s.closing:
+			return
+		case <-live.Overflow():
+			return
+		case event := <-live.Events():
+			if live.Overflowed() {
+				return
+			}
+			entry := pending[event.SessionID]
+			if entry.SessionID == "" {
+				entry.SessionID = event.SessionID
+			}
+			if entry.Provider == "" || entry.Title == "" {
+				if current, err := s.store.Get(event.SessionID); err == nil {
+					entry.Provider = current.Provider
+					entry.Title = current.Title
+				}
+			}
+			entry.EventCount++
+			entry.LastEventAt = event.Time
+			switch event.Type {
+			case session.EventTurnCompleted, session.EventTurnFailed, session.EventTurnCancelled:
+				entry.Completed = true
+			}
+			pending[event.SessionID] = entry
+		case endedAt := <-window.C:
+			if live.Overflowed() {
+				return
+			}
+			endedAt = endedAt.UTC()
+			if len(pending) > 0 {
+				sequence++
+				sessions := make([]activitySession, 0, len(pending))
+				for _, entry := range pending {
+					sessions = append(sessions, entry)
+				}
+				sort.Slice(sessions, func(i, j int) bool { return sessions[i].SessionID < sessions[j].SessionID })
+				frame := activityFrame{
+					Sequence: sequence, WindowStartedAt: windowStartedAt,
+					WindowEndedAt: endedAt, Sessions: sessions,
+				}
+				if err := writeActivitySSE(w, frame); err != nil {
+					return
+				}
+				flusher.Flush()
+				pending = make(map[string]activitySession)
+			}
+			windowStartedAt = endedAt
+		case <-heartbeat.C:
+			if err := writeSSEHeartbeat(w); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func writeActivitySSE(w http.ResponseWriter, frame activityFrame) error {
+	data, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	return writeSSEBounded(w, func() error {
+		_, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", frame.Sequence, data)
+		return err
+	})
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {

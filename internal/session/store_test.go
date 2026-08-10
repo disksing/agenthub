@@ -81,6 +81,67 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 	}
 }
 
+func TestSubscribeAllObservesEverySessionAfterPersistence(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Create(CreateInput{Title: "first", Cwd: t.TempDir(), AgentName: "Codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Create(CreateInput{Title: "second", Cwd: t.TempDir(), AgentName: "Kimi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := store.SubscribeAll()
+	defer live.Cancel()
+	if _, err := store.Append(first.ID, "provider.event", "", []byte(`{"n":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(second.ID, EventTurnCompleted, "turn-1", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{first.ID, second.ID} {
+		select {
+		case event := <-live.Events():
+			if event.SessionID != want {
+				t.Fatalf("event session = %q, want %q", event.SessionID, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", want)
+		}
+	}
+	if live.Overflowed() {
+		t.Fatal("small activity feed overflowed")
+	}
+}
+
+func TestSubscribeAllOverflowIsTerminal(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := store.SubscribeAll()
+	defer live.Cancel()
+	for i := 0; i <= subscriptionBuffer; i++ {
+		store.publish(Event{SessionID: "ses_busy", ID: int64(i + 1), Type: "provider.event"})
+	}
+	if !live.Overflowed() {
+		t.Fatal("activity subscription did not report overflow")
+	}
+	select {
+	case <-live.Overflow():
+	case <-time.After(time.Second):
+		t.Fatal("overflowed activity subscription did not terminate")
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if _, subscribed := store.activitySubscribers[live]; subscribed {
+		t.Fatal("overflowed activity subscription remained registered")
+	}
+}
+
 func TestStorePersistsLaunchEnvironmentThroughReplayWithPrivateFiles(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)

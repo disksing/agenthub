@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,22 @@ type Agent struct {
 	Options    map[string]string `json:"options,omitempty"`
 }
 
+type OnWatch struct {
+	Enabled                bool   `json:"enabled"`
+	ServerURL              string `json:"serverUrl"`
+	AuthMode               string `json:"authMode"`
+	Username               string `json:"username,omitempty"`
+	Password               string `json:"password"`
+	RefreshIntervalSeconds int    `json:"refreshIntervalSeconds"`
+}
+
+type Companion struct {
+	ShowActivity    bool    `json:"showActivity"`
+	EnableBeeping   bool    `json:"enableBeeping"`
+	BeepVolume      float64 `json:"beepVolume"`
+	CompletionSound string  `json:"completionSound"`
+}
+
 // AgentNameMaxLength bounds the length of an agent name (counted in runes
 // after trimming).
 const AgentNameMaxLength = 80
@@ -46,6 +63,8 @@ type Config struct {
 	Version        int        `json:"version"`
 	AgentProviders []Provider `json:"agentProviders"`
 	Agents         []Agent    `json:"agents"`
+	OnWatch        OnWatch    `json:"onWatch"`
+	Companion      Companion  `json:"companion"`
 }
 
 type Probe struct {
@@ -68,7 +87,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	var cfg Config
+	cfg := Config{OnWatch: defaultOnWatch(), Companion: defaultCompanion()}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
@@ -84,6 +103,7 @@ func Load(path string) (Config, error) {
 }
 
 func Save(path string, cfg Config) error {
+	cfg = cfg.WithDefaults()
 	if cfg.Version == 0 {
 		cfg.Version = 1
 	}
@@ -123,6 +143,13 @@ func Save(path string, cfg Config) error {
 }
 
 func (c Config) Validate() error {
+	effective := c.WithDefaults()
+	if err := effective.OnWatch.validate(); err != nil {
+		return err
+	}
+	if err := effective.Companion.validate(); err != nil {
+		return err
+	}
 	providers := make(map[string]Provider)
 	for _, value := range c.AgentProviders {
 		if value.ID == "" || value.Type == "" {
@@ -199,6 +226,8 @@ func (c Config) SetProviderEnabled(id string, enabled bool) (Config, Provider, e
 		Version:        c.Version,
 		AgentProviders: make([]Provider, len(c.AgentProviders)),
 		Agents:         make([]Agent, len(c.Agents)),
+		OnWatch:        c.OnWatch,
+		Companion:      c.Companion,
 	}
 	copy(next.AgentProviders, c.AgentProviders)
 	for i, agent := range c.Agents {
@@ -232,7 +261,95 @@ func Defaults() Config {
 		Version:        1,
 		AgentProviders: providers,
 		Agents:         []Agent{{Name: "Codex", ProviderID: "codex", Options: map[string]string{"approval": "never", "sandbox": "danger-full-access"}}},
+		OnWatch:        defaultOnWatch(),
+		Companion:      defaultCompanion(),
 	}
+}
+
+func defaultOnWatch() OnWatch {
+	return OnWatch{
+		ServerURL:              "http://127.0.0.1:9211",
+		AuthMode:               "trusted_proxy",
+		Username:               "admin",
+		RefreshIntervalSeconds: 60,
+	}
+}
+
+func defaultCompanion() Companion {
+	return Companion{
+		ShowActivity:    true,
+		EnableBeeping:   true,
+		BeepVolume:      0.28,
+		CompletionSound: "chime",
+	}
+}
+
+// WithDefaults fills companion fields absent from configurations written by
+// older AgentHub versions. It intentionally treats only an entirely empty
+// nested object as absent, so explicit false and zero values survive when the
+// remaining fields identify a current configuration.
+func (c Config) WithDefaults() Config {
+	if c.OnWatch.ServerURL == "" && c.OnWatch.AuthMode == "" && c.OnWatch.RefreshIntervalSeconds == 0 {
+		c.OnWatch = defaultOnWatch()
+	}
+	if c.Companion.CompletionSound == "" {
+		c.Companion = defaultCompanion()
+	}
+	return c
+}
+
+func (value OnWatch) validate() error {
+	parsed, err := url.Parse(strings.TrimSpace(value.ServerURL))
+	if err != nil || parsed == nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("onWatch.serverUrl must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil {
+		return errors.New("onWatch.serverUrl must not contain credentials")
+	}
+	switch value.AuthMode {
+	case "trusted_proxy", "basic", "none":
+	default:
+		return fmt.Errorf("onWatch.authMode %q is unsupported", value.AuthMode)
+	}
+	if value.RefreshIntervalSeconds != 30 && value.RefreshIntervalSeconds != 60 && value.RefreshIntervalSeconds != 300 {
+		return errors.New("onWatch.refreshIntervalSeconds must be 30, 60, or 300")
+	}
+	if value.AuthMode == "basic" && strings.TrimSpace(value.Username) == "" {
+		return errors.New("onWatch.username is required for basic authentication")
+	}
+	if value.Enabled && value.AuthMode == "basic" && value.Password == "" {
+		return errors.New("onWatch.password is required for basic authentication")
+	}
+	return nil
+}
+
+func (value Companion) validate() error {
+	if value.BeepVolume < 0 || value.BeepVolume > 1 {
+		return errors.New("companion.beepVolume must be between 0 and 1")
+	}
+	switch value.CompletionSound {
+	case "chime", "bell", "ding", "marimba", "pop":
+	default:
+		return fmt.Errorf("companion.completionSound %q is unsupported", value.CompletionSound)
+	}
+	return nil
+}
+
+// Redacted returns a copy safe to expose through the public configuration API.
+// The stored Basic Auth password remains available only inside the daemon.
+func (c Config) Redacted() Config {
+	c.OnWatch.Password = ""
+	return c
+}
+
+// PreserveSecrets carries forward an omitted Basic Auth password from the
+// current configuration. This lets settings clients edit unrelated fields
+// without receiving or resubmitting the stored secret.
+func (c Config) PreserveSecrets(previous Config) Config {
+	if c.OnWatch.Password == "" && c.OnWatch.AuthMode == "basic" {
+		c.OnWatch.Password = previous.OnWatch.Password
+	}
+	return c
 }
 
 // Agent resolves an agent by name. Matching is case-insensitive and ignores

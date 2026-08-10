@@ -15,7 +15,7 @@ AgentHub is a local agent launcher and session hub. A single Go daemon manages C
   - Pi JSONL RPC, including models such as Kimi K3 and Grok
 - Session creation, chat, steer, interrupt, stop, resume, archive, and approvals.
 - On-demand recovery of provider-native sessions/threads after a daemon restart.
-- Same-origin Web UI: session list, real-time chat, status, approvals, stop, and a settings panel with four built-in provider switches plus structured agent forms with provider-loaded model dropdowns.
+- Same-origin Web UI: session list, real-time chat, status, approvals, stop, structured settings, and a floating activity/quota companion with optional Web Audio beeps.
 - Provider model enumeration: each built-in provider reports its currently usable models through its official interface, normalized into one read-only API.
 - CLI: one-shot runs, interactive chat, attach, event queries, and session management.
 - Each session stores only `session.json` and an append-only `events.jsonl`; turns and approvals are events, with no separate files.
@@ -117,7 +117,21 @@ On first startup, if the config does not exist, AgentHub generates its own minim
       "providerId": "pi",
       "options": { "mode": "build", "model": "kimi-coding/k3" }
     }
-  ]
+  ],
+  "onWatch": {
+    "enabled": false,
+    "serverUrl": "http://127.0.0.1:9211",
+    "authMode": "trusted_proxy",
+    "username": "admin",
+    "password": "",
+    "refreshIntervalSeconds": 60
+  },
+  "companion": {
+    "showActivity": true,
+    "enableBeeping": true,
+    "beepVolume": 0.28,
+    "completionSound": "chime"
+  }
 }
 ```
 
@@ -147,6 +161,8 @@ Each built-in provider can report the models currently usable on this machine th
 In the Web settings, the agent **Model** field is a dropdown fed by this endpoint instead of a free-text input: pick the provider first, then choose a model. The empty "Provider default" choice simply omits the `model` option. A previously saved model that is not in the current list is kept as an explicit "saved, not currently listed" option until you pick a replacement, and loading, retry, empty, and disabled-provider states are shown inline.
 
 The Web UI's **Settings** panel is the recommended way to manage this configuration. The **Providers** section is intentionally minimal: exactly four switches enable or disable the built-in providers (Codex, Kimi, Grok/Pi, OpenCode). There is no provider add/delete and no editing of commands, arguments, environment variables or other advanced fields. A toggle flips only the `enabled` flag through `PUT /v1/config/providers/{id}`, so the underlying configuration survives a disable/enable cycle; a built-in provider missing from an old config is created with canonical defaults when it is first enabled. The **Agents** section keeps structured, validated forms, and provider command availability probes distinguish *enabled* from *CLI available*. All changes go through the daemon API, which remains the only writer of the config file — no manual JSON editing is required.
+
+The **General** and **Activity** sections configure the floating companion. Provider quota is fetched only by the daemon from OnWatch, normalized, cached for the configured interval, and exposed through `GET /v1/quota`; Basic Auth passwords are stored in the local `0600` config but redacted from every API response. Session activity comes only from AgentHub's own durably appended Events and is aggregated per Session into one-second frames at `GET /v1/activity/events`. The browser keeps one global EventSource, assigns a stable pitch to each active Session, and synthesizes optional beeps and completion sounds with Web Audio. AgentHub never scans Codex or another Provider's native Session files for this feature.
 
 A disabled provider's agents are reported as unavailable (`available: false` with a reason in `GET /v1/agents`), are hidden from the new-session choices, and are rejected by the daemon on session creation and resume even when a client bypasses the Web UI. Disabling never interrupts an already running session, and existing session history stays readable.
 
@@ -180,6 +196,7 @@ curl -s http://127.0.0.1:4646/api.md
 actually exercise: `session.source`, `session.launch-environment`,
 `session.launch-environment-update`,
 `session.strict-stopped`, `events.lossless-replay`, `events.delta-merge`,
+`activity.global-sse`,
 `events.canonical-turn-terminals`, and `recovery.closed-turns`. A client
 must reject an unsupported API version or a missing required capability
 before creating a session; older daemons with neither field are explicitly
@@ -200,6 +217,9 @@ GET    /v1/health
 GET    /v1/status
 GET    /v1/config
 PUT    /v1/config
+POST   /v1/onwatch/test
+GET    /v1/quota
+GET    /v1/activity/events
 GET    /v1/agents
 GET    /v1/providers/{id}/models
 

@@ -12,6 +12,7 @@ import { Timeline } from "./Timeline.jsx";
 import { NewSessionModal } from "./NewSessionModal.jsx";
 import { isResumable, requestSessionResume, resumeErrorForSession } from "./resume.js";
 import { SettingsModal } from "./settings/SettingsModal.jsx";
+import { Companion } from "./companion/Companion.jsx";
 
 export function App() {
   const [sessions, setSessions] = useState([]);
@@ -42,6 +43,7 @@ export function App() {
   // hidden and close it again after picking a session.
   const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrow());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [companionRevision, setCompanionRevision] = useState(0);
   const settingsTriggerRef = useRef(null);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const newSessionTriggerRef = useRef(null);
@@ -421,11 +423,13 @@ export function App() {
         )}
       </aside>
 
+      <Companion revision={companionRevision} onOpenSettings={() => setSettingsOpen(true)} />
+
       {settingsOpen && (
         <SettingsModal
           triggerRef={settingsTriggerRef}
           onClose={() => setSettingsOpen(false)}
-          onSaved={() => loadAgents().catch(() => {})}
+          onSaved={() => { loadAgents().catch(() => {}); setCompanionRevision((current) => current + 1); }}
         />
       )}
 

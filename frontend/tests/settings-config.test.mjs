@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	DEFAULT_COMPANION,
+	DEFAULT_ONWATCH,
   buildPayload,
   createDraft,
   isDirty,
@@ -37,6 +39,8 @@ test("normalizeConfig normalizes the structure and drops blank fields", () => {
       { name: "Main", providerId: "codex", options: { model: "gpt-5", sandbox: "workspace-write" } },
       { name: "Backup", providerId: "kimi" },
     ],
+	onWatch: DEFAULT_ONWATCH,
+	companion: DEFAULT_COMPANION,
   });
 });
 
@@ -45,6 +49,8 @@ test("normalizeConfig tolerates empty config and missing arrays", () => {
     version: 1,
     agentProviders: [],
     agents: [],
+	onWatch: DEFAULT_ONWATCH,
+	companion: DEFAULT_COMPANION,
   });
   assert.deepEqual(normalizeConfig({ agentProviders: "x", agents: 1 }), normalizeConfig({}));
 });
@@ -108,6 +114,26 @@ test("validateDraft returns no errors for a valid config", () => {
   });
   assert.deepEqual(validateDraft(valid), []);
   assert.deepEqual(validateDraft(createDraft({})), []);
+});
+
+test("companion settings are normalized and validated", () => {
+	const normalized = normalizeConfig({
+		onWatch: { enabled: true, serverUrl: " http://localhost:9211 ", authMode: "none", refreshIntervalSeconds: 30 },
+		companion: { showActivity: false, enableBeeping: false, beepVolume: 0, completionSound: "pop" },
+	});
+	assert.equal(normalized.onWatch.serverUrl, "http://localhost:9211");
+	assert.equal(normalized.onWatch.enabled, true);
+	assert.deepEqual(normalized.companion, { showActivity: false, enableBeeping: false, beepVolume: 0, completionSound: "pop" });
+	assert.deepEqual(validateDraft(normalized), []);
+
+	const invalid = createDraft({
+		onWatch: { serverUrl: "file:///tmp/quota", authMode: "basic", username: "", refreshIntervalSeconds: 13 },
+		companion: { beepVolume: 2, completionSound: "noise" },
+	});
+	const errors = validateDraft(invalid);
+	assert.ok(errors.some((item) => item.section === "general" && item.field === "serverUrl"));
+	assert.ok(errors.some((item) => item.section === "general" && item.field === "username"));
+	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepVolume"));
 });
 
 test("validateDraft reports duplicate provider ids and missing required fields", () => {

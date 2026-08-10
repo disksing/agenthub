@@ -105,6 +105,7 @@ Current runtime-backed daemon instances advertise:
 | `events.lossless-replay` | Durable exclusive cursors, paginated REST catch-up and gap-free SSE replay. |
 | `events.delta-merge` | Consecutive same-message text deltas are folded into one durable event; SSE delivers live folds as append patches (`data.append: true`) under the folded event's id and re-sends the full cursor event on reconnect. |
 | `events.backward-pagination` | JSON event pages can also read the log backwards with `latest=true` or an exclusive `before` cursor. |
+| `activity.global-sse` | Best-effort one-second activity frames across all Sessions, with no historical beep replay. |
 | `events.canonical-turn-terminals` | Provider-independent `turn.completed`, `turn.failed` and `turn.cancelled`. |
 | `recovery.closed-turns` | Daemon recovery closes open approvals and turns before publishing `stopped`. |
 
@@ -283,9 +284,11 @@ curl -s "$BASE/v1/status"
 
 Read the effective configuration.
 
-- **Success `200`:** `{"config": {...}}` — the full configuration object
-  (`version`, `agentProviders`, `agents`; see `PUT /v1/config` for the
-  schema and constraints).
+- **Success `200`:** `{"config": {...}}` — the configuration object
+  (`version`, `agentProviders`, `agents`, `onWatch`, `companion`; see
+  `PUT /v1/config` for the schema and constraints). `onWatch.password` is
+  always returned as an empty string; the stored secret never leaves the
+  daemon.
 - **Errors:** `503 runtime_unavailable`.
 
 ```bash
@@ -309,7 +312,21 @@ only writer) and applies it in memory.
     ],
     "agents": [
       {"name": "Codex", "providerId": "codex", "options": {"approval": "never", "sandbox": "danger-full-access"}}
-    ]
+    ],
+    "onWatch": {
+      "enabled": false,
+      "serverUrl": "http://127.0.0.1:9211",
+      "authMode": "trusted_proxy",
+      "username": "admin",
+      "password": "",
+      "refreshIntervalSeconds": 60
+    },
+    "companion": {
+      "showActivity": true,
+      "enableBeeping": true,
+      "beepVolume": 0.28,
+      "completionSound": "chime"
+    }
   }
 }
 ```
@@ -318,6 +335,13 @@ only writer) and applies it in memory.
   `pi`, `opencode`; agent `name` required, at most 80 characters, unique
   case-insensitively after trimming; every agent's `providerId` must
   reference a configured provider. Unknown fields are rejected.
+- **OnWatch constraints:** `serverUrl` is an absolute HTTP(S) URL without
+  embedded credentials; `authMode` is `trusted_proxy`, `basic` or `none`;
+  refresh is 30, 60 or 300 seconds. Basic Auth requires a username and, when
+  enabled, a password. Because GET responses redact the password, an empty
+  Basic password in PUT preserves the currently stored value.
+- **Companion constraints:** `beepVolume` is between 0 and 1 and
+  `completionSound` is `chime`, `bell`, `ding`, `marimba` or `pop`.
 - **Rename semantics:** if an agent disappears while exactly one new agent
   with an identical provider and options appears, the change is treated as a
   rename and active sessions referencing the old name are migrated with a
@@ -355,6 +379,46 @@ canonical defaults.
 curl -s -X PUT "$BASE/v1/config/providers/kimi" \
   -H "Content-Type: application/json" \
   -d '{"enabled": false}'
+```
+
+### POST /v1/onwatch/test
+
+Test an OnWatch connection without saving the supplied settings. The request
+body is `{"onWatch": {...}}` using the same object as `PUT /v1/config`.
+An empty Basic Auth password reuses the currently stored secret. The daemon
+requests OnWatch `/api/providers`; it never returns credentials.
+
+- **Success `200`:** `{"connected": true, "providers": ["codex", ...]}`.
+- **Errors:** `400 invalid_request`, `415 json_required`,
+  `422 invalid_config`, `502 onwatch_unavailable`, `503 runtime_unavailable`.
+
+```bash
+curl -s -X POST "$BASE/v1/onwatch/test" \
+  -H "Content-Type: application/json" \
+  -d '{"onWatch":{"enabled":true,"serverUrl":"http://127.0.0.1:9211","authMode":"trusted_proxy","username":"admin","refreshIntervalSeconds":60}}'
+```
+
+### GET /v1/quota
+
+Read the companion's normalized Provider quota snapshot. The browser never
+contacts OnWatch directly. The daemon discovers Provider order from
+`/api/providers`, reads each `/api/current?provider=...` response, normalizes
+remaining/used percentages, reset data and status, and caches the result for
+the configured refresh interval.
+
+- **Success `200`:** `{"quota": {"configured", "connected", "stale?",
+  "error?", "updatedAt", "staleAfterSeconds", "providers": [...]}}`.
+  Each Provider carries `provider`, `label`, optional `planLabel`, `status`,
+  `capturedAt`, optional stale/error state, and `quotas`. Each quota carries
+  `kind`, `label`, `remainingPercent`, `usedPercent`, reset/window fields when
+  available, `status`, and optional `used`, `limit`, rate and projection data.
+- When an upstream refresh fails after a successful read, the last cached
+  snapshot is returned with `connected:false`, `stale:true` and an error.
+- **Errors:** `503 runtime_unavailable`. Upstream availability is represented
+  inside the successful snapshot so the UI can retain stale data.
+
+```bash
+curl -s "$BASE/v1/quota"
 ```
 
 ### GET /v1/providers/{id}/models
@@ -697,6 +761,36 @@ data: {"id":44,"time":"2026-07-26T12:05:02Z","type":"turn.completed","sessionId"
 curl -N -H "Accept: text/event-stream" "$BASE/v1/sessions/$SESSION/events"
 curl -N -H "Accept: text/event-stream" -H "Last-Event-ID: 100" \
   "$BASE/v1/sessions/$SESSION/events"
+```
+
+### GET /v1/activity/events
+
+Subscribe to a process-local, best-effort view of new activity across every
+AgentHub Session. This stream is derived only from Events published after they
+are durably appended to AgentHub's own `events.jsonl`; it does not scan or
+read Provider-native Session files.
+
+- Events are grouped into one-second windows and then by `sessionId`. A
+  Session appears at most once per frame with `eventCount`, `provider`,
+  `title`, `lastEventAt`, and `completed`. `completed` is true when the window
+  contains canonical `turn.completed`, `turn.failed` or `turn.cancelled`.
+- Frames carry a daemon-wide monotonic `sequence`, `windowStartedAt`,
+  `windowEndedAt`, and `sessions`. They use the default SSE message channel.
+- There is no historical replay and `Last-Event-ID` is ignored: reconnecting
+  starts with current activity so stale work never produces delayed beeps.
+  Clients use `sequence` only to detect a dropped frame and reset transient
+  visualization state.
+- The stream flushes immediately, sends a heartbeat every 15 seconds, uses
+  bounded writes, and terminates on shutdown, client cancellation, or bounded
+  subscriber overflow. EventSource can then reconnect automatically.
+
+```text
+id: 1842
+data: {"sequence":1842,"windowStartedAt":"2026-08-10T15:06:23Z","windowEndedAt":"2026-08-10T15:06:24Z","sessions":[{"sessionId":"ses_abc123","provider":"codex","title":"Fix quota polling race","eventCount":18,"completed":false,"lastEventAt":"2026-08-10T15:06:23.921Z"}]}
+```
+
+```bash
+curl -N -H "Accept: text/event-stream" "$BASE/v1/activity/events"
 ```
 
 ### POST /v1/sessions/{id}/messages

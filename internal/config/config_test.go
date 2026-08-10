@@ -112,6 +112,64 @@ func TestLoadCreatesIndependentDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadAddsCompanionDefaultsToLegacyConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.OnWatch.ServerURL != "http://127.0.0.1:9211" || loaded.OnWatch.RefreshIntervalSeconds != 60 {
+		t.Fatalf("OnWatch defaults = %+v", loaded.OnWatch)
+	}
+	if !loaded.Companion.ShowActivity || !loaded.Companion.EnableBeeping || loaded.Companion.CompletionSound != "chime" {
+		t.Fatalf("companion defaults = %+v", loaded.Companion)
+	}
+}
+
+func TestConfigRedactsAndPreservesOnWatchPassword(t *testing.T) {
+	previous := Defaults()
+	previous.OnWatch.Enabled = true
+	previous.OnWatch.AuthMode = "basic"
+	previous.OnWatch.Username = "alice"
+	previous.OnWatch.Password = "secret"
+	public := previous.Redacted()
+	if public.OnWatch.Password != "" || previous.OnWatch.Password != "secret" {
+		t.Fatalf("redaction mutated or exposed password: public=%+v stored=%+v", public.OnWatch, previous.OnWatch)
+	}
+	public.Companion.BeepVolume = 0.5
+	next := public.PreserveSecrets(previous)
+	if next.OnWatch.Password != "secret" || next.Companion.BeepVolume != 0.5 {
+		t.Fatalf("preserved config = %+v", next)
+	}
+	if err := next.Validate(); err != nil {
+		t.Fatalf("preserved config is invalid: %v", err)
+	}
+}
+
+func TestCompanionConfigValidation(t *testing.T) {
+	cfg := Defaults()
+	cfg.OnWatch.ServerURL = "file:///tmp/quota"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "serverUrl") {
+		t.Fatalf("unsafe URL validation = %v", err)
+	}
+	cfg = Defaults()
+	cfg.OnWatch.Enabled = true
+	cfg.OnWatch.AuthMode = "basic"
+	cfg.OnWatch.Password = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "password") {
+		t.Fatalf("missing password validation = %v", err)
+	}
+	cfg = Defaults()
+	cfg.Companion.BeepVolume = 1.1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepVolume") {
+		t.Fatalf("volume validation = %v", err)
+	}
+}
+
 func TestLoadRejectsRemovedConfigFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	legacy := `{"version":1,"agentProviders":[],"agents":[{"id":"agent-a","name":"Agent A","providerId":"p"}]}`

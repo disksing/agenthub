@@ -5,8 +5,12 @@ import { buildPayload, createDraft, isDirty, normalizeConfig, validateDraft } fr
 import { applyProviderToggle, requestProviderToggle } from "./providerSwitches";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { AgentsPanel } from "./AgentsPanel";
+import { GeneralPanel } from "./GeneralPanel.jsx";
+import { ActivityPanel } from "./ActivityPanel.jsx";
 
 const SECTIONS = [
+  { id: "general", label: "General" },
+  { id: "activity", label: "Activity" },
   { id: "providers", label: "Providers" },
   { id: "agents", label: "Agents" },
 ];
@@ -23,7 +27,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
   const [draft, setDraft] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   const [probes, setProbes] = useState([]);
-  const [section, setSection] = useState("providers");
+  const [section, setSection] = useState("general");
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -183,7 +187,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
         <header className="settings-dialog-header">
           <div>
             <h2 id="settings-dialog-title">Settings</h2>
-            <p>Configure providers and agents. Changes take effect when saved.</p>
+            <p>Configure the companion, providers, and agents. Changes take effect when saved.</p>
           </div>
           <button className="icon-button" aria-label="Close settings" onClick={requestClose}>
             <X size={19} />
@@ -218,6 +222,12 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
             </nav>
             <div className="settings-content">
               <div className="settings-panel">
+                {section === "general" ? (
+                  <GeneralPanel draft={draft} errors={errors} showErrors={showErrors} mutate={mutate} />
+                ) : null}
+                {section === "activity" ? (
+                  <ActivityPanel draft={draft} mutate={mutate} />
+                ) : null}
                 {section === "providers" ? (
                   <ProvidersPanel
                     config={draft}

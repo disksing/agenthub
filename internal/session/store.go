@@ -81,9 +81,10 @@ type sessionState struct {
 type Store struct {
 	root string
 
-	mu          sync.RWMutex
-	sessions    map[string]*sessionState
-	subscribers map[string]map[*Subscription]struct{}
+	mu                  sync.RWMutex
+	sessions            map[string]*sessionState
+	subscribers         map[string]map[*Subscription]struct{}
+	activitySubscribers map[*Subscription]struct{}
 }
 
 // Subscription is a best-effort notification queue layered over the durable
@@ -127,9 +128,10 @@ func Open(root string) (*Store, error) {
 		return nil, fmt.Errorf("create session archive: %w", err)
 	}
 	store := &Store{
-		root:        root,
-		sessions:    make(map[string]*sessionState),
-		subscribers: make(map[string]map[*Subscription]struct{}),
+		root:                root,
+		sessions:            make(map[string]*sessionState),
+		subscribers:         make(map[string]map[*Subscription]struct{}),
+		activitySubscribers: make(map[*Subscription]struct{}),
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -818,6 +820,26 @@ func (s *Store) Subscribe(id string) (*Subscription, int64, error) {
 	return subscription, highWater, nil
 }
 
+// SubscribeAll installs a best-effort process-local feed of every event that
+// is published after durable persistence. It intentionally has no history or
+// cursor: activity consumers aggregate current pulses and reconnect after an
+// overflow instead of replaying stale beeps.
+func (s *Store) SubscribeAll() *Subscription {
+	s.mu.Lock()
+	subscription := &Subscription{
+		events:   make(chan Event, subscriptionBuffer),
+		overflow: make(chan struct{}),
+	}
+	s.activitySubscribers[subscription] = struct{}{}
+	s.mu.Unlock()
+	subscription.cancel = func() {
+		s.mu.Lock()
+		delete(s.activitySubscribers, subscription)
+		s.mu.Unlock()
+	}
+	return subscription
+}
+
 func normalizeEventLimit(limit int) int {
 	if limit <= 0 {
 		return DefaultEventPageSize
@@ -1340,6 +1362,14 @@ func (s *Store) publish(event Event) {
 	}
 	if len(s.subscribers[event.SessionID]) == 0 {
 		delete(s.subscribers, event.SessionID)
+	}
+	for subscription := range s.activitySubscribers {
+		select {
+		case subscription.events <- cloneEvent(event):
+		default:
+			delete(s.activitySubscribers, subscription)
+			close(subscription.overflow)
+		}
 	}
 }
 

@@ -48,6 +48,22 @@ export function normalizeAgentName(name) {
 
 export const AGENT_NAME_MAX_LENGTH = 80;
 
+export const DEFAULT_ONWATCH = {
+  enabled: false,
+  serverUrl: "http://127.0.0.1:9211",
+  authMode: "trusted_proxy",
+  username: "admin",
+  password: "",
+  refreshIntervalSeconds: 60,
+};
+
+export const DEFAULT_COMPANION = {
+  showActivity: true,
+  enableBeeping: true,
+  beepVolume: 0.28,
+  completionSound: "chime",
+};
+
 // The model option is not a free-text field: the settings UI loads the
 // provider's live model list and renders a dropdown (see ModelSelect).
 const MODEL_FIELD = { key: "model", kind: "model", label: "Model" };
@@ -109,10 +125,29 @@ export function normalizeConfig(config = {}) {
     if (Object.keys(options).length) result.options = options;
     return result;
   });
+
+  const rawOnWatch = config.onWatch || {};
+  const onWatch = {
+    enabled: Boolean(rawOnWatch.enabled),
+    serverUrl: String(rawOnWatch.serverUrl ?? DEFAULT_ONWATCH.serverUrl).trim(),
+    authMode: String(rawOnWatch.authMode ?? DEFAULT_ONWATCH.authMode),
+    username: String(rawOnWatch.username ?? DEFAULT_ONWATCH.username).trim(),
+    password: String(rawOnWatch.password ?? ""),
+    refreshIntervalSeconds: Number(rawOnWatch.refreshIntervalSeconds) || DEFAULT_ONWATCH.refreshIntervalSeconds,
+  };
+  const rawCompanion = config.companion || {};
+  const companion = {
+    showActivity: rawCompanion.showActivity == null ? DEFAULT_COMPANION.showActivity : Boolean(rawCompanion.showActivity),
+    enableBeeping: rawCompanion.enableBeeping == null ? DEFAULT_COMPANION.enableBeeping : Boolean(rawCompanion.enableBeeping),
+    beepVolume: rawCompanion.beepVolume == null ? DEFAULT_COMPANION.beepVolume : Number(rawCompanion.beepVolume),
+    completionSound: String(rawCompanion.completionSound ?? DEFAULT_COMPANION.completionSound),
+  };
   return {
     version: Number(config.version) || 1,
     agentProviders: providers,
     agents,
+    onWatch,
+    companion,
   };
 }
 
@@ -163,6 +198,28 @@ function providerMap(draft) {
 export function validateDraft(draft) {
   const errors = [];
   const push = (section, index, field, message) => errors.push({ section, index, field, message });
+
+  try {
+    const parsed = new URL(draft.onWatch.serverUrl);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error("invalid URL");
+  } catch {
+    push("general", 0, "serverUrl", "Enter an absolute HTTP or HTTPS URL without credentials");
+  }
+  if (!["trusted_proxy", "basic", "none"].includes(draft.onWatch.authMode)) {
+    push("general", 0, "authMode", "Select a supported authentication mode");
+  }
+  if (draft.onWatch.authMode === "basic" && !draft.onWatch.username.trim()) {
+    push("general", 0, "username", "Username is required for Basic Auth");
+  }
+  if (![30, 60, 300].includes(draft.onWatch.refreshIntervalSeconds)) {
+    push("general", 0, "refreshIntervalSeconds", "Select a supported refresh interval");
+  }
+  if (!Number.isFinite(draft.companion.beepVolume) || draft.companion.beepVolume < 0 || draft.companion.beepVolume > 1) {
+    push("activity", 0, "beepVolume", "Volume must be between 0 and 1");
+  }
+  if (!["chime", "bell", "ding", "marimba", "pop"].includes(draft.companion.completionSound)) {
+    push("activity", 0, "completionSound", "Select a supported completion sound");
+  }
 
   const providers = draft.agentProviders || [];
   const providerIds = new Set();
