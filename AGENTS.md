@@ -13,7 +13,7 @@ Run the local server yourself and open the preview in the browser available to t
 
 Before making substantial visual changes, use the Product Design plugin's `get-context` skill when the visual source is unclear or no longer matches the current goal. When the user gives durable prototype-specific design feedback, preferences, or decisions, record them in `AGENTS.md`.
 
-The standalone `/beeper` monitor is a full-viewport dark surface without an outer page title or back link. Keep Provider quota in one column in portrait orientation, render new ECG pulses as they enter from the right and scroll smoothly to the left, and distribute concurrent Session activity beeps evenly across each one-second frame.
+The standalone `/beeper` monitor is a full-viewport dark surface without an outer page title or back link. Keep Provider quota in one column in portrait orientation. Active Session labels use large full-width rows, one Session per row, without an elapsed-time/countdown subtitle; retrigger the approved bright highlight on each activity frame and fade it to the resting colors over ten seconds. Render exactly one ECG pulse per Session in each one-second frame regardless of `eventCount`. When a frame has multiple active Sessions, distribute both their ECG pulses and activity beeps at the same evenly spaced offsets within that second; pulses enter from the right and scroll smoothly to the left.
 
 When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.
 

@@ -1,3 +1,5 @@
+import { pulsePlaybackOffsets } from "./schedule.js";
+
 export const NOTE_POOL = [
   { name: "C5", frequency: 523.25 },
   { name: "D5", frequency: 587.33 },
@@ -53,7 +55,11 @@ export function formatDuration(seconds) {
 export function activitySessions(current, frame, now = Date.now()) {
   const next = new Map(current);
   for (const session of frame?.sessions || []) {
-    next.set(session.sessionId, { ...session, expiresAt: now + 5 * 60 * 1000 });
+    next.set(session.sessionId, {
+      ...session,
+      lastActiveAt: now,
+      expiresAt: now + 5 * 60 * 1000,
+    });
   }
   for (const [id, session] of next) {
     if (session.expiresAt <= now) next.delete(id);
@@ -82,21 +88,16 @@ function baselineMotion(sampleTimeMs, active) {
 }
 
 export function activityPulsesForFrame(frame, now = Date.now()) {
-  const pulses = [];
   const sessions = [...(frame?.sessions || [])].sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
-  sessions.forEach((session, sessionIndex) => {
-    const eventCount = Math.max(1, Math.min(8, Math.floor(Number(session.eventCount) || 1)));
-    const spacing = Math.min(80, 720 / eventCount);
+  const offsets = pulsePlaybackOffsets(sessions.length);
+  return sessions.map((session, sessionIndex) => {
     const baseAmplitude = 0.88 + (hashSessionId(session.sessionId) % 18) / 100;
-    for (let index = 0; index < eventCount; index += 1) {
-      pulses.push({
-        at: now + index * spacing + sessionIndex * 12,
-        amplitude: session.completed && index === eventCount - 1 ? 1.18 : baseAmplitude,
-        sessionId: session.sessionId,
-      });
-    }
+    return {
+      at: now + offsets[sessionIndex] * 1000,
+      amplitude: session.completed ? 1.18 : baseAmplitude,
+      sessionId: session.sessionId,
+    };
   });
-  return pulses.sort((a, b) => a.at - b.at || String(a.sessionId).localeCompare(String(b.sessionId)));
 }
 
 export function pruneActivityPulses(pulses, now = Date.now()) {

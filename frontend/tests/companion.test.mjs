@@ -36,24 +36,34 @@ test("session notes are stable and activity expires after five minutes", () => {
 	assert.deepEqual(noteForSession("ses_abc"), noteForSession("ses_abc"));
 	const first = activitySessions(new Map(), { sessions: [{ sessionId: "ses_abc", eventCount: 3 }] }, 1000);
 	assert.equal(first.size, 1);
+	assert.equal(first.get("ses_abc").lastActiveAt, 1000);
+	const refreshed = activitySessions(first, { sessions: [{ sessionId: "ses_abc", eventCount: 9 }] }, 2000);
+	assert.equal(refreshed.get("ses_abc").lastActiveAt, 2000);
 	assert.equal(activitySessions(first, { sessions: [] }, 300999).size, 1);
 	assert.equal(activitySessions(first, { sessions: [] }, 301000).size, 0);
 });
 
-test("quota labels and activity waveform helpers are deterministic", () => {
+test("each active session creates one evenly spaced waveform pulse per frame", () => {
 	assert.equal(formatDuration(5 * 86400 + 2 * 3600), "5d 2h");
 	assert.equal(formatDuration(3 * 3600 + 12 * 60), "3h 12m");
 	const now = Date.parse("2026-08-11T10:00:01.000Z");
 	const frame = { sessions: [{
 		sessionId: "ses_abc",
-		eventCount: 3,
+		eventCount: 18,
 		lastEventAt: "2026-08-11T10:00:00.900Z",
 		completed: false,
 	}] };
 	const pulses = activityPulsesForFrame(frame, now);
-	assert.equal(pulses.length, 3);
+	assert.equal(pulses.length, 1);
 	assert.deepEqual(pulses, activityPulsesForFrame(frame, now));
-	assert.deepEqual(pulses.map((pulse) => pulse.at), [now, now + 80, now + 160]);
+	assert.deepEqual(pulses.map((pulse) => pulse.at), [now]);
+	const concurrent = activityPulsesForFrame({ sessions: [
+		{ sessionId: "ses_c", eventCount: 7, completed: false },
+		{ sessionId: "ses_a", eventCount: 1, completed: false },
+		{ sessionId: "ses_b", eventCount: 4, completed: false },
+	] }, now);
+	assert.deepEqual(concurrent.map((pulse) => pulse.sessionId), ["ses_a", "ses_b", "ses_c"]);
+	assert.deepEqual(concurrent.map((pulse) => pulse.at), [now, now + 1000 / 3, now + 2000 / 3]);
 	assert.notEqual(waveformPoints(pulses, now), waveformPoints([], now));
 	assert.notEqual(waveformPoints(pulses, now), waveformPoints(pulses, now + 1000));
 	const peak = (points) => points.split(" ").map((point) => point.split(",").map(Number)).reduce((best, point) => point[1] < best[1] ? point : best);
@@ -165,7 +175,11 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.equal((source.match(/new EventSource/g) || []).length, 1);
 	assert.ok(source.includes('new EventSource("/v1/activity/events")'));
 	assert.ok(source.includes("activityPulsesForFrame(frame, receivedAt)"));
-	assert.ok(source.includes("pulsePlaybackOffsets(pulseSessions.length)"));
+	assert.ok(source.includes("pulsePlaybackOffsets(sessions.length)"));
+	assert.ok(source.includes('className="companion-thread-row"'));
+	assert.ok(source.includes('className="companion-thread-title"'));
+	assert.ok(!source.includes("companion-thread-meta"));
+	assert.ok(styles.includes("companion-thread-flash 10s"));
 	assert.ok(source.includes('className="companion-resize-handle"'));
 	assert.ok(source.includes("agenthub.companion.size.v1"));
 	assert.ok(styles.includes("@container companion-card (min-width: 560px)"));

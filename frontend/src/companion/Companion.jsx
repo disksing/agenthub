@@ -221,27 +221,26 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
     source.onmessage = (message) => {
       if (disposed) return;
       const frame = JSON.parse(message.data);
+      const receivedAt = Date.now();
       if (sequence.current && frame.sequence !== sequence.current + 1) {
         setActiveSessions(new Map());
         setActivityPulses([]);
       }
       sequence.current = frame.sequence;
-      setActiveSessions((current) => activitySessions(current, frame));
-      const receivedAt = Date.now();
+      setActiveSessions((current) => activitySessions(current, frame, receivedAt));
       setActivityPulses((current) => pruneActivityPulses([
         ...current,
         ...activityPulsesForFrame(frame, receivedAt),
       ], receivedAt));
       if (!companion.enableBeeping) return;
-      const sessions = frame.sessions || [];
-      sessions.filter((session) => session.completed).forEach(() => {
-        tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
-      });
-      const pulseSessions = sessions
-        .filter((session) => !session.completed)
+      const sessions = [...(frame.sessions || [])]
         .sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
-      const offsets = pulsePlaybackOffsets(pulseSessions.length);
-      pulseSessions.forEach((session, index) => {
+      const offsets = pulsePlaybackOffsets(sessions.length);
+      sessions.forEach((session, index) => {
+        if (session.completed) {
+          tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
+          return;
+        }
         tonePlayer.current.pulse(session.sessionId, companion.beepVolume, offsets[index]);
       });
       setAudioBlocked(tonePlayer.current.status() !== "running");
@@ -452,8 +451,13 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
               </div>
               <div className="companion-thread-stat"><strong>{activeList.length}</strong><span>active threads · last 5 min</span></div>
               <ActivityWaveform pulses={activityPulses} live={activityState === "live"} />
-              <div className="companion-thread-chips">
-                {activeList.map((session) => <span key={session.sessionId}>{session.title || session.sessionId.slice(0, 8)} {noteForSession(session.sessionId).name}</span>)}
+              <div className="companion-thread-list">
+                {activeList.map((session) => (
+                  <div className="companion-thread-row" key={`${session.sessionId}:${session.lastActiveAt}`}>
+                    <span className="companion-thread-title">{session.title || session.sessionId.slice(0, 8)}</span>
+                    <span className="companion-thread-note">{noteForSession(session.sessionId).name}</span>
+                  </div>
+                ))}
                 {!activeList.length ? <span className="idle">Waiting for activity</span> : null}
               </div>
               <div className="companion-controls-grid">

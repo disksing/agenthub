@@ -2409,9 +2409,72 @@ details[open] > summary > .note-chevron {
 
 @keyframes companion-scan { from { transform: translateX(-100%); } to { transform: translateX(480%); } }
 
-.companion-thread-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 21px; margin: 5px 0 11px; }
-.companion-thread-chips span { padding: 2px 6px; border: 1px solid rgba(57, 211, 192, 0.25); border-radius: 5px; background: rgba(57, 211, 192, 0.1); color: var(--companion-glow); font: 700 9.5px "SF Mono", Menlo, monospace; }
-.companion-thread-chips span.idle { border-color: transparent; background: transparent; color: var(--companion-muted); font-family: inherit; font-weight: 500; }
+.companion-thread-list { display: grid; gap: 10px; min-height: 21px; margin: 5px 0 11px; }
+.companion-thread-row {
+  display: grid;
+  width: 100%;
+  min-height: 58px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 13px;
+  border: 1px solid rgba(57, 211, 192, 0.2);
+  border-radius: 9px;
+  background: rgba(57, 211, 192, 0.055);
+  color: #9cc5bd;
+  animation: companion-thread-flash 10s cubic-bezier(0.18, 0.72, 0.2, 1) forwards;
+}
+.companion-thread-title {
+  overflow: hidden;
+  color: inherit;
+  font: 500 15px "SF Mono", Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: companion-thread-title-flash 10s cubic-bezier(0.18, 0.72, 0.2, 1) forwards;
+}
+.companion-thread-note {
+  min-width: 38px;
+  color: #4fce8d;
+  font: 500 13px "SF Mono", Menlo, monospace;
+  text-align: right;
+}
+.companion-thread-list .idle { color: var(--companion-muted); font-size: 10px; font-weight: 500; }
+
+@keyframes companion-thread-flash {
+  0%, 4% {
+    border-color: rgba(188, 255, 245, 1);
+    background: rgba(57, 211, 192, 0.38);
+    color: #fff;
+    box-shadow:
+      0 0 0 1px rgba(166, 255, 241, 0.52),
+      0 0 38px rgba(57, 211, 192, 0.42),
+      inset 0 0 22px rgba(166, 255, 241, 0.12);
+  }
+  18% {
+    border-color: rgba(101, 239, 218, 0.76);
+    background: rgba(57, 211, 192, 0.2);
+    color: #dcfff9;
+    box-shadow: 0 0 24px rgba(57, 211, 192, 0.18);
+  }
+  100% {
+    border-color: rgba(57, 211, 192, 0.2);
+    background: rgba(57, 211, 192, 0.055);
+    color: #9cc5bd;
+    box-shadow: 0 0 0 rgba(57, 211, 192, 0);
+  }
+}
+
+@keyframes companion-thread-title-flash {
+  0%, 4% {
+    color: #fff;
+    text-shadow:
+      0 0 8px rgba(225, 255, 251, 1),
+      0 0 18px rgba(126, 255, 235, 1),
+      0 0 30px rgba(57, 211, 192, 0.66);
+  }
+  18% { color: #d4fff8; text-shadow: 0 0 10px rgba(57, 211, 192, 0.62); }
+  100% { color: #9cc5bd; text-shadow: 0 0 0 rgba(57, 211, 192, 0); }
+}
 
 .companion-control-row {
   display: flex;
@@ -2557,7 +2620,7 @@ details[open] > summary > .note-chevron {
   .companion-dark { padding-top: 10px; padding-bottom: 9px; }
   .companion-thread-stat { margin-top: 5px; }
   .companion-ecg svg { height: 58px; }
-  .companion-thread-chips { margin-bottom: 7px; }
+  .companion-thread-list { margin-bottom: 7px; }
   .companion-control-row { min-height: 39px; padding-top: 5px; padding-bottom: 5px; }
 }
 
@@ -2636,4 +2699,9 @@ details[open] > summary > .note-chevron {
 @media (max-width: 520px) {
   .companion-spark { width: 40px; }
   .companion-cycle { min-width: 82px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-thread-row,
+  .companion-thread-title { animation-duration: 0.01ms; }
 }

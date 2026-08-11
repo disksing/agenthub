@@ -146,9 +146,12 @@ Its header can open the same interface in a new tab at `/beeper`. That
 standalone monitor uses the whole viewport as a dark surface, keeps quota
 providers in one column in portrait orientation, and still provides settings
 access. Its activity waveform is driven by the global AgentHub activity SSE
-stream: new pulses enter at the right and scroll smoothly to the left. Activity
-beeps from concurrent Sessions are spread evenly across each one-second frame,
-and completion playback uses the six bundled Codex Beeper MP3 sounds.
+stream. Each Session creates one pulse per one-second frame regardless of its
+underlying event count; concurrent Session pulses enter at the right, share the
+same evenly spaced schedule as their activity beeps, and scroll smoothly to the
+left. Active Session labels use one full-width row each and brighten on new
+activity before fading back over ten seconds. Completion playback uses the six
+bundled Codex Beeper MP3 sounds.
 
 A provider wraps a local agent runtime or protocol; an agent references one provider and holds its concrete launch options. An agent has no separate id: its `name` is required (up to 80 characters), is unique case-insensitively after trimming surrounding whitespace, and is the only reference key — the config, the API, the CLI and session records all use it. Every session is created with an explicit agent name (`POST /v1/sessions` requires `agentName`, and the CLI requires `--agent`); name matching is case-insensitive and sessions record the canonical configured spelling. An unknown, missing, or disabled-provider agent fails with a clear error instead of being routed elsewhere.
 
