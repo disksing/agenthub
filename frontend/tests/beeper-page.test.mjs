@@ -38,6 +38,6 @@ test("standalone Beeper layout fills its page and keeps responsive card queries"
 	assert.ok(styles.includes("@container companion-card (min-width: 680px)"));
 	assert.ok(styles.includes("@container companion-card (max-height: 390px)"));
 	assert.ok(styles.includes(".companion-thread-list { display: grid"));
-	assert.ok(styles.includes("min-height: 58px"));
+	assert.ok(styles.includes("min-height: 40px"));
 	assert.ok(styles.includes("background: rgba(57, 211, 192, 0.38)"));
 });

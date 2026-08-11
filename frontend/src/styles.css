@@ -2413,11 +2413,11 @@ details[open] > summary > .note-chevron {
 .companion-thread-row {
   display: grid;
   width: 100%;
-  min-height: 58px;
+  min-height: 40px;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  padding: 10px 13px;
+  padding: 8px 13px;
   border: 1px solid rgba(57, 211, 192, 0.2);
   border-radius: 9px;
   background: rgba(57, 211, 192, 0.055);
