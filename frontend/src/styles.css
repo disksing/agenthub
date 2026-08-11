@@ -2427,7 +2427,7 @@ details[open] > summary > .note-chevron {
 .companion-thread-title {
   overflow: hidden;
   color: inherit;
-  font: 500 15px "SF Mono", Menlo, monospace;
+  font: 500 13px "SF Mono", Menlo, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
   animation: companion-thread-title-flash 10s cubic-bezier(0.18, 0.72, 0.2, 1) forwards;
