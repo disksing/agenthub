@@ -142,9 +142,12 @@ leftward/rightward direction from that position so the card remains on-screen.
 The open card can be resized from its outward corner; the saved size is clamped
 to the available viewport and its controls, waveform, quota columns, and
 scrolling layout respond to narrower, shorter, or wider dimensions.
-Its header can open the same interface in a new tab at `/beeper`, where the
-responsive card fills a dedicated page and still provides settings access.
-Its activity waveform is driven by the global AgentHub activity SSE stream,
+Its header can open the same interface in a new tab at `/beeper`. That
+standalone monitor uses the whole viewport as a dark surface, keeps quota
+providers in one column in portrait orientation, and still provides settings
+access. Its activity waveform is driven by the global AgentHub activity SSE
+stream: new pulses enter at the right and scroll smoothly to the left. Activity
+beeps from concurrent Sessions are spread evenly across each one-second frame,
 and completion playback uses the six bundled Codex Beeper MP3 sounds.
 
 A provider wraps a local agent runtime or protocol; an agent references one provider and holds its concrete launch options. An agent has no separate id: its `name` is required (up to 80 characters), is unique case-insensitively after trimming surrounding whitespace, and is the only reference key — the config, the API, the CLI and session records all use it. Every session is created with an explicit agent name (`POST /v1/sessions` requires `agentName`, and the CLI requires `--agent`); name matching is case-insensitive and sessions record the canonical configured spelling. An unknown, missing, or disabled-provider agent fails with a clear error instead of being routed elsewhere.

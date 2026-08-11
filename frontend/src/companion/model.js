@@ -86,13 +86,11 @@ export function activityPulsesForFrame(frame, now = Date.now()) {
   const sessions = [...(frame?.sessions || [])].sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
   sessions.forEach((session, sessionIndex) => {
     const eventCount = Math.max(1, Math.min(8, Math.floor(Number(session.eventCount) || 1)));
-    const parsedAt = Date.parse(session.lastEventAt || "");
-    const baseAt = Number.isFinite(parsedAt) ? clamp(parsedAt, now - 1000, now) : now;
     const spacing = Math.min(80, 720 / eventCount);
     const baseAmplitude = 0.88 + (hashSessionId(session.sessionId) % 18) / 100;
     for (let index = 0; index < eventCount; index += 1) {
       pulses.push({
-        at: baseAt - (eventCount - index - 1) * spacing - sessionIndex * 12,
+        at: now + index * spacing + sessionIndex * 12,
         amplitude: session.completed && index === eventCount - 1 ? 1.18 : baseAmplitude,
         sessionId: session.sessionId,
       });
@@ -105,32 +103,48 @@ export function pruneActivityPulses(pulses, now = Date.now()) {
   return (pulses || []).filter((pulse) => now - pulse.at < ACTIVITY_VISIBLE_MS + ACTIVITY_LEAD_MS);
 }
 
-function pulseValue(ageOffset) {
-  for (let index = 0; index < PULSE_SHAPE.length - 1; index += 1) {
-    const [olderOffset, olderValue] = PULSE_SHAPE[index];
-    const [newerOffset, newerValue] = PULSE_SHAPE[index + 1];
-    if (ageOffset <= olderOffset && ageOffset >= newerOffset) {
-      const progress = (olderOffset - ageOffset) / (olderOffset - newerOffset);
-      return olderValue + (newerValue - olderValue) * progress;
-    }
-  }
-  return 0;
+function waveformY(sampleTime, pulseMotion, baseline, amplitude, active) {
+  const motion = clamp(baselineMotion(sampleTime, active) + pulseMotion, -1.15, 1.15);
+  return baseline - motion * amplitude;
+}
+
+function waveformPulseSegment(pulse, now, width, baseline, amplitude, active) {
+  const pulseAge = now - pulse.at;
+  const centerX = width * (1 - pulseAge / ACTIVITY_VISIBLE_MS);
+  const points = PULSE_SHAPE.map(([ageOffset, value]) => ({
+    x: centerX - ageOffset / ACTIVITY_VISIBLE_MS * width,
+    y: waveformY(pulse.at - ageOffset, value * pulse.amplitude, baseline, amplitude, active),
+  }));
+  return {
+    startX: Math.min(...points.map((point) => point.x)),
+    endX: Math.max(...points.map((point) => point.x)),
+    points,
+  };
 }
 
 export function waveformPoints(pulses = [], now = Date.now(), width = 700, height = 86, active = true) {
   const baseline = height * 0.54;
   const amplitude = height * 0.32;
-  const visiblePulses = pruneActivityPulses(pulses, now);
+  const segments = pruneActivityPulses(pulses, now)
+    .map((pulse) => waveformPulseSegment(pulse, now, width, baseline, amplitude, active))
+    .filter((segment) => segment.endX >= -16 && segment.startX <= width + 16)
+    .sort((a, b) => a.startX - b.startX);
   const points = [];
-  for (let x = 0; x <= width; x += 2) {
+  let x = 0;
+  let segmentIndex = 0;
+  while (x <= width) {
+    while (segmentIndex < segments.length && segments[segmentIndex].endX < x) segmentIndex += 1;
+    if (segmentIndex < segments.length && segments[segmentIndex].startX <= x) {
+      points.push(...segments[segmentIndex].points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`));
+      x = Math.max(x + 2, segments[segmentIndex].endX + 2);
+      segmentIndex += 1;
+      continue;
+    }
     const age = ACTIVITY_VISIBLE_MS * (1 - x / width);
     const sampleTime = now - age;
-    const pulseMotion = visiblePulses.reduce((sum, pulse) => (
-      sum + pulseValue(age - (now - pulse.at)) * pulse.amplitude
-    ), 0);
-    const motion = clamp(baselineMotion(sampleTime, active) + pulseMotion, -1.15, 1.15);
-    const y = baseline - motion * amplitude;
+    const y = waveformY(sampleTime, 0, baseline, amplitude, active);
     points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    x += 2;
   }
   return points.join(" ");
 }

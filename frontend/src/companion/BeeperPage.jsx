@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, SpeakerHigh } from "@phosphor-icons/react";
 import { SettingsModal } from "../settings/SettingsModal.jsx";
 import { Companion } from "./Companion.jsx";
 
@@ -13,13 +12,6 @@ export function BeeperPage() {
 
   return (
     <main className="beeper-page">
-      <header className="beeper-page-header">
-        <div className="beeper-page-title">
-          <span className="beeper-page-mark"><SpeakerHigh size={20} weight="fill" /></span>
-          <div><small>AgentHub</small><h1>Beeper</h1></div>
-        </div>
-        <a href="/" className="beeper-back-link"><ArrowLeft size={16} />Back to AgentHub</a>
-      </header>
       <Companion
         standalone
         revision={companionRevision}

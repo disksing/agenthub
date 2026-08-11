@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { COMPLETION_SOUNDS, completionSoundURL, TonePlayer } from "../src/companion/audio.js";
+import { COMPLETION_SOUNDS, completionSoundURL, pulsePlaybackOffsets, TonePlayer } from "../src/companion/audio.js";
 import {
 	activityPulsesForFrame,
 	activitySessions,
@@ -53,9 +53,23 @@ test("quota labels and activity waveform helpers are deterministic", () => {
 	const pulses = activityPulsesForFrame(frame, now);
 	assert.equal(pulses.length, 3);
 	assert.deepEqual(pulses, activityPulsesForFrame(frame, now));
+	assert.deepEqual(pulses.map((pulse) => pulse.at), [now, now + 80, now + 160]);
 	assert.notEqual(waveformPoints(pulses, now), waveformPoints([], now));
 	assert.notEqual(waveformPoints(pulses, now), waveformPoints(pulses, now + 1000));
+	const peak = (points) => points.split(" ").map((point) => point.split(",").map(Number)).reduce((best, point) => point[1] < best[1] ? point : best);
+	const enteringPeak = peak(waveformPoints([pulses[0]], now));
+	const scrolledPeak = peak(waveformPoints([pulses[0]], now + 500));
+	assert.ok(scrolledPeak[0] < enteringPeak[0]);
+	assert.equal(scrolledPeak[1], enteringPeak[1]);
 	assert.equal(pruneActivityPulses(pulses, now + 10000).length, 0);
+});
+
+test("activity beeps are evenly spaced across each one-second frame", () => {
+	assert.deepEqual(pulsePlaybackOffsets(0), []);
+	assert.deepEqual(pulsePlaybackOffsets(1), [0]);
+	assert.deepEqual(pulsePlaybackOffsets(2), [0, 0.5]);
+	assert.deepEqual(pulsePlaybackOffsets(3), [0, 1 / 3, 2 / 3]);
+	assert.deepEqual(pulsePlaybackOffsets(4), [0, 0.25, 0.5, 0.75]);
 });
 
 test("companion position round-trips and card expands away from viewport edges", () => {
@@ -151,6 +165,7 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.equal((source.match(/new EventSource/g) || []).length, 1);
 	assert.ok(source.includes('new EventSource("/v1/activity/events")'));
 	assert.ok(source.includes("activityPulsesForFrame(frame, receivedAt)"));
+	assert.ok(source.includes("pulsePlaybackOffsets(pulseSessions.length)"));
 	assert.ok(source.includes('className="companion-resize-handle"'));
 	assert.ok(source.includes("agenthub.companion.size.v1"));
 	assert.ok(styles.includes("@container companion-card (min-width: 560px)"));

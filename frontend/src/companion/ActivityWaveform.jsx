@@ -5,8 +5,13 @@ export function ActivityWaveform({ pulses, live }) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 50);
-    return () => window.clearInterval(timer);
+    let frame;
+    const tick = () => {
+      setNow(Date.now());
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   const points = useMemo(() => waveformPoints(pulses, now, 700, 86, live), [pulses, now, live]);

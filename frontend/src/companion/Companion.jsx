@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowSquareOut, Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { api } from "../api.js";
 import { BEEPER_PATH } from "../routes.js";
-import { COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio.js";
+import { COMPLETION_SOUNDS, normalizeCompletionSound, pulsePlaybackOffsets, TonePlayer } from "./audio.js";
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
   activityPulsesForFrame, activitySessions, companionPlacement, companionPositionFromPixels,
@@ -234,10 +234,15 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
       ], receivedAt));
       if (!companion.enableBeeping) return;
       const sessions = frame.sessions || [];
-      const spacing = sessions.length > 1 ? Math.min(0.8 / sessions.length, 0.08) : 0;
-      sessions.forEach((session, index) => {
-        if (session.completed) tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
-        else tonePlayer.current.pulse(session.sessionId, companion.beepVolume, index * spacing);
+      sessions.filter((session) => session.completed).forEach(() => {
+        tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
+      });
+      const pulseSessions = sessions
+        .filter((session) => !session.completed)
+        .sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
+      const offsets = pulsePlaybackOffsets(pulseSessions.length);
+      pulseSessions.forEach((session, index) => {
+        tonePlayer.current.pulse(session.sessionId, companion.beepVolume, offsets[index]);
       });
       setAudioBlocked(tonePlayer.current.status() !== "running");
     };

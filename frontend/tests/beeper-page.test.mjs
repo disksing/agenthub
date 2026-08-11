@@ -23,6 +23,8 @@ test("the app selects a standalone page that reuses Companion", async () => {
 	assert.ok(page.includes("<Companion"));
 	assert.ok(page.includes("standalone"));
 	assert.ok(page.includes("<SettingsModal"));
+	assert.ok(!page.includes("beeper-page-header"));
+	assert.ok(!page.includes("Back to AgentHub"));
 	assert.ok(companion.includes('target="_blank"'));
 	assert.ok(companion.includes('aria-label="Open Beeper in new page"'));
 });
@@ -31,6 +33,8 @@ test("standalone Beeper layout fills its page and keeps responsive card queries"
 	const styles = await readFile(path.join(frontendRoot, "src", "styles.css"), "utf8");
 	assert.ok(styles.includes(".beeper-page"));
 	assert.ok(styles.includes(".companion-layer.standalone"));
+	assert.ok(styles.includes("@media (orientation: portrait)"));
+	assert.ok(styles.includes(".companion-layer.standalone .companion-provider-grid"));
 	assert.ok(styles.includes("@container companion-card (min-width: 680px)"));
 	assert.ok(styles.includes("@container companion-card (max-height: 390px)"));
 });

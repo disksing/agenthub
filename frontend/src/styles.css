@@ -2563,85 +2563,51 @@ details[open] > summary > .note-chevron {
 
 /* Standalone Beeper page */
 .beeper-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: clamp(12px, 2vh, 20px);
   width: 100%;
   height: 100vh;
   height: 100dvh;
-  padding: clamp(12px, 2.4vw, 28px);
   overflow: hidden;
-  background:
-    radial-gradient(circle at 12% 8%, rgba(57, 211, 192, 0.13), transparent 30%),
-    linear-gradient(145deg, #eaf3f0 0%, #f7f9f8 46%, #e6efec 100%);
+  background: var(--companion-bg, #0f1717);
 }
-
-.beeper-page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  width: min(1120px, 100%);
-  margin: 0 auto;
-}
-
-.beeper-page-title { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.beeper-page-title div { min-width: 0; }
-.beeper-page-title small { display: block; color: #687570; font-size: 9px; font-weight: 750; letter-spacing: 0.14em; text-transform: uppercase; }
-.beeper-page-title h1 { margin: 1px 0 0; color: #14201e; font-size: clamp(20px, 2.5vw, 27px); line-height: 1; letter-spacing: -0.035em; }
-
-.beeper-page-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 12px;
-  background: #13211e;
-  color: #39d3c0;
-  box-shadow: 0 8px 24px rgba(15, 23, 23, 0.18);
-}
-
-.beeper-back-link {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid rgba(22, 46, 41, 0.14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.68);
-  color: #36524b;
-  font-size: 11px;
-  font-weight: 700;
-  text-decoration: none;
-  backdrop-filter: blur(8px);
-}
-
-.beeper-back-link:hover,
-.beeper-back-link:focus-visible { border-color: #1e8f82; color: #0b746b; outline: none; }
 
 .companion-layer.standalone {
   position: static;
   z-index: auto;
-  width: min(1120px, 100%);
+  width: 100%;
   height: 100%;
   min-height: 0;
-  margin: 0 auto;
 }
 
 .companion-layer.standalone .companion-card {
   width: 100%;
   height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: var(--companion-bg);
+  box-shadow: none;
   animation: none;
 }
 
-@media (max-width: 520px) {
-  .beeper-page { gap: 10px; padding: 10px; }
-  .beeper-page-header { gap: 10px; }
-  .beeper-page-mark { width: 34px; height: 34px; border-radius: 10px; }
-  .beeper-back-link { min-height: 32px; padding: 0 10px; }
-  .beeper-back-link svg { display: none; }
+.companion-layer.standalone .companion-card-header {
+  border-color: var(--companion-line);
+  background: var(--companion-bg);
+}
+
+.companion-layer.standalone .companion-header-actions button:hover,
+.companion-layer.standalone .companion-header-actions button:focus-visible {
+  background: var(--companion-surface);
+  color: var(--companion-ink);
+}
+
+@media (orientation: portrait) {
+  .companion-layer.standalone .companion-provider-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .companion-layer.standalone .companion-provider:nth-child(2) {
+    border-top: 1px solid var(--companion-line);
+  }
 }
 
 /* Companion settings sections */
