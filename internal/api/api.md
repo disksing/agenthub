@@ -325,6 +325,7 @@ only writer) and applies it in memory.
       "showActivity": true,
       "enableBeeping": true,
       "beepVolume": 0.28,
+      "beepChord": "c-major",
       "completionSound": "completed-voice"
     }
   }
@@ -340,8 +341,15 @@ only writer) and applies it in memory.
   refresh is 30, 60 or 300 seconds. Basic Auth requires a username and, when
   enabled, a password. Because GET responses redact the password, an empty
   Basic password in PUT preserves the currently stored value.
-- **Companion constraints:** `beepVolume` is between 0 and 1 and
-  `completionSound` is `completed-voice`, `done-for-you-girl`,
+- **Companion constraints:** `beepVolume` is between 0 and 1. `beepChord` is
+  one of the 12 major triads (`c-major`, `db-major`, `d-major`, `eb-major`,
+  `e-major`, `f-major`, `gb-major`, `g-major`, `ab-major`, `a-major`,
+  `bb-major`, `b-major`) or 12 minor triads (`c-minor`, `cs-minor`, `d-minor`,
+  `eb-minor`, `e-minor`, `f-minor`, `fs-minor`, `g-minor`, `gs-minor`,
+  `a-minor`, `bb-minor`, `b-minor`); an omitted value defaults to `c-major`.
+  Activity tone slots fill octave bands 4, 5, 3, then 6 and remain stable for
+  each active Session until release. `completionSound` is independent of the
+  activity chord and is `completed-voice`, `done-for-you-girl`,
   `light-hearted-message`, `not-bad`, `slow-spring-board` or `smile`.
   Legacy synthesized sound names are migrated to `completed-voice` when read.
 - **Rename semantics:** if an agent disappears while exactly one new agent

@@ -131,6 +131,7 @@ $HOME/.agenthub/config.json
     "showActivity": true,
     "enableBeeping": true,
     "beepVolume": 0.28,
+    "beepChord": "c-major",
     "completionSound": "completed-voice"
   }
 }
@@ -144,7 +145,7 @@ Provider 封装一个本地 Agent 运行时或协议；Agent 引用一个 Provid
 
 推荐使用 Web UI 的 **Settings** 界面管理配置。**Providers** 区块刻意保持极简：只有四个开关用于启用或停用内置 Provider（Codex、Kimi、Grok/Pi、OpenCode），不提供 Provider 增删，也不提供命令、参数、环境变量或其他高级字段的编辑。开关只通过 `PUT /v1/config/providers/{id}` 翻转 `enabled` 标志，底层配置在停用/重新启用后完整保留；旧配置中缺失的内置 Provider 会在首次启用时由 daemon 以规范默认值创建。**Agents** 区块保留结构化、带校验的表单，Provider 命令可用性探测会区分“已启用”与“CLI 可用”。所有修改都通过 daemon API 提交，daemon 仍是配置文件的唯一写入者，无需手动编辑 JSON。
 
-**General** 和 **Activity** 区块用于配置浮动伙伴。Provider 配额只由 daemon 从 OnWatch 拉取，经归一化和按配置间隔缓存后通过 `GET /v1/quota` 暴露；Basic Auth 密码保存在本机权限为 `0600` 的配置文件中，但所有 API 响应都会将其抹除。Session 活动只来自 AgentHub 自身持久化追加的事件，并在 `GET /v1/activity/events` 中按 Session 聚合为一秒一帧。浏览器只保持一条全局 EventSource，为每个活跃 Session 分配稳定音高，通过 Web Audio 合成可选的运行蜂鸣，并播放用户选择的本地 MP3 完成提示音。此功能不会扫描 Codex 或其他 Provider 的原生 Session 文件。
+**General** 和 **Activity** 区块用于配置浮动伙伴。Provider 配额只由 daemon 从 OnWatch 拉取，经归一化和按配置间隔缓存后通过 `GET /v1/quota` 暴露；Basic Auth 密码保存在本机权限为 `0600` 的配置文件中，但所有 API 响应都会将其抹除。Session 活动只来自 AgentHub 自身持久化追加的事件，并在 `GET /v1/activity/events` 中按 Session 聚合为一秒一帧。浏览器只保持一条全局 EventSource，并通过 Web Audio 合成可选的运行蜂鸣。每个活跃 Session 按第 4、5、3、6 八度带的顺序领取所选大三和弦或小三和弦中的第一个可用音高；该音高保持稳定，直到 Session 完成或退出活跃窗口，前 12 个并发 Session 使用互不重复的音位。用户选择的本地 MP3 完成提示音与活动和弦相互独立。此功能不会扫描 Codex 或其他 Provider 的原生 Session 文件。
 
 Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` 中 `available: false` 并附原因），不会出现在新建 Session 的选择中；即使绕过 Web UI 直接调用 API，daemon 也会拒绝用这些 Agent 创建或恢复 Session。停用不会中断已经在运行的 Session，既有 Session 历史仍可查看。
 

@@ -1,19 +1,5 @@
 import { pulsePlaybackOffsets } from "./schedule.js";
-
-export const NOTE_POOL = [
-  { name: "C5", frequency: 523.25 },
-  { name: "D5", frequency: 587.33 },
-  { name: "E5", frequency: 659.25 },
-  { name: "F5", frequency: 698.46 },
-  { name: "G5", frequency: 783.99 },
-  { name: "A5", frequency: 880.0 },
-  { name: "B5", frequency: 987.77 },
-  { name: "C6", frequency: 1046.5 },
-  { name: "D6", frequency: 1174.66 },
-  { name: "E6", frequency: 1318.51 },
-  { name: "F6", frequency: 1396.91 },
-  { name: "G6", frequency: 1567.98 },
-];
+import { chordTonePool } from "./chords.js";
 
 export function hashSessionId(value) {
   let hash = 2166136261;
@@ -24,8 +10,33 @@ export function hashSessionId(value) {
   return hash >>> 0;
 }
 
-export function noteForSession(sessionId) {
-  return NOTE_POOL[hashSessionId(sessionId) % NOTE_POOL.length];
+export class SessionToneAllocator {
+  constructor(slotCount = chordTonePool().length) {
+    this.slotCount = Math.max(1, Math.floor(Number(slotCount) || 1));
+    this.assignments = new Map();
+  }
+
+  assign(sessionId) {
+    const id = String(sessionId || "");
+    if (this.assignments.has(id)) return this.assignments.get(id);
+    const usage = Array(this.slotCount).fill(0);
+    for (const slot of this.assignments.values()) usage[slot] += 1;
+    const minimum = Math.min(...usage);
+    const slot = usage.indexOf(minimum);
+    this.assignments.set(id, slot);
+    return slot;
+  }
+
+  release(sessionId) {
+    this.assignments.delete(String(sessionId || ""));
+  }
+
+  retain(sessionIds) {
+    const active = new Set([...sessionIds].map((value) => String(value || "")));
+    for (const id of this.assignments.keys()) {
+      if (!active.has(id)) this.assignments.delete(id);
+    }
+  }
 }
 
 export function quotaCycleItems(snapshot) {

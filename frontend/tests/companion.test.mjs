@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { COMPLETION_SOUNDS, completionSoundURL, pulsePlaybackOffsets, TonePlayer } from "../src/companion/audio.js";
+import { BEEP_CHORDS, BEEP_OCTAVE_ORDER, chordTonePool, noteForToneSlot } from "../src/companion/chords.js";
 import {
 	activityPulsesForFrame,
 	activitySessions,
@@ -12,10 +13,10 @@ import {
 	companionPositionPixels,
 	formatDuration,
 	normalizeCompanionSize,
-	noteForSession,
 	pruneActivityPulses,
 	quotaCycleItems,
 	resizeCompanionSize,
+	SessionToneAllocator,
 	waveformPoints,
 } from "../src/companion/model.js";
 
@@ -32,8 +33,27 @@ test("quota cycle keeps provider order and skips empty providers", () => {
 	assert.equal(items[1].label, "credits");
 });
 
-test("session notes are stable and activity expires after five minutes", () => {
-	assert.deepEqual(noteForSession("ses_abc"), noteForSession("ses_abc"));
+test("session tone slots fill in octave order and reuse released slots", () => {
+	assert.deepEqual(BEEP_OCTAVE_ORDER, [4, 5, 3, 6]);
+	assert.equal(BEEP_CHORDS.length, 24);
+	assert.deepEqual(chordTonePool("c-major").map((note) => note.name), [
+		"C4", "E4", "G4", "C5", "E5", "G5", "C3", "E3", "G3", "C6", "E6", "G6",
+	]);
+	assert.deepEqual(chordTonePool("d-major").map((note) => note.name).slice(0, 3), ["D4", "F#4", "A4"]);
+	assert.deepEqual(chordTonePool("c-minor").map((note) => note.name).slice(0, 3), ["C4", "Eb4", "G4"]);
+	assert.ok(Math.abs(noteForToneSlot(0).frequency - 261.625565) < 0.0001);
+
+	const allocator = new SessionToneAllocator();
+	assert.deepEqual(Array.from({ length: 12 }, (_, index) => allocator.assign(`ses_${index}`)), [...Array(12).keys()]);
+	assert.equal(allocator.assign("ses_0"), 0);
+	assert.equal(allocator.assign("ses_12"), 0);
+	allocator.release("ses_1");
+	assert.equal(allocator.assign("ses_new"), 1);
+	allocator.retain(["ses_5"]);
+	assert.equal(allocator.assign("ses_after_retain"), 0);
+});
+
+test("activity expires after five minutes", () => {
 	const first = activitySessions(new Map(), { sessions: [{ sessionId: "ses_abc", eventCount: 3 }] }, 1000);
 	assert.equal(first.size, 1);
 	assert.equal(first.get("ses_abc").lastActiveAt, 1000);
@@ -143,10 +163,13 @@ test("TonePlayer uses a suspended Web Audio context only after resume", async ()
 		createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
 	}
 	const player = new TonePlayer(FakeAudioContext);
-	assert.equal(player.pulse("ses_abc"), false);
+	assert.equal(player.pulse(0), false);
 	assert.equal(await player.resume(), true);
-	assert.equal(player.pulse("ses_abc", 0.2, 0.08), true);
+	assert.equal(player.pulse(0, "c-major", 0.2, 0.08), true);
 	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.08));
+	assert.ok(scheduled.some(([kind, frequency]) => kind === "frequency" && Math.abs(frequency - 261.625565) < 0.0001));
+	assert.deepEqual(player.previewChord("c-major", 0.2), [true, true, true]);
+	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.24));
 });
 
 test("TonePlayer plays each bundled Codex Beeper completion sound", async () => {
@@ -174,8 +197,9 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	const styles = await readFile(path.join(frontendRoot, "src", "styles.css"), "utf8");
 	assert.equal((source.match(/new EventSource/g) || []).length, 1);
 	assert.ok(source.includes('new EventSource("/v1/activity/events")'));
-	assert.ok(source.includes("activityPulsesForFrame(frame, receivedAt)"));
+	assert.ok(source.includes("activityPulsesForFrame(assignedFrame, receivedAt)"));
 	assert.ok(source.includes("pulsePlaybackOffsets(sessions.length)"));
+	assert.ok(source.includes("toneAllocator.current.assign(session.sessionId)"));
 	assert.ok(source.includes('className="companion-thread-row"'));
 	assert.ok(source.includes('className="companion-thread-title"'));
 	assert.ok(!source.includes("companion-thread-meta"));

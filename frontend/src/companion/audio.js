@@ -1,4 +1,4 @@
-import { noteForSession } from "./model.js";
+import { chordTonePool, DEFAULT_BEEP_CHORD, noteForToneSlot } from "./chords.js";
 export { pulsePlaybackOffsets } from "./schedule.js";
 
 export const COMPLETION_SOUNDS = [
@@ -51,8 +51,14 @@ export class TonePlayer {
     return contextRunning || mediaReady;
   }
 
-  pulse(sessionId, volume = 0.28, delay = 0) {
-    return this.playFrequency(noteForSession(sessionId).frequency, volume, delay, 0.1);
+  pulse(toneSlot, chord = DEFAULT_BEEP_CHORD, volume = 0.28, delay = 0) {
+    return this.playFrequency(noteForToneSlot(toneSlot, chord).frequency, volume, delay, 0.1);
+  }
+
+  previewChord(chord = DEFAULT_BEEP_CHORD, volume = 0.28) {
+    return chordTonePool(chord).slice(0, 3).map((note, index) => (
+      this.playFrequency(note.frequency, volume, index * 0.12, 0.16)
+    ));
   }
 
   completion(sound = "completed-voice", volume = 0.28) {

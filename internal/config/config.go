@@ -43,10 +43,21 @@ type Companion struct {
 	ShowActivity    bool    `json:"showActivity"`
 	EnableBeeping   bool    `json:"enableBeeping"`
 	BeepVolume      float64 `json:"beepVolume"`
+	BeepChord       string  `json:"beepChord"`
 	CompletionSound string  `json:"completionSound"`
 }
 
 const DefaultCompletionSound = "completed-voice"
+const DefaultBeepChord = "c-major"
+
+var beepChords = map[string]struct{}{
+	"c-major": {}, "db-major": {}, "d-major": {}, "eb-major": {},
+	"e-major": {}, "f-major": {}, "gb-major": {}, "g-major": {},
+	"ab-major": {}, "a-major": {}, "bb-major": {}, "b-major": {},
+	"c-minor": {}, "cs-minor": {}, "d-minor": {}, "eb-minor": {},
+	"e-minor": {}, "f-minor": {}, "fs-minor": {}, "g-minor": {},
+	"gs-minor": {}, "a-minor": {}, "bb-minor": {}, "b-minor": {},
+}
 
 var completionSounds = map[string]struct{}{
 	"completed-voice":       {},
@@ -295,6 +306,7 @@ func defaultCompanion() Companion {
 		ShowActivity:    true,
 		EnableBeeping:   true,
 		BeepVolume:      0.28,
+		BeepChord:       DefaultBeepChord,
 		CompletionSound: DefaultCompletionSound,
 	}
 }
@@ -311,6 +323,9 @@ func (c Config) WithDefaults() Config {
 		c.Companion = defaultCompanion()
 	} else if _, legacy := legacyCompletionSounds[c.Companion.CompletionSound]; legacy {
 		c.Companion.CompletionSound = DefaultCompletionSound
+	}
+	if c.Companion.BeepChord == "" {
+		c.Companion.BeepChord = DefaultBeepChord
 	}
 	return c
 }
@@ -343,6 +358,9 @@ func (value OnWatch) validate() error {
 func (value Companion) validate() error {
 	if value.BeepVolume < 0 || value.BeepVolume > 1 {
 		return errors.New("companion.beepVolume must be between 0 and 1")
+	}
+	if _, ok := beepChords[value.BeepChord]; !ok {
+		return fmt.Errorf("companion.beepChord %q is unsupported", value.BeepChord)
 	}
 	if _, ok := completionSounds[value.CompletionSound]; !ok {
 		return fmt.Errorf("companion.completionSound %q is unsupported", value.CompletionSound)

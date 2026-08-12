@@ -125,7 +125,7 @@ func TestLoadAddsCompanionDefaultsToLegacyConfig(t *testing.T) {
 	if loaded.OnWatch.ServerURL != "http://127.0.0.1:9211" || loaded.OnWatch.RefreshIntervalSeconds != 60 {
 		t.Fatalf("OnWatch defaults = %+v", loaded.OnWatch)
 	}
-	if !loaded.Companion.ShowActivity || !loaded.Companion.EnableBeeping || loaded.Companion.CompletionSound != DefaultCompletionSound {
+	if !loaded.Companion.ShowActivity || !loaded.Companion.EnableBeeping || loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.CompletionSound != DefaultCompletionSound {
 		t.Fatalf("companion defaults = %+v", loaded.Companion)
 	}
 }
@@ -142,6 +142,27 @@ func TestLoadMigratesLegacyCompletionSound(t *testing.T) {
 	}
 	if loaded.Companion.CompletionSound != DefaultCompletionSound {
 		t.Fatalf("legacy completion sound was not migrated: %+v", loaded.Companion)
+	}
+	if loaded.Companion.BeepChord != DefaultBeepChord {
+		t.Fatalf("legacy config did not receive the default beep chord: %+v", loaded.Companion)
+	}
+}
+
+func TestLoadAddsDefaultBeepChordWithoutOverwritingCompanion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}],"companion":{"showActivity":false,"enableBeeping":false,"beepVolume":0,"completionSound":"smile"}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Companion.ShowActivity || loaded.Companion.EnableBeeping || loaded.Companion.BeepVolume != 0 {
+		t.Fatalf("legacy companion controls were overwritten: %+v", loaded.Companion)
+	}
+	if loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.CompletionSound != "smile" {
+		t.Fatalf("legacy companion defaults = %+v", loaded.Companion)
 	}
 }
 
@@ -182,6 +203,11 @@ func TestCompanionConfigValidation(t *testing.T) {
 	cfg.Companion.BeepVolume = 1.1
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepVolume") {
 		t.Fatalf("volume validation = %v", err)
+	}
+	cfg = Defaults()
+	cfg.Companion.BeepChord = "noise"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepChord") {
+		t.Fatalf("beep chord validation = %v", err)
 	}
 }
 
