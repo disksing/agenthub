@@ -211,9 +211,17 @@ POST   /v1/sessions/{id}/interrupt
 POST   /v1/sessions/{id}/stop
 POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
+GET    /v1/sessions/{id}/turns
 ```
 
 事件端点在普通请求下返回分页 JSON，包含 exclusive `after` cursor、`nextAfter`、`hasMore` 和最新 durable cursor；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并通过 `Last-Event-ID` 使用相同的 exclusive cursor 语义。daemon 先建立订阅并捕获 high-water mark，再分页重放完整 durable backlog，最后切换到 live；subscriber overflow 会关闭流，客户端可从最后一个连续 id 重连并从 `events.jsonl` 恢复，daemon 重启后同样有效。SSE 帧使用默认 message 通道，因此未知 event envelope 也会原样传输。
+
+资源编排客户端可在创建请求中提供 `idempotencyKey`，并在 `source.metadata`
+保存 Workspace 实例、资源和代际标识；完全相同的请求在 daemon 重启后仍返回
+原 Session。入站消息可提供稳定 `messageId`，并发或重启重试只会持久化一次。
+Session 的 `inputCapabilities.steer` 明确说明当前 Provider 是否支持活动 Turn
+输入；不支持时调用方应排队。`turns` 端点返回以稳定 event id 为引用的紧凑
+Turn 索引，Session 归档后仍可读取。
 
 ### 消息来源角色
 

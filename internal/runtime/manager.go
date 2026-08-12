@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/disksing/agenthub/internal/config"
@@ -22,6 +23,7 @@ type Manager struct {
 
 type active struct {
 	mu         sync.Mutex
+	inputMu    sync.Mutex
 	adapter    provider.Session
 	turnID     string
 	ready      chan struct{}
@@ -155,13 +157,56 @@ func (m *Manager) SendMessage(id string, input session.MessageInput) (session.Se
 	if value.State == session.StateStopping {
 		return session.Session{}, errors.New("session provider is stopping")
 	}
+	if input.MessageID != "" {
+		previous, accepted, err := m.store.MessageByID(id, input.MessageID)
+		if err != nil {
+			return session.Session{}, err
+		}
+		if accepted {
+			if !reflect.DeepEqual(previous, input) {
+				return session.Session{}, session.ErrMessageIDConflict
+			}
+			return value, nil
+		}
+	}
 	current := value.CurrentTurnID
+	if current != "" && input.Steer && !value.InputCapabilities.Steer {
+		return session.Session{}, errors.New("session provider does not support steering an active turn")
+	}
 	if current != "" && !input.Steer {
 		return session.Session{}, errors.New("session already has an active turn; set steer=true or wait")
 	}
 	run, err := m.ensure(id)
 	if err != nil {
 		return session.Session{}, err
+	}
+	run.inputMu.Lock()
+	defer run.inputMu.Unlock()
+	// Re-read under the per-session input lock. Concurrent retries can both
+	// miss the optimistic lookup above; this second check is the exact-once
+	// boundary for durable message IDs.
+	value, err = m.store.Get(id)
+	if err != nil {
+		return session.Session{}, err
+	}
+	if input.MessageID != "" {
+		previous, accepted, err := m.store.MessageByID(id, input.MessageID)
+		if err != nil {
+			return session.Session{}, err
+		}
+		if accepted {
+			if !reflect.DeepEqual(previous, input) {
+				return session.Session{}, session.ErrMessageIDConflict
+			}
+			return value, nil
+		}
+	}
+	current = value.CurrentTurnID
+	if current != "" && input.Steer && !value.InputCapabilities.Steer {
+		return session.Session{}, errors.New("session provider does not support steering an active turn")
+	}
+	if current != "" && !input.Steer {
+		return session.Session{}, errors.New("session already has an active turn; set steer=true or wait")
 	}
 	turnID := current
 	if turnID == "" {
@@ -376,6 +421,7 @@ func (m *Manager) ensure(id string) (*active, error) {
 				run.withEvent(func(_ string) {
 					_, _ = m.store.Append(id, "session.provider", "", marshal(session.ProviderEventData{
 						AgentName: agent.Name, Provider: providerConfig.Type, ProviderSessionID: nativeID,
+						InputCapabilities: provider.InputCapabilities(providerConfig.Type),
 					}))
 				})
 			},

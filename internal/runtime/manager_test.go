@@ -222,6 +222,55 @@ func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
 	}
 }
 
+func TestManagerConcurrentMessageIDIsAcceptedOnce(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		return &fakeSession{hooks: options.Hooks, holdTurn: true}, nil
+	}
+	input := session.MessageInput{Text: "exactly once", Role: session.MessageRoleUser, MessageID: "msg-stable"}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, sendErr := manager.SendMessage(value.ID, input)
+			errs <- sendErr
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, event := range events {
+		if event.Type == session.EventMessageInput {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("message.input count = %d, want 1", count)
+	}
+	conflict := input
+	conflict.Text = "different payload"
+	if _, err := manager.SendMessage(value.ID, conflict); !errors.Is(err, session.ErrMessageIDConflict) {
+		t.Fatalf("message id conflict = %v", err)
+	}
+}
+
 // TestManagerStartSeesUpdatedLaunchEnvironment pins the ordering the resume
 // endpoint relies on: the environment overlay is durable before the runtime
 // starts, so the provider factory observes the merged environment — the new
