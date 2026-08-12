@@ -1,5 +1,5 @@
 import { chordTonePool, DEFAULT_BEEP_CHORD, noteForToneSlot } from "./chords.js";
-export { pulsePlaybackOffsets } from "./schedule.js";
+export { activityPlaybackPlan } from "./schedule.js";
 
 export const COMPLETION_SOUNDS = [
   { value: "completed-voice", label: "Completed Voice", file: "completed-voice.mp3" },

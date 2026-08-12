@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { COMPLETION_SOUNDS, completionSoundURL, pulsePlaybackOffsets, TonePlayer } from "../src/companion/audio.js";
+import { activityPlaybackPlan, COMPLETION_SOUNDS, completionSoundURL, TonePlayer } from "../src/companion/audio.js";
 import { BEEP_CHORDS, BEEP_OCTAVE_ORDER, chordTonePool, noteForToneSlot } from "../src/companion/chords.js";
 import {
 	activityPulsesForFrame,
@@ -63,7 +63,7 @@ test("activity expires after five minutes", () => {
 	assert.equal(activitySessions(first, { sessions: [] }, 301000).size, 0);
 });
 
-test("each active session creates one evenly spaced waveform pulse per frame", () => {
+test("each active session creates one quantized waveform pulse per frame", () => {
 	assert.equal(formatDuration(5 * 86400 + 2 * 3600), "5d 2h");
 	assert.equal(formatDuration(3 * 3600 + 12 * 60), "3h 12m");
 	const now = Date.parse("2026-08-11T10:00:01.000Z");
@@ -77,13 +77,19 @@ test("each active session creates one evenly spaced waveform pulse per frame", (
 	assert.equal(pulses.length, 1);
 	assert.deepEqual(pulses, activityPulsesForFrame(frame, now));
 	assert.deepEqual(pulses.map((pulse) => pulse.at), [now]);
-	const concurrent = activityPulsesForFrame({ sessions: [
+	const concurrent = activityPulsesForFrame({ sequence: 1, sessions: [
 		{ sessionId: "ses_c", eventCount: 7, completed: false },
 		{ sessionId: "ses_a", eventCount: 1, completed: false },
 		{ sessionId: "ses_b", eventCount: 4, completed: false },
 	] }, now);
 	assert.deepEqual(concurrent.map((pulse) => pulse.sessionId), ["ses_a", "ses_b", "ses_c"]);
-	assert.deepEqual(concurrent.map((pulse) => pulse.at), [now, now + 1000 / 3, now + 2000 / 3]);
+	assert.deepEqual(concurrent.map((pulse) => pulse.at), [now, now + 250, now + 500]);
+	const rotated = activityPulsesForFrame({ sequence: 2, sessions: [
+		{ sessionId: "ses_a" }, { sessionId: "ses_b" }, { sessionId: "ses_c" },
+	] }, now);
+	assert.deepEqual(rotated.map((pulse) => [pulse.sessionId, pulse.at]), [
+		["ses_b", now], ["ses_c", now + 250], ["ses_a", now + 750],
+	]);
 	assert.notEqual(waveformPoints(pulses, now), waveformPoints([], now));
 	assert.notEqual(waveformPoints(pulses, now), waveformPoints(pulses, now + 1000));
 	const peak = (points) => points.split(" ").map((point) => point.split(",").map(Number)).reduce((best, point) => point[1] < best[1] ? point : best);
@@ -94,12 +100,31 @@ test("each active session creates one evenly spaced waveform pulse per frame", (
 	assert.equal(pruneActivityPulses(pulses, now + 10000).length, 0);
 });
 
-test("activity beeps are evenly spaced across each one-second frame", () => {
-	assert.deepEqual(pulsePlaybackOffsets(0), []);
-	assert.deepEqual(pulsePlaybackOffsets(1), [0]);
-	assert.deepEqual(pulsePlaybackOffsets(2), [0, 0.5]);
-	assert.deepEqual(pulsePlaybackOffsets(3), [0, 1 / 3, 2 / 3]);
-	assert.deepEqual(pulsePlaybackOffsets(4), [0, 0.25, 0.5, 0.75]);
+test("activity playback uses deterministic quarter-second patterns and rotation", () => {
+	const plan = (count, sequence) => activityPlaybackPlan(
+		Array.from({ length: count }, (_, index) => String.fromCharCode(65 + index)),
+		sequence,
+	).map(({ item, slot, delay, gain }) => ({ item, slot, delay, gain }));
+	assert.deepEqual(plan(0, 1), []);
+	assert.deepEqual(plan(1, 1).map(({ item, slot, delay }) => [item, slot, delay]), [["A", 0, 0]]);
+	assert.deepEqual(plan(2, 1).map(({ item, slot }) => [item, slot]), [["A", 0], ["B", 2]]);
+	assert.deepEqual(plan(2, 2).map(({ item, slot }) => [item, slot]), [["B", 0], ["A", 2]]);
+	assert.deepEqual(plan(3, 1).map(({ item, slot }) => [item, slot]), [["A", 0], ["B", 1], ["C", 2]]);
+	assert.deepEqual(plan(3, 2).map(({ item, slot }) => [item, slot]), [["B", 0], ["C", 1], ["A", 3]]);
+	assert.deepEqual(plan(3, 3).map(({ item, slot }) => [item, slot]), [["C", 0], ["A", 2], ["B", 3]]);
+	assert.deepEqual(plan(4, 2).map(({ item, slot }) => [item, slot]), [["B", 0], ["C", 1], ["D", 2], ["A", 3]]);
+	assert.deepEqual(plan(5, 1).map(({ item, slot }) => [item, slot]), [["A", 0], ["B", 1], ["C", 2], ["D", 3], ["E", 0]]);
+	assert.deepEqual(plan(5, 2).map(({ item, slot }) => [item, slot]), [["A", 1], ["B", 2], ["C", 3], ["D", 0], ["E", 1]]);
+	for (const count of [1, 2, 3, 4, 5, 12]) {
+		for (const value of plan(count, 3)) {
+			assert.ok([0, 0.25, 0.5, 0.75].includes(value.delay));
+			assert.ok(value.gain > 0 && value.gain <= 1);
+		}
+	}
+	assert.equal(plan(1, 1)[0].gain, 1);
+	assert.equal(plan(4, 1)[1].gain, 0.85);
+	assert.equal(plan(4, 1)[2].gain, 0.92);
+	assert.equal(plan(5, 1)[0].gain, 1 / Math.sqrt(2));
 });
 
 test("companion position round-trips and card expands away from viewport edges", () => {
@@ -198,7 +223,7 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.equal((source.match(/new EventSource/g) || []).length, 1);
 	assert.ok(source.includes('new EventSource("/v1/activity/events")'));
 	assert.ok(source.includes("activityPulsesForFrame(assignedFrame, receivedAt)"));
-	assert.ok(source.includes("pulsePlaybackOffsets(sessions.length)"));
+	assert.ok(source.includes("activityPlaybackPlan(sessions, frame.sequence)"));
 	assert.ok(source.includes("toneAllocator.current.assign(session.sessionId)"));
 	assert.ok(source.includes('className="companion-thread-row"'));
 	assert.ok(source.includes('className="companion-thread-title"'));

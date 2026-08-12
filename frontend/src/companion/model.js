@@ -1,4 +1,4 @@
-import { pulsePlaybackOffsets } from "./schedule.js";
+import { activityPlaybackPlan } from "./schedule.js";
 import { chordTonePool } from "./chords.js";
 
 export function hashSessionId(value) {
@@ -99,12 +99,14 @@ function baselineMotion(sampleTimeMs, active) {
 }
 
 export function activityPulsesForFrame(frame, now = Date.now()) {
-  const sessions = [...(frame?.sessions || [])].sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)));
-  const offsets = pulsePlaybackOffsets(sessions.length);
-  return sessions.map((session, sessionIndex) => {
+  const sessions = [...(frame?.sessions || [])].sort((a, b) => (
+    (Number(a.toneSlot) || 0) - (Number(b.toneSlot) || 0)
+    || String(a.sessionId).localeCompare(String(b.sessionId))
+  ));
+  return activityPlaybackPlan(sessions, frame?.sequence).map(({ item: session, delay }) => {
     const baseAmplitude = 0.88 + (hashSessionId(session.sessionId) % 18) / 100;
     return {
-      at: now + offsets[sessionIndex] * 1000,
+      at: now + delay * 1000,
       amplitude: session.completed ? 1.18 : baseAmplitude,
       sessionId: session.sessionId,
     };

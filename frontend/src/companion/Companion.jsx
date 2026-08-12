@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowSquareOut, Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { api } from "../api.js";
 import { BEEPER_PATH } from "../routes.js";
-import { COMPLETION_SOUNDS, normalizeCompletionSound, pulsePlaybackOffsets, TonePlayer } from "./audio.js";
+import { activityPlaybackPlan, COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio.js";
 import { DEFAULT_BEEP_CHORD, normalizeBeepChord, noteForToneSlot } from "./chords.js";
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
@@ -241,7 +241,8 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
         .map((session) => ({
           ...session,
           toneSlot: toneAllocator.current.assign(session.sessionId),
-        }));
+        }))
+        .sort((a, b) => a.toneSlot - b.toneSlot || a.sessionId.localeCompare(b.sessionId));
       const assignedFrame = { ...frame, sessions };
       setActiveSessions((current) => activitySessions(current, assignedFrame, receivedAt));
       setActivityPulses((current) => pruneActivityPulses([
@@ -252,13 +253,12 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
         toneAllocator.current.release(session.sessionId);
       });
       if (!companion.enableBeeping) return;
-      const offsets = pulsePlaybackOffsets(sessions.length);
-      sessions.forEach((session, index) => {
+      activityPlaybackPlan(sessions, frame.sequence).forEach(({ item: session, delay, gain }) => {
         if (session.completed) {
           tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
           return;
         }
-        tonePlayer.current.pulse(session.toneSlot, companion.beepChord, companion.beepVolume, offsets[index]);
+        tonePlayer.current.pulse(session.toneSlot, companion.beepChord, companion.beepVolume * gain, delay);
       });
       setAudioBlocked(tonePlayer.current.status() !== "running");
     };
