@@ -483,6 +483,19 @@ test("provider noise stays out of the timeline and does not split tool groups", 
   assert.equal(items[0].calls[0].status, "completed");
 });
 
+test("message delivery facts stay out of the conversation timeline", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.input", { role: "user", text: "hello" }, { turnId: "turn_1" }),
+    event("message.delivery", { state: "attempting", attempt: 1 }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "Hi" }, { turnId: "turn_1" }),
+    event("message.delivery", { state: "accepted", attempt: 1 }, { turnId: "turn_1" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["message", "message"]);
+  assert.equal(items[0].text, "hello");
+  assert.equal(items[1].text, "Hi");
+});
+
 test("unknown event types get a safe fallback entry instead of disappearing", () => {
   reset();
   const items = buildTimeline([

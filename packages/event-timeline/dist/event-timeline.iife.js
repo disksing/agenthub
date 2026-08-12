@@ -265,13 +265,14 @@
     daemon_recovery: "daemon recovery",
   };
 
-  // Low-value provider notifications remain in the durable event log but are
-  // intentionally omitted from the conversation timeline. In addition to being
-  // noisy, projecting them would split otherwise consecutive tool calls.
+  // Low-value provider notifications and internal delivery facts remain in the
+  // durable event log but are intentionally omitted from the conversation
+  // timeline. In addition to being noisy, projecting them would split otherwise
+  // consecutive tool calls or surface transport state as a user message.
   // provider.turn.* mirrors the manager-level turn.started/turn.completed
   // lifecycle events, which are the ones rendered as timeline notes.
   function isActivityType(type) {
-    return type === "provider.event" || type === "provider.metadata" || type === "plan.event" ||
+    return type === "message.delivery" || type === "provider.event" || type === "provider.metadata" || type === "plan.event" ||
       type === "provider.stderr" || type === "provider.turn.started" || type === "provider.turn.completed" ||
       type.startsWith("provider.process.");
   }
