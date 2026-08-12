@@ -1075,12 +1075,20 @@ func (s *Server) rejectArchivedSession(w http.ResponseWriter, id string) bool {
 }
 
 type activitySession struct {
-	SessionID   string    `json:"sessionId"`
-	Provider    string    `json:"provider,omitempty"`
-	Title       string    `json:"title,omitempty"`
-	EventCount  int       `json:"eventCount"`
-	Completed   bool      `json:"completed"`
-	LastEventAt time.Time `json:"lastEventAt"`
+	SessionID    string                `json:"sessionId"`
+	Provider     string                `json:"provider,omitempty"`
+	Title        string                `json:"title,omitempty"`
+	TurnID       string                `json:"turnId,omitempty"`
+	EventCount   int                   `json:"eventCount"`
+	Completed    bool                  `json:"completed"`
+	TurnTerminal *activityTurnTerminal `json:"turnTerminal,omitempty"`
+	LastEventAt  time.Time             `json:"lastEventAt"`
+}
+
+type activityTurnTerminal struct {
+	TurnID  string    `json:"turnId,omitempty"`
+	Status  string    `json:"status"`
+	EndedAt time.Time `json:"endedAt"`
 }
 
 type activityFrame struct {
@@ -1134,9 +1142,23 @@ func (s *Server) activityEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			entry.EventCount++
 			entry.LastEventAt = event.Time
+			if event.TurnID != "" {
+				if entry.TurnTerminal != nil && event.TurnID != entry.TurnTerminal.TurnID {
+					entry.Completed = false
+					entry.TurnTerminal = nil
+				}
+				entry.TurnID = event.TurnID
+			}
 			switch event.Type {
-			case session.EventTurnCompleted, session.EventTurnFailed, session.EventTurnCancelled:
+			case session.EventTurnCompleted:
 				entry.Completed = true
+				entry.TurnTerminal = &activityTurnTerminal{TurnID: event.TurnID, Status: "completed", EndedAt: event.Time}
+			case session.EventTurnFailed:
+				entry.Completed = true
+				entry.TurnTerminal = &activityTurnTerminal{TurnID: event.TurnID, Status: "failed", EndedAt: event.Time}
+			case session.EventTurnCancelled:
+				entry.Completed = true
+				entry.TurnTerminal = &activityTurnTerminal{TurnID: event.TurnID, Status: "cancelled", EndedAt: event.Time}
 			}
 			pending[event.SessionID] = entry
 		case endedAt := <-window.C:

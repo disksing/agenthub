@@ -63,13 +63,51 @@ export function formatDuration(seconds) {
   return `${minutes}m`;
 }
 
+export const ACTIVITY_SESSION_RETENTION_MS = 5 * 60 * 1000;
+export const TERMINAL_TONE_HOLD_MS = 10 * 1000;
+
+export function activitySessionTerminal(session) {
+  if (session?.turnTerminal) return session.turnTerminal;
+  if (!session?.completed) return null;
+  return {
+    turnId: session.turnId || "",
+    status: "completed",
+    endedAt: session.lastEventAt,
+  };
+}
+
+export function activitySessionNeedsTone(previous, incoming) {
+  if (activitySessionTerminal(incoming)) return true;
+  const previousTerminal = activitySessionTerminal(previous);
+  if (!previousTerminal) return true;
+  return Boolean(incoming?.turnId && incoming.turnId !== previousTerminal.turnId);
+}
+
+export function activitySessionHoldsTone(session, now = Date.now()) {
+  return !activitySessionTerminal(session) || Number(session?.toneReleaseAt) > now;
+}
+
 export function activitySessions(current, frame, now = Date.now()) {
   const next = new Map(current);
   for (const session of frame?.sessions || []) {
+    const previous = next.get(session.sessionId);
+    const incomingTerminal = activitySessionTerminal(session);
+    const previousTerminal = activitySessionTerminal(previous);
+    const startsDifferentTurn = !incomingTerminal && previousTerminal && session.turnId
+      && session.turnId !== previousTerminal.turnId;
+    const preservesTerminal = previousTerminal && !incomingTerminal && !startsDifferentTurn;
+    const turnTerminal = incomingTerminal || (preservesTerminal ? previousTerminal : null);
     next.set(session.sessionId, {
+      ...previous,
       ...session,
+      turnTerminal,
       lastActiveAt: now,
-      expiresAt: now + 5 * 60 * 1000,
+      expiresAt: incomingTerminal
+        ? now + ACTIVITY_SESSION_RETENTION_MS
+        : preservesTerminal ? previous.expiresAt : now + ACTIVITY_SESSION_RETENTION_MS,
+      toneReleaseAt: incomingTerminal
+        ? now + TERMINAL_TONE_HOLD_MS
+        : preservesTerminal ? previous.toneReleaseAt : null,
     });
   }
   for (const [id, session] of next) {
@@ -107,7 +145,7 @@ export function activityPulsesForFrame(frame, now = Date.now()) {
     const baseAmplitude = 0.88 + (hashSessionId(session.sessionId) % 18) / 100;
     return {
       at: now + delay * 1000,
-      amplitude: session.completed ? 1.18 : baseAmplitude,
+      amplitude: activitySessionTerminal(session) ? 1.18 : baseAmplitude,
       sessionId: session.sessionId,
     };
   });

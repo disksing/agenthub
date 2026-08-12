@@ -6,8 +6,12 @@ import test from "node:test";
 import { activityPlaybackPlan, COMPLETION_SOUNDS, completionSoundURL, TonePlayer } from "../src/companion/audio.js";
 import { BEEP_CHORDS, BEEP_OCTAVE_ORDER, chordTonePool, noteForToneSlot } from "../src/companion/chords.js";
 import {
+	ACTIVITY_SESSION_RETENTION_MS,
 	activityPulsesForFrame,
+	activitySessionHoldsTone,
+	activitySessionNeedsTone,
 	activitySessions,
+	activitySessionTerminal,
 	companionPlacement,
 	companionPositionFromPixels,
 	companionPositionPixels,
@@ -17,6 +21,7 @@ import {
 	quotaCycleItems,
 	resizeCompanionSize,
 	SessionToneAllocator,
+	TERMINAL_TONE_HOLD_MS,
 	waveformPoints,
 } from "../src/companion/model.js";
 
@@ -61,6 +66,41 @@ test("activity expires after five minutes", () => {
 	assert.equal(refreshed.get("ses_abc").lastActiveAt, 2000);
 	assert.equal(activitySessions(first, { sessions: [] }, 300999).size, 1);
 	assert.equal(activitySessions(first, { sessions: [] }, 301000).size, 0);
+});
+
+test("terminal activity keeps status for five minutes and its tone for ten seconds", () => {
+	const active = activitySessions(new Map(), { sessions: [{
+		sessionId: "ses_abc", turnId: "turn-1", toneSlot: 2, completed: false,
+	}] }, 1000);
+	const terminalEvent = {
+		sessionId: "ses_abc",
+		turnId: "turn-1",
+		toneSlot: 2,
+		completed: true,
+		turnTerminal: { turnId: "turn-1", status: "completed", endedAt: "2026-08-12T10:00:00Z" },
+	};
+	const terminal = activitySessions(active, { sessions: [terminalEvent] }, 2000);
+	assert.equal(terminal.get("ses_abc").expiresAt, 2000 + ACTIVITY_SESSION_RETENTION_MS);
+	assert.equal(terminal.get("ses_abc").toneReleaseAt, 2000 + TERMINAL_TONE_HOLD_MS);
+	assert.equal(activitySessionTerminal(terminal.get("ses_abc")).status, "completed");
+	assert.equal(activitySessionHoldsTone(terminal.get("ses_abc"), 11999), true);
+	assert.equal(activitySessionHoldsTone(terminal.get("ses_abc"), 12000), false);
+
+	const sameTurnCleanup = activitySessions(terminal, { sessions: [{
+		sessionId: "ses_abc", turnId: "turn-1", toneSlot: 2, completed: false,
+	}] }, 5000);
+	assert.equal(activitySessionTerminal(sameTurnCleanup.get("ses_abc")).status, "completed");
+	assert.equal(sameTurnCleanup.get("ses_abc").expiresAt, 2000 + ACTIVITY_SESSION_RETENTION_MS);
+	assert.equal(activitySessionNeedsTone(sameTurnCleanup.get("ses_abc"), { turnId: "turn-1" }), false);
+	assert.equal(activitySessions(sameTurnCleanup, { sessions: [] }, 301999).size, 1);
+	assert.equal(activitySessions(sameTurnCleanup, { sessions: [] }, 302000).size, 0);
+
+	const newTurn = { sessionId: "ses_abc", turnId: "turn-2", toneSlot: 4, completed: false };
+	assert.equal(activitySessionNeedsTone(sameTurnCleanup.get("ses_abc"), newTurn), true);
+	const resumed = activitySessions(sameTurnCleanup, { sessions: [newTurn] }, 6000);
+	assert.equal(activitySessionTerminal(resumed.get("ses_abc")), null);
+	assert.equal(resumed.get("ses_abc").toneReleaseAt, null);
+	assert.equal(resumed.get("ses_abc").toneSlot, 4);
 });
 
 test("each active session creates one quantized waveform pulse per frame", () => {
@@ -225,10 +265,13 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.ok(source.includes("activityPulsesForFrame(assignedFrame, receivedAt)"));
 	assert.ok(source.includes("activityPlaybackPlan(sessions, frame.sequence)"));
 	assert.ok(source.includes("toneAllocator.current.assign(session.sessionId)"));
-	assert.ok(source.includes('className="companion-thread-row"'));
+	assert.ok(source.includes("session.toneReleaseAt - now"));
+	assert.ok(source.includes("activityTerminalTone(session)"));
 	assert.ok(source.includes('className="companion-thread-title"'));
 	assert.ok(!source.includes("companion-thread-meta"));
 	assert.ok(styles.includes("companion-thread-flash 10s"));
+	assert.ok(styles.includes(".companion-thread-row.terminal-completed"));
+	assert.ok(styles.includes(".companion-thread-row.terminal-error"));
 	assert.ok(source.includes('className="companion-resize-handle"'));
 	assert.ok(source.includes("agenthub.companion.size.v1"));
 	assert.ok(styles.includes("@container companion-card (min-width: 560px)"));

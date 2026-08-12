@@ -6,7 +6,8 @@ import { activityPlaybackPlan, COMPLETION_SOUNDS, normalizeCompletionSound, Tone
 import { DEFAULT_BEEP_CHORD, normalizeBeepChord, noteForToneSlot } from "./chords.js";
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
-  activityPulsesForFrame, activitySessions, companionPlacement, companionPositionFromPixels,
+  activityPulsesForFrame, activitySessionHoldsTone, activitySessionNeedsTone,
+  activitySessions, activitySessionTerminal, companionPlacement, companionPositionFromPixels,
   companionPositionPixels, formatDuration, normalizeCompanionPosition, normalizeCompanionSize,
   pruneActivityPulses, quotaCycleItems, resizeCompanionSize, SessionToneAllocator,
 } from "./model.js";
@@ -46,6 +47,13 @@ function statusTone(status) {
   if (status === "critical" || status === "danger") return "danger";
   if (status === "warning") return "warning";
   return "healthy";
+}
+
+function activityTerminalTone(session) {
+  const status = activitySessionTerminal(session)?.status;
+  if (status === "failed" || status === "cancelled") return "terminal-error";
+  if (status === "completed") return "terminal-completed";
+  return "";
 }
 
 function updatedAgo(value) {
@@ -101,6 +109,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   const [resizing, setResizing] = useState(false);
   const tonePlayer = useRef(new TonePlayer());
   const toneAllocator = useRef(new SessionToneAllocator());
+  const activeSessionsRef = useRef(new Map());
   const sequence = useRef(0);
   const pillRef = useRef(null);
   const dragState = useRef(null);
@@ -171,14 +180,28 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
-      setActiveSessions((current) => activitySessions(current, { sessions: [] }, now));
+      setActiveSessions((current) => {
+        const next = activitySessions(current, { sessions: [] }, now);
+        activeSessionsRef.current = next;
+        return next;
+      });
       setActivityPulses((current) => pruneActivityPulses(current, now));
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    toneAllocator.current.retain(activeSessions.keys());
+    const now = Date.now();
+    toneAllocator.current.retain(
+      [...activeSessions].filter(([, session]) => activitySessionHoldsTone(session, now)).map(([id]) => id),
+    );
+    const releaseTimers = [...activeSessions]
+      .filter(([, session]) => activitySessionTerminal(session) && activitySessionHoldsTone(session, now))
+      .map(([id, session]) => window.setTimeout(() => {
+        const current = activeSessionsRef.current.get(id);
+        if (current && !activitySessionHoldsTone(current)) toneAllocator.current.release(id);
+      }, Math.max(0, session.toneReleaseAt - now)));
+    return () => releaseTimers.forEach((timer) => window.clearTimeout(timer));
   }, [activeSessions]);
 
   useEffect(() => {
@@ -231,30 +254,38 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
       const frame = JSON.parse(message.data);
       const receivedAt = Date.now();
       if (sequence.current && frame.sequence !== sequence.current + 1) {
-        setActiveSessions(new Map());
+        const cleared = new Map();
+        activeSessionsRef.current = cleared;
+        setActiveSessions(cleared);
         setActivityPulses([]);
         toneAllocator.current.retain([]);
       }
       sequence.current = frame.sequence;
       const sessions = [...(frame.sessions || [])]
         .sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)))
-        .map((session) => ({
-          ...session,
-          toneSlot: toneAllocator.current.assign(session.sessionId),
-        }))
+        .map((session) => {
+          const previous = activeSessionsRef.current.get(session.sessionId);
+          return {
+            ...session,
+            toneSlot: activitySessionNeedsTone(previous, session)
+              ? toneAllocator.current.assign(session.sessionId)
+              : previous.toneSlot,
+          };
+        })
         .sort((a, b) => a.toneSlot - b.toneSlot || a.sessionId.localeCompare(b.sessionId));
       const assignedFrame = { ...frame, sessions };
-      setActiveSessions((current) => activitySessions(current, assignedFrame, receivedAt));
+      setActiveSessions((current) => {
+        const next = activitySessions(current, assignedFrame, receivedAt);
+        activeSessionsRef.current = next;
+        return next;
+      });
       setActivityPulses((current) => pruneActivityPulses([
         ...current,
         ...activityPulsesForFrame(assignedFrame, receivedAt),
       ], receivedAt));
-      sessions.filter((session) => session.completed).forEach((session) => {
-        toneAllocator.current.release(session.sessionId);
-      });
       if (!companion.enableBeeping) return;
       activityPlaybackPlan(sessions, frame.sequence).forEach(({ item: session, delay, gain }) => {
-        if (session.completed) {
+        if (activitySessionTerminal(session)) {
           tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
           return;
         }
@@ -470,7 +501,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
               <ActivityWaveform pulses={activityPulses} live={activityState === "live"} />
               <div className="companion-thread-list">
                 {activeList.map((session) => (
-                  <div className="companion-thread-row" key={`${session.sessionId}:${session.lastActiveAt}`}>
+                  <div className={`companion-thread-row ${activityTerminalTone(session)}`} key={`${session.sessionId}:${session.lastActiveAt}`}>
                     <span className="companion-thread-title">{session.title || session.sessionId.slice(0, 8)}</span>
                     <span className="companion-thread-note">{noteForToneSlot(session.toneSlot, companion.beepChord).name}</span>
                   </div>

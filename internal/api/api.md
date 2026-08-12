@@ -812,8 +812,13 @@ read Provider-native Session files.
 
 - Events are grouped into one-second windows and then by `sessionId`. A
   Session appears at most once per frame with `eventCount`, `provider`,
-  `title`, `lastEventAt`, and `completed`. `completed` is true when the window
-  contains canonical `turn.completed`, `turn.failed` or `turn.cancelled`.
+  `title`, `turnId`, `lastEventAt`, and `completed`. `turnId` is the latest
+  non-empty Turn id in the frame. `completed` remains true when the window
+  contains any canonical Turn terminal event for backward compatibility.
+  Such a frame also contains `turnTerminal` with the exact `turnId`, `endedAt`,
+  and a `status` of `completed`, `failed`, or `cancelled`. If a different Turn
+  starts later in the same frame, its activity supersedes the earlier terminal
+  marker.
 - Frames carry a daemon-wide monotonic `sequence`, `windowStartedAt`,
   `windowEndedAt`, and `sessions`. They use the default SSE message channel.
 - There is no historical replay and `Last-Event-ID` is ignored: reconnecting
@@ -826,7 +831,7 @@ read Provider-native Session files.
 
 ```text
 id: 1842
-data: {"sequence":1842,"windowStartedAt":"2026-08-10T15:06:23Z","windowEndedAt":"2026-08-10T15:06:24Z","sessions":[{"sessionId":"ses_abc123","provider":"codex","title":"Fix quota polling race","eventCount":18,"completed":false,"lastEventAt":"2026-08-10T15:06:23.921Z"}]}
+data: {"sequence":1842,"windowStartedAt":"2026-08-10T15:06:23Z","windowEndedAt":"2026-08-10T15:06:24Z","sessions":[{"sessionId":"ses_abc123","provider":"codex","title":"Fix quota polling race","turnId":"turn_abc123","eventCount":18,"completed":true,"turnTerminal":{"turnId":"turn_abc123","status":"failed","endedAt":"2026-08-10T15:06:23.921Z"},"lastEventAt":"2026-08-10T15:06:23.921Z"}]}
 ```
 
 ```bash

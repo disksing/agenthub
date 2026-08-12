@@ -2437,6 +2437,24 @@ details[open] > summary > .note-chevron {
   font: 500 13px "SF Mono", Menlo, monospace;
   text-align: right;
 }
+.companion-thread-row.terminal-completed {
+  border-color: rgba(229, 193, 79, 0.48);
+  background: rgba(229, 193, 79, 0.12);
+  color: #e8cc72;
+  animation: none;
+}
+.companion-thread-row.terminal-error {
+  border-color: rgba(239, 102, 102, 0.52);
+  background: rgba(239, 102, 102, 0.12);
+  color: #f08a8a;
+  animation: none;
+}
+.companion-thread-row.terminal-completed .companion-thread-title,
+.companion-thread-row.terminal-error .companion-thread-title {
+  animation: none;
+}
+.companion-thread-row.terminal-completed .companion-thread-note { color: #d9b94e; }
+.companion-thread-row.terminal-error .companion-thread-note { color: #eb7272; }
 .companion-thread-list .idle { color: var(--companion-muted); font-size: 10px; font-weight: 500; }
 
 @keyframes companion-thread-flash {

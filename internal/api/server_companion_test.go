@@ -152,6 +152,8 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	}
 	first, _ := store.Create(session.CreateInput{Title: "First", Cwd: t.TempDir(), AgentName: "Codex"})
 	second, _ := store.Create(session.CreateInput{Title: "Second", Cwd: t.TempDir(), AgentName: "Kimi"})
+	third, _ := store.Create(session.CreateInput{Title: "Third", Cwd: t.TempDir(), AgentName: "Pi"})
+	fourth, _ := store.Create(session.CreateInput{Title: "Fourth", Cwd: t.TempDir(), AgentName: "OpenCode"})
 	providerData, _ := json.Marshal(session.ProviderEventData{Provider: "codex"})
 	_, _ = store.Append(first.ID, "session.provider", "", providerData)
 	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
@@ -171,7 +173,10 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	}
 	_, _ = store.Append(first.ID, "message.assistant.delta", "turn-1", []byte(`{"text":"a"}`))
 	_, _ = store.Append(first.ID, session.EventTurnCompleted, "turn-1", []byte(`{}`))
-	_, _ = store.Append(second.ID, "tool.event", "turn-2", []byte(`{}`))
+	_, _ = store.Append(second.ID, session.EventTurnFailed, "turn-2", []byte(`{"error":"boom"}`))
+	_, _ = store.Append(third.ID, session.EventTurnCancelled, "turn-3", []byte(`{"reason":"stopped"}`))
+	_, _ = store.Append(fourth.ID, session.EventTurnCompleted, "turn-4a", []byte(`{}`))
+	_, _ = store.Append(fourth.ID, "turn.started", "turn-4b", []byte(`{}`))
 
 	scanner := bufio.NewScanner(response.Body)
 	var frame activityFrame
@@ -184,7 +189,7 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 			break
 		}
 	}
-	if frame.Sequence == 0 || len(frame.Sessions) != 2 {
+	if frame.Sequence == 0 || len(frame.Sessions) != 4 {
 		t.Fatalf("activity frame = %+v, scanner error = %v", frame, scanner.Err())
 	}
 	byID := map[string]activitySession{}
@@ -194,7 +199,16 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	if byID[first.ID].EventCount != 2 || !byID[first.ID].Completed || byID[first.ID].Provider != "codex" || byID[first.ID].Title != "First" {
 		t.Fatalf("first activity = %+v", byID[first.ID])
 	}
-	if byID[second.ID].EventCount != 1 || byID[second.ID].Completed {
+	if byID[first.ID].TurnID != "turn-1" || byID[first.ID].TurnTerminal == nil || byID[first.ID].TurnTerminal.Status != "completed" || byID[first.ID].TurnTerminal.TurnID != "turn-1" || byID[first.ID].TurnTerminal.EndedAt.IsZero() {
+		t.Fatalf("first terminal activity = %+v", byID[first.ID])
+	}
+	if byID[second.ID].EventCount != 1 || !byID[second.ID].Completed || byID[second.ID].TurnTerminal == nil || byID[second.ID].TurnTerminal.Status != "failed" {
 		t.Fatalf("second activity = %+v", byID[second.ID])
+	}
+	if !byID[third.ID].Completed || byID[third.ID].TurnTerminal == nil || byID[third.ID].TurnTerminal.Status != "cancelled" {
+		t.Fatalf("third activity = %+v", byID[third.ID])
+	}
+	if byID[fourth.ID].EventCount != 2 || byID[fourth.ID].Completed || byID[fourth.ID].TurnID != "turn-4b" || byID[fourth.ID].TurnTerminal != nil {
+		t.Fatalf("fourth activity = %+v", byID[fourth.ID])
 	}
 }
