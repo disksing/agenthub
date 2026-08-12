@@ -139,8 +139,8 @@ func (f *fake) handleResponse(message envelope) {
 
 func (f *fake) emitEnvironment() {
 	text := fmt.Sprintf(
-		"forge=%s instance=%s resumed=%t native=%s",
-		os.Getenv("FORGE_SESSION_ID"),
+		"context=%s instance=%s resumed=%t native=%s",
+		os.Getenv("SESSION_CONTEXT_ID"),
 		os.Getenv("FAKE_INSTANCE"),
 		f.resumed,
 		f.nativeID,

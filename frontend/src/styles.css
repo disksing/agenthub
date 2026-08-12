@@ -995,7 +995,7 @@ select {
 }
 
 /* Inbound provenance messages keep their raw text but use a quiet visual
-   treatment that distinguishes scheduler notices and other agents from the
+   treatment that distinguishes coordinator notices and other agents from the
    user's conversation and the current assistant. */
 .message-system,
 .message-agent {

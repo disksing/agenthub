@@ -148,7 +148,7 @@ func TestStorePersistsLaunchEnvironmentThroughReplayWithPrivateFiles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := map[string]string{"FORGE_SESSION_ID": "forge-session-one", "EMPTY": ""}
+	input := map[string]string{"SESSION_CONTEXT_ID": "context-one", "EMPTY": ""}
 	created, err := store.Create(CreateInput{
 		Title:             "Environment",
 		Cwd:               t.TempDir(),
@@ -160,8 +160,8 @@ func TestStorePersistsLaunchEnvironmentThroughReplayWithPrivateFiles(t *testing.
 	}
 	// The store owns a deep copy: callers cannot change persisted session
 	// state by retaining and mutating their request map.
-	input["FORGE_SESSION_ID"] = "mutated"
-	if created.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+	input["SESSION_CONTEXT_ID"] = "mutated"
+	if created.LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-one" {
 		t.Fatalf("created environment was aliased: %+v", created.LaunchEnvironment)
 	}
 
@@ -173,15 +173,15 @@ func TestStorePersistsLaunchEnvironmentThroughReplayWithPrivateFiles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+	if replayed.LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-one" {
 		t.Fatalf("launch environment did not survive event replay: %+v", replayed)
 	}
-	replayed.LaunchEnvironment["FORGE_SESSION_ID"] = "caller-mutation"
+	replayed.LaunchEnvironment["SESSION_CONTEXT_ID"] = "caller-mutation"
 	unchanged, err := reopened.Get(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unchanged.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-session-one" {
+	if unchanged.LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-one" {
 		t.Fatalf("Get returned an aliased launch environment: %+v", unchanged)
 	}
 
@@ -222,24 +222,24 @@ func TestUpdateLaunchEnvironmentOverlaysAndSurvivesReplay(t *testing.T) {
 	created, err := store.Create(CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Codex",
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-old", "KEEP": "original"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay := map[string]string{"FORGE_SESSION_ID": "forge-new", "ADDED": "yes"}
+	overlay := map[string]string{"SESSION_CONTEXT_ID": "context-new", "ADDED": "yes"}
 	updated, err := store.UpdateLaunchEnvironment(created.ID, overlay)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The overlay replaces same-named entries and keeps the rest; it never
 	// deletes keys it does not mention.
-	want := map[string]string{"FORGE_SESSION_ID": "forge-new", "KEEP": "original", "ADDED": "yes"}
+	want := map[string]string{"SESSION_CONTEXT_ID": "context-new", "KEEP": "original", "ADDED": "yes"}
 	if !maps.Equal(updated.LaunchEnvironment, want) {
 		t.Fatalf("merged environment = %+v, want %+v", updated.LaunchEnvironment, want)
 	}
 	// The store owns a deep copy of the overlay.
-	overlay["FORGE_SESSION_ID"] = "mutated"
+	overlay["SESSION_CONTEXT_ID"] = "mutated"
 	unchanged, err := store.Get(created.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +263,7 @@ func TestUpdateLaunchEnvironmentOverlaysAndSurvivesReplay(t *testing.T) {
 	if err := json.Unmarshal(events[0].Data, &createdData); err != nil {
 		t.Fatal(err)
 	}
-	if createdData.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-old" {
+	if createdData.LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-old" {
 		t.Fatalf("session.created was rewritten: %+v", createdData.LaunchEnvironment)
 	}
 	var environmentData LaunchEnvironmentEventData

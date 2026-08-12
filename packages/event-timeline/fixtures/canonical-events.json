@@ -600,7 +600,7 @@
           "data": {
             "text": "Wake the session.",
             "role": "system",
-            "sender": { "name": "Forge Scheduler" },
+            "sender": { "name": "Workflow Coordinator" },
             "steer": false
           }
         },

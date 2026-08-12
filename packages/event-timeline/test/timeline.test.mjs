@@ -40,7 +40,7 @@ test("canonical input messages preserve provenance sender and steer metadata", (
     event("message.input", {
       text: "scheduled wake-up",
       role: "system",
-      sender: { name: "Forge Scheduler" },
+      sender: { name: "Workflow Coordinator" },
       steer: false,
     }, { turnId: "turn_system" }),
     event("message.input", {
@@ -51,7 +51,7 @@ test("canonical input messages preserve provenance sender and steer metadata", (
     }, { turnId: "turn_system" }),
   ]);
   assert.deepEqual(items.map((item) => item.role), ["system", "agent"]);
-  assert.equal(items[0].sender.name, "Forge Scheduler");
+  assert.equal(items[0].sender.name, "Workflow Coordinator");
   assert.equal(items[1].sender.sessionId, "ses_worker");
   assert.equal(items[1].steer, true);
 });

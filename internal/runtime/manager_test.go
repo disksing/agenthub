@@ -104,7 +104,7 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	value, err := store.Create(session.CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Fast Agent",
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-session-resume"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-resume"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 		if options.Agent.Name != "Fast Agent" || options.Provider.ID != "provider" {
 			t.Errorf("factory received wrong agent/provider: %+v %+v", options.Agent, options.Provider)
 		}
-		if options.Environment["FORGE_SESSION_ID"] != "forge-session-resume" {
+		if options.Environment["SESSION_CONTEXT_ID"] != "context-resume" {
 			t.Errorf("factory environment = %+v", options.Environment)
 		}
 		value := &fakeSession{hooks: options.Hooks}
@@ -156,7 +156,7 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	resumed := New(reopened, cfg)
 	var second *fakeSession
 	resumed.factory = func(options provider.Options) (provider.Session, error) {
-		if options.Environment["FORGE_SESSION_ID"] != "forge-session-resume" {
+		if options.Environment["SESSION_CONTEXT_ID"] != "context-resume" {
 			t.Errorf("resumed factory environment = %+v", options.Environment)
 		}
 		second = &fakeSession{hooks: options.Hooks}
@@ -225,7 +225,7 @@ func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
 // TestManagerStartSeesUpdatedLaunchEnvironment pins the ordering the resume
 // endpoint relies on: the environment overlay is durable before the runtime
 // starts, so the provider factory observes the merged environment — the new
-// FORGE_SESSION_ID plus every key the overlay did not mention.
+// SESSION_CONTEXT_ID plus every key the overlay did not mention.
 func TestManagerStartSeesUpdatedLaunchEnvironment(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {
@@ -234,19 +234,19 @@ func TestManagerStartSeesUpdatedLaunchEnvironment(t *testing.T) {
 	value, err := store.Create(session.CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Fast Agent",
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-old", "KEEP": "original"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdateLaunchEnvironment(value.ID, map[string]string{"FORGE_SESSION_ID": "forge-new"}); err != nil {
+	if _, err := store.UpdateLaunchEnvironment(value.ID, map[string]string{"SESSION_CONTEXT_ID": "context-new"}); err != nil {
 		t.Fatal(err)
 	}
 	manager := New(store, testConfig())
 	defer manager.Close()
 	manager.factory = func(options provider.Options) (provider.Session, error) {
-		if options.Environment["FORGE_SESSION_ID"] != "forge-new" {
-			t.Errorf("factory FORGE_SESSION_ID = %q, want forge-new (%+v)", options.Environment["FORGE_SESSION_ID"], options.Environment)
+		if options.Environment["SESSION_CONTEXT_ID"] != "context-new" {
+			t.Errorf("factory SESSION_CONTEXT_ID = %q, want context-new (%+v)", options.Environment["SESSION_CONTEXT_ID"], options.Environment)
 		}
 		if options.Environment["KEEP"] != "original" {
 			t.Errorf("factory lost an overlaid key: %+v", options.Environment)
@@ -257,7 +257,7 @@ func TestManagerStartSeesUpdatedLaunchEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if started.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-new" || started.LaunchEnvironment["KEEP"] != "original" {
+	if started.LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-new" || started.LaunchEnvironment["KEEP"] != "original" {
 		t.Fatalf("started session environment = %+v", started.LaunchEnvironment)
 	}
 }
@@ -270,7 +270,7 @@ func TestManagerKeepsParallelSessionEnvironmentsIndependent(t *testing.T) {
 	first, err := store.Create(session.CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Fast Agent",
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-one"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-one"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +278,7 @@ func TestManagerKeepsParallelSessionEnvironmentsIndependent(t *testing.T) {
 	second, err := store.Create(session.CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Fast Agent",
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-two"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-two"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestManagerKeepsParallelSessionEnvironmentsIndependent(t *testing.T) {
 	var observedMu sync.Mutex
 	manager.factory = func(options provider.Options) (provider.Session, error) {
 		observedMu.Lock()
-		observed[options.ID] = options.Environment["FORGE_SESSION_ID"]
+		observed[options.ID] = options.Environment["SESSION_CONTEXT_ID"]
 		observedMu.Unlock()
 		return &fakeSession{hooks: options.Hooks}, nil
 	}
@@ -310,7 +310,7 @@ func TestManagerKeepsParallelSessionEnvironmentsIndependent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if observed[first.ID] != "forge-one" || observed[second.ID] != "forge-two" {
+	if observed[first.ID] != "context-one" || observed[second.ID] != "context-two" {
 		t.Fatalf("parallel environments crossed: %+v", observed)
 	}
 }

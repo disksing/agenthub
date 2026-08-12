@@ -102,7 +102,7 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 		"title":             "API session",
 		"cwd":               t.TempDir(),
 		"agentName":         "Agent",
-		"launchEnvironment": map[string]string{"FORGE_SESSION_ID": "forge-api"},
+		"launchEnvironment": map[string]string{"SESSION_CONTEXT_ID": "context-api"},
 	})
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -123,7 +123,7 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	if created.Session.State != session.StateReady || created.Session.LastEventID != 1 {
 		t.Fatalf("unexpected session: %+v", created.Session)
 	}
-	if created.Session.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-api" {
+	if created.Session.LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-api" {
 		t.Fatalf("launch environment was not persisted: %+v", created.Session)
 	}
 
@@ -141,7 +141,7 @@ func TestSessionAPIUsesEventLog(t *testing.T) {
 	if len(history.Events) != 1 || history.Events[0].Type != "session.created" {
 		t.Fatalf("unexpected history: %+v", history.Events)
 	}
-	if !bytes.Contains(history.Events[0].Data, []byte(`"launchEnvironment":{"FORGE_SESSION_ID":"forge-api"}`)) {
+	if !bytes.Contains(history.Events[0].Data, []byte(`"launchEnvironment":{"SESSION_CONTEXT_ID":"context-api"}`)) {
 		t.Fatalf("session.created did not persist launchEnvironment: %s", history.Events[0].Data)
 	}
 }
@@ -1463,7 +1463,7 @@ func TestArchivedSessionRejectsWrites(t *testing.T) {
 
 	// A resume carrying a launchEnvironment overlay is rejected the same
 	// way, and the archived environment stays untouched.
-	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions/"+created.ID+"/resume", strings.NewReader(`{"launchEnvironment":{"FORGE_SESSION_ID":"forge-new"}}`))
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions/"+created.ID+"/resume", strings.NewReader(`{"launchEnvironment":{"SESSION_CONTEXT_ID":"context-new"}}`))
 	request.Header.Set("Content-Type", "application/json")
 	response, err = http.DefaultClient.Do(request)
 	if err != nil {
@@ -1505,7 +1505,7 @@ func TestResumeSessionAcceptsOptionalLaunchEnvironment(t *testing.T) {
 	created, err := store.Create(session.CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Pi Agent",
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-old", "KEEP": "original"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1554,14 +1554,14 @@ func TestResumeSessionAcceptsOptionalLaunchEnvironment(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !maps.Equal(value.LaunchEnvironment, map[string]string{"FORGE_SESSION_ID": "forge-old", "KEEP": "original"}) {
+		if !maps.Equal(value.LaunchEnvironment, map[string]string{"SESSION_CONTEXT_ID": "context-old", "KEEP": "original"}) {
 			t.Fatalf("%s changed the environment: %+v", name, value.LaunchEnvironment)
 		}
 	}
 
 	// A valid overlay is persisted before the provider start fails, and
 	// keeps keys the overlay did not mention.
-	status, code := postResume(stringPointer(`{"launchEnvironment":{"FORGE_SESSION_ID":"forge-new","EXTRA":"x"}}`))
+	status, code := postResume(stringPointer(`{"launchEnvironment":{"SESSION_CONTEXT_ID":"context-new","EXTRA":"x"}}`))
 	if status != http.StatusConflict || code != "runtime_operation_failed" {
 		t.Fatalf("overlay resume: status/code = %d/%q, want 409/runtime_operation_failed", status, code)
 	}
@@ -1569,7 +1569,7 @@ func TestResumeSessionAcceptsOptionalLaunchEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"FORGE_SESSION_ID": "forge-new", "KEEP": "original", "EXTRA": "x"}
+	want := map[string]string{"SESSION_CONTEXT_ID": "context-new", "KEEP": "original", "EXTRA": "x"}
 	if !maps.Equal(value.LaunchEnvironment, want) {
 		t.Fatalf("environment after overlay resume = %+v, want %+v", value.LaunchEnvironment, want)
 	}
@@ -2012,7 +2012,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		Cwd:               t.TempDir(),
 		AgentName:         "Agent",
 		Source:            &session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-30"},
-		LaunchEnvironment: map[string]string{"FORGE_SESSION_ID": "session-30"},
+		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-30"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2075,7 +2075,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(listed.Sessions) != 1 ||
-		listed.Sessions[0].LaunchEnvironment["FORGE_SESSION_ID"] != "session-30" ||
+		listed.Sessions[0].LaunchEnvironment["SESSION_CONTEXT_ID"] != "context-30" ||
 		listed.Sessions[0].State != session.StateStopped ||
 		listed.Sessions[0].StopReason != session.StopReasonDaemonRecovery ||
 		listed.Sessions[0].CurrentTurnID != "" ||

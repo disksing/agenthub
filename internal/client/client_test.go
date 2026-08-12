@@ -164,7 +164,7 @@ func TestResumeWithEnvironmentSendsOverlay(t *testing.T) {
 	}))
 	defer server.Close()
 	client := New(server.URL)
-	if _, err := client.ResumeWithEnvironment("ses_test", map[string]string{"FORGE_SESSION_ID": "forge-new"}); err != nil {
+	if _, err := client.ResumeWithEnvironment("ses_test", map[string]string{"SESSION_CONTEXT_ID": "context-new"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Resume("ses_test"); err != nil {
@@ -173,7 +173,7 @@ func TestResumeWithEnvironmentSendsOverlay(t *testing.T) {
 	if len(bodies) != 2 {
 		t.Fatalf("requests = %d, want 2", len(bodies))
 	}
-	if bodies[0] != `{"launchEnvironment":{"FORGE_SESSION_ID":"forge-new"}}` {
+	if bodies[0] != `{"launchEnvironment":{"SESSION_CONTEXT_ID":"context-new"}}` {
 		t.Fatalf("overlay body = %s", bodies[0])
 	}
 	if bodies[1] != `{}` {

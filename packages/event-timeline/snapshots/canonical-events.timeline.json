@@ -383,7 +383,7 @@
         "text": "Wake the session.",
         "turnId": "turn_provenance",
         "sender": {
-          "name": "Forge Scheduler"
+          "name": "Workflow Coordinator"
         }
       },
       {

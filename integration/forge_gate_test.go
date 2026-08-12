@@ -455,9 +455,9 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		go func() {
 			source := &sourceValue{App: "forge", InstanceID: "gate", ExternalID: "task-" + strconv.Itoa(index)}
 			code, response := gate.create(map[string]string{
-				"FORGE_SESSION_ID": id,
-				"FAKE_INSTANCE":    strconv.Itoa(index),
-				"FAKE_NATIVE_ID":   "native-" + strconv.Itoa(index),
+				"SESSION_CONTEXT_ID": id,
+				"FAKE_INSTANCE":      strconv.Itoa(index),
+				"FAKE_NATIVE_ID":     "native-" + strconv.Itoa(index),
 			}, source)
 			if code != http.StatusCreated {
 				results <- created{err: fmt.Errorf("create status=%d body=%v", code, response)}
@@ -495,7 +495,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		gate.waitSession(value.ID, func(current sessionValue) bool { return current.CurrentTurnID == "" })
 		text := assistantText(gate.events(value.ID))
 		for _, want := range []string{
-			"forge=forge-" + []string{"one", "two"}[index],
+			"context=forge-" + []string{"one", "two"}[index],
 			"instance=" + strconv.Itoa(index),
 			"resumed=false",
 			"native=native-" + strconv.Itoa(index),
@@ -527,7 +527,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		restarted.waitSession(value.ID, func(current sessionValue) bool { return current.CurrentTurnID == "" })
 		current := restarted.session(value.ID)
 		if current.Source == nil || current.Source.ExternalID != "task-"+strconv.Itoa(index) ||
-			current.LaunchEnvironment["FORGE_SESSION_ID"] != "forge-"+[]string{"one", "two"}[index] {
+			current.LaunchEnvironment["SESSION_CONTEXT_ID"] != "forge-"+[]string{"one", "two"}[index] {
 			t.Errorf("session metadata did not survive restart: %+v", current)
 		}
 		text := assistantText(restarted.events(value.ID))

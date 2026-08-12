@@ -292,7 +292,7 @@ Examples:
 
 ```json
 {"text":"Please inspect the failing test."}
-{"text":"Resume the queued work.","role":"system","sender":{"name":"Forge Scheduler"}}
+{"text":"Resume the queued work.","role":"system","sender":{"name":"Workflow Coordinator"}}
 {"text":"The worker finished its scan.","role":"agent","sender":{"name":"Review Agent","sessionId":"ses_worker"}}
 ```
 

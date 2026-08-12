@@ -233,7 +233,7 @@ Kimi、OpenCode 和 Pi 时仍是普通用户级文本，只额外携带 JSON 来
 
 ```json
 {"text":"请检查失败的测试。"}
-{"text":"恢复排队的工作。","role":"system","sender":{"name":"Forge Scheduler"}}
+{"text":"恢复排队的工作。","role":"system","sender":{"name":"Workflow Coordinator"}}
 {"text":"Worker 已完成扫描。","role":"agent","sender":{"name":"Review Agent","sessionId":"ses_worker"}}
 ```
 

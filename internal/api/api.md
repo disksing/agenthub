@@ -123,7 +123,7 @@ A session object looks like:
   "title": "Fix the flaky test",
   "cwd": "/path/to/project",
   "agentName": "Codex",
-  "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
+  "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
   "source": {
     "app": "forge",
     "instanceId": "mac-mini",
@@ -517,7 +517,7 @@ turn before the response returns.
   "title": "Fix the flaky test",
   "cwd": "/path/to/project",
   "agentName": "Codex",
-  "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
+  "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
   "source": {
     "app": "forge",
     "instanceId": "mac-mini",
@@ -574,7 +574,7 @@ curl -s -X POST "$BASE/v1/sessions" \
     "title": "Fix the flaky test",
     "cwd": "/path/to/project",
     "agentName": "Codex",
-    "launchEnvironment": {"FORGE_SESSION_ID": "session-123"},
+    "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
     "source": {
       "app": "forge",
       "instanceId": "mac-mini",
@@ -842,7 +842,7 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
 
 curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
   -H "Content-Type: application/json" \
-  -d '{"text":"Resume the queued work.","role":"system","sender":{"name":"Forge Scheduler"}}'
+  -d '{"text":"Resume the queued work.","role":"system","sender":{"name":"Workflow Coordinator"}}'
 
 curl -s -X POST "$BASE/v1/sessions/$SESSION/messages" \
   -H "Content-Type: application/json" \
@@ -883,7 +883,7 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/resume" \
 
 curl -s -X POST "$BASE/v1/sessions/$SESSION/resume" \
   -H "Content-Type: application/json" \
-  -d '{"launchEnvironment": {"FORGE_SESSION_ID": "session-456"}}'
+  -d '{"launchEnvironment": {"SESSION_CONTEXT_ID": "context-456"}}'
 ```
 
 ### POST /v1/sessions/{id}/interrupt
@@ -1021,7 +1021,7 @@ CREATED=$(curl -fsS -X POST "$BASE/v1/sessions" \
     \"cwd\":\"$PWD\",
     \"agentName\":\"Codex\",
     \"source\":{\"app\":\"forge\",\"instanceId\":\"mac-mini\",\"externalId\":\"project7.task30\"},
-    \"launchEnvironment\":{\"FORGE_SESSION_ID\":\"session-123\"}
+    \"launchEnvironment\":{\"SESSION_CONTEXT_ID\":\"context-123\"}
   }")
 SESSION=$(jq -r .session.id <<<"$CREATED")
 

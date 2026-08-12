@@ -54,15 +54,21 @@ processes, or session directories.
 AgentHub provides durable sessions, process lifecycle, replay cursors,
 capability negotiation, and structured errors. Forge still owns:
 
-- project, task, and resource-lock semantics;
-- scheduler and AutoRun generation state;
+- Workspace, Project, Task, and Agent Profile configuration;
+- resource-scoped file-ownership instructions and GUI run projections;
 - validating required capabilities before creating a session;
-- generating a unique source identity and per-session launch environment;
+- generating a unique source identity and any caller-specific per-session
+  launch environment;
 - persisting its last contiguous event cursor and reconnecting after any SSE
   interruption or unknown event;
 - deduplicating client retries according to each endpoint's documented
   idempotency, and reconciling ambiguous message delivery through events;
 - deciding when a stopped session should be resumed or archived.
+
+Forge no longer exposes resource Session Locks, AutoRun/Self-Driving, a
+reserved Scheduler Profile, or public commands for manually creating,
+binding, heartbeating, or ending its local Session projections. Those local
+projections are created and reconciled internally by `forge serve`.
 
 Source metadata is self-asserted correlation data, not authentication or
 tenant isolation. Launch environment values are durable and visible through
