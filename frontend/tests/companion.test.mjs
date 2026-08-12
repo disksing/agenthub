@@ -39,19 +39,19 @@ test("quota cycle keeps provider order and skips empty providers", () => {
 });
 
 test("session tone slots fill in octave order and reuse released slots", () => {
-	assert.deepEqual(BEEP_OCTAVE_ORDER, [4, 5, 3, 6]);
+	assert.deepEqual(BEEP_OCTAVE_ORDER, [5, 4, 6, 3, 7]);
 	assert.equal(BEEP_CHORDS.length, 24);
 	assert.deepEqual(chordTonePool("c-major").map((note) => note.name), [
-		"C4", "E4", "G4", "C5", "E5", "G5", "C3", "E3", "G3", "C6", "E6", "G6",
+		"C5", "E5", "G5", "C4", "E4", "G4", "C6", "E6", "G6", "C3", "E3", "G3", "C7", "E7", "G7",
 	]);
-	assert.deepEqual(chordTonePool("d-major").map((note) => note.name).slice(0, 3), ["D4", "F#4", "A4"]);
-	assert.deepEqual(chordTonePool("c-minor").map((note) => note.name).slice(0, 3), ["C4", "Eb4", "G4"]);
-	assert.ok(Math.abs(noteForToneSlot(0).frequency - 261.625565) < 0.0001);
+	assert.deepEqual(chordTonePool("d-major").map((note) => note.name).slice(0, 3), ["D5", "F#5", "A5"]);
+	assert.deepEqual(chordTonePool("c-minor").map((note) => note.name).slice(0, 3), ["C5", "Eb5", "G5"]);
+	assert.ok(Math.abs(noteForToneSlot(0).frequency - 523.2511306) < 0.0001);
 
 	const allocator = new SessionToneAllocator();
-	assert.deepEqual(Array.from({ length: 12 }, (_, index) => allocator.assign(`ses_${index}`)), [...Array(12).keys()]);
+	assert.deepEqual(Array.from({ length: 15 }, (_, index) => allocator.assign(`ses_${index}`)), [...Array(15).keys()]);
 	assert.equal(allocator.assign("ses_0"), 0);
-	assert.equal(allocator.assign("ses_12"), 0);
+	assert.equal(allocator.assign("ses_15"), 0);
 	allocator.release("ses_1");
 	assert.equal(allocator.assign("ses_new"), 1);
 	allocator.retain(["ses_5"]);
@@ -232,7 +232,7 @@ test("TonePlayer uses a suspended Web Audio context only after resume", async ()
 	assert.equal(await player.resume(), true);
 	assert.equal(player.pulse(0, "c-major", 0.2, 0.08), true);
 	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.08));
-	assert.ok(scheduled.some(([kind, frequency]) => kind === "frequency" && Math.abs(frequency - 261.625565) < 0.0001));
+	assert.ok(scheduled.some(([kind, frequency]) => kind === "frequency" && Math.abs(frequency - 523.2511306) < 0.0001));
 	assert.deepEqual(player.previewChord("c-major", 0.2), [true, true, true]);
 	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.24));
 });

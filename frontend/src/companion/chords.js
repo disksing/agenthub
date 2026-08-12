@@ -1,5 +1,6 @@
 export const DEFAULT_BEEP_CHORD = "c-major";
-export const BEEP_OCTAVE_ORDER = [4, 5, 3, 6];
+// Prefer the lower octave bands before reaching the highest activity tones.
+export const BEEP_OCTAVE_ORDER = [5, 4, 6, 3, 7];
 
 const chord = (value, label, quality, pitchClasses, noteNames) => ({
   value,

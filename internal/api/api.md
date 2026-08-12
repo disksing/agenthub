@@ -359,8 +359,10 @@ only writer) and applies it in memory.
   `bb-major`, `b-major`) or 12 minor triads (`c-minor`, `cs-minor`, `d-minor`,
   `eb-minor`, `e-minor`, `f-minor`, `fs-minor`, `g-minor`, `gs-minor`,
   `a-minor`, `bb-minor`, `b-minor`); an omitted value defaults to `c-major`.
-  Activity tone slots fill octave bands 4, 5, 3, then 6 and remain stable for
-  each active Session until release. `completionSound` is independent of the
+  Activity tone slots fill octave bands 5, 4, 6, 3, then 7, prioritizing the
+  lower bands before the highest tone, and remain stable for each active
+  Session until release.
+  `completionSound` is independent of the
   activity chord and is `completed-voice`, `done-for-you-girl`,
   `light-hearted-message`, `not-bad`, `slow-spring-board` or `smile`.
   Legacy synthesized sound names are migrated to `completed-voice` when read.
