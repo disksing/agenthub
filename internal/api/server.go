@@ -29,6 +29,11 @@ const APIVersion = "1"
 
 const (
 	CapabilitySessionSource            = "session.source"
+	CapabilitySessionSourceMetadata    = "session.source-metadata"
+	CapabilitySessionIdempotentCreate  = "session.idempotent-create"
+	CapabilitySessionInputCapabilities = "session.input-capabilities"
+	CapabilityMessageIdempotency       = "messages.idempotent"
+	CapabilityTurnsStableIndex         = "turns.stable-index"
 	CapabilitySessionLaunchEnvironment = "session.launch-environment"
 	// CapabilitySessionLaunchEnvironmentUpdate reports that resume accepts
 	// an optional launchEnvironment overlay persisted before provider start.
@@ -221,6 +226,11 @@ func (s *Server) capabilities() []string {
 		CapabilityEventsBackwardPagination,
 		CapabilityActivityGlobalSSE,
 		CapabilitySessionSource,
+		CapabilitySessionSourceMetadata,
+		CapabilitySessionIdempotentCreate,
+		CapabilitySessionInputCapabilities,
+		CapabilityMessageIdempotency,
+		CapabilityTurnsStableIndex,
 	}
 	if s.runtime != nil {
 		capabilities = append(capabilities,
@@ -552,6 +562,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		Cwd               string                 `json:"cwd"`
 		AgentName         string                 `json:"agentName"`
 		Source            *session.Source        `json:"source"`
+		IdempotencyKey    string                 `json:"idempotencyKey"`
 		LaunchEnvironment map[string]string      `json:"launchEnvironment"`
 		InitialMessage    *inboundMessageRequest `json:"initialMessage"`
 	}
@@ -574,13 +585,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var agent config.Agent
+	var providerConfig config.Provider
 	if s.runtime != nil {
-		resolved, _, err := s.runtime.Config().Agent(agentName)
+		resolved, resolvedProvider, err := s.runtime.Config().Agent(agentName)
 		if err != nil {
 			writeAPIError(w, http.StatusUnprocessableEntity, "invalid_agent", err.Error(), nil)
 			return
 		}
 		agent = resolved
+		providerConfig = resolvedProvider
 	}
 	cwd, err := canonicalDirectory(body.Cwd)
 	if err != nil {
@@ -597,25 +610,34 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	if agent.Name != "" {
 		canonicalName = agent.Name
 	}
-	value, err := s.store.Create(session.CreateInput{
+	value, created, err := s.store.CreateOrGet(session.CreateInput{
 		Title:             strings.TrimSpace(body.Title),
 		Cwd:               cwd,
 		AgentName:         canonicalName,
+		IdempotencyKey:    body.IdempotencyKey,
 		Source:            body.Source,
 		LaunchEnvironment: body.LaunchEnvironment,
+		Provider:          providerConfig.Type,
+		InputCapabilities: provider.InputCapabilities(providerConfig.Type),
 	})
 	if err != nil {
+		if errors.Is(err, session.ErrIdempotencyConflict) {
+			writeAPIError(w, http.StatusConflict, "idempotency_conflict", err.Error(), nil)
+			return
+		}
 		writeAPIError(w, http.StatusInternalServerError, "session_create_failed", err.Error(), nil)
 		return
 	}
-	if s.runtime != nil {
-		started, err := s.runtime.Start(value.ID)
-		if err != nil {
-			writeAPIError(w, http.StatusBadGateway, "provider_start_failed", err.Error(), map[string]any{"sessionId": value.ID})
-			return
+	if s.runtime != nil && value.State != session.StateArchived && value.State != session.StateStopped {
+		if created || value.State == session.StateReady || value.State == session.StateStarting {
+			started, err := s.runtime.Start(value.ID)
+			if err != nil {
+				writeAPIError(w, http.StatusBadGateway, "provider_start_failed", err.Error(), map[string]any{"sessionId": value.ID})
+				return
+			}
+			value = started
 		}
-		value = started
-		if initialMessage != nil {
+		if initialMessage != nil && (created || initialMessage.MessageID != "") {
 			sent, err := s.runtime.SendMessage(value.ID, *initialMessage)
 			if err != nil {
 				writeAPIError(w, http.StatusBadGateway, "turn_start_failed", err.Error(), map[string]any{"sessionId": value.ID})
@@ -625,7 +647,11 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Location", "/v1/sessions/"+value.ID)
-	writeJSON(w, http.StatusCreated, map[string]any{"session": value})
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{"session": value, "created": created})
 }
 
 func stringPointer(value string) *string {
@@ -650,6 +676,7 @@ func (s *Server) sessionOps() []sessionOp {
 		{http.MethodGet, "", s.getSession, "GET /v1/sessions/{id}"},
 		{http.MethodDelete, "", s.archiveSession, "DELETE /v1/sessions/{id}"},
 		{http.MethodGet, "events", s.events, "GET /v1/sessions/{id}/events"},
+		{http.MethodGet, "turns", s.turns, "GET /v1/sessions/{id}/turns"},
 		{http.MethodPost, "messages", s.sendMessage, "POST /v1/sessions/{id}/messages"},
 		{http.MethodPost, "resume", s.resumeSession, "POST /v1/sessions/{id}/resume"},
 		{http.MethodPost, "interrupt", s.interruptSession, "POST /v1/sessions/{id}/interrupt"},
@@ -1324,6 +1351,42 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *Server) turns(w http.ResponseWriter, r *http.Request, id string) {
+	after, err := parseEventCursor(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_turn_cursor", err.Error(), nil)
+		return
+	}
+	before, backward, err := parseEventBackward(r.URL.Query())
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_turn_cursor", err.Error(), nil)
+		return
+	}
+	if backward && explicitEventCursor(r) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_turn_cursor", "before/latest cannot be combined with after", nil)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	latest := backward && before == math.MaxInt64
+	if latest {
+		before = 0
+	}
+	page, err := s.store.TurnsPage(id, after, before, latest, limit)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"turns": page.Turns,
+		"page": map[string]any{
+			"after": page.After, "before": page.Before, "limit": page.Limit,
+			"nextAfter": page.NextAfter, "nextBefore": page.NextBefore,
+			"hasMore": page.HasMore, "hasMoreBefore": page.HasMoreBefore,
+		},
+		"latestCursor": page.LatestCursor,
+	})
 }
 
 func (s *Server) writeStoreError(w http.ResponseWriter, err error) {

@@ -155,6 +155,18 @@ type Options struct {
 	Hooks       Hooks
 }
 
+// InputCapabilities returns the provider-independent input behavior of a
+// built-in provider type. ACP-backed Kimi and OpenCode cannot steer an active
+// prompt; Codex app-server and Pi RPC can.
+func InputCapabilities(providerType string) session.InputCapabilities {
+	switch strings.ToLower(strings.TrimSpace(providerType)) {
+	case "codex", "pi":
+		return session.InputCapabilities{Steer: true}
+	default:
+		return session.InputCapabilities{}
+	}
+}
+
 func New(options Options) (Session, error) {
 	command, err := config.ResolveProviderCommand(options.Provider)
 	if err != nil {

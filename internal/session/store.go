@@ -37,6 +37,10 @@ var (
 	// head of the requested session. Accepting it would silently skip future
 	// events until the store caught up to an unrelated cursor.
 	ErrEventCursorAhead = errors.New("event cursor is ahead of durable log")
+	// ErrIdempotencyConflict reports reuse of a creation key with different
+	// immutable Session parameters.
+	ErrIdempotencyConflict = errors.New("session idempotency key conflicts with an existing session")
+	ErrMessageIDConflict   = errors.New("message id conflicts with an existing input")
 )
 
 // ArchiveDirName is the subdirectory of the session store that holds
@@ -79,12 +83,14 @@ type sessionState struct {
 }
 
 type Store struct {
-	root string
+	root     string
+	createMu sync.Mutex
 
 	mu                  sync.RWMutex
 	sessions            map[string]*sessionState
 	subscribers         map[string]map[*Subscription]struct{}
 	activitySubscribers map[*Subscription]struct{}
+	idempotencyKeys     map[string]string
 }
 
 // Subscription is a best-effort notification queue layered over the durable
@@ -132,6 +138,7 @@ func Open(root string) (*Store, error) {
 		sessions:            make(map[string]*sessionState),
 		subscribers:         make(map[string]map[*Subscription]struct{}),
 		activitySubscribers: make(map[*Subscription]struct{}),
+		idempotencyKeys:     make(map[string]string),
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -157,6 +164,12 @@ func Open(root string) (*Store, error) {
 			}
 		}
 		store.sessions[entry.Name()] = state
+		if key := strings.TrimSpace(state.session.IdempotencyKey); key != "" {
+			if previous, exists := store.idempotencyKeys[key]; exists && previous != entry.Name() {
+				return nil, fmt.Errorf("duplicate session idempotency key %q on %s and %s", key, previous, entry.Name())
+			}
+			store.idempotencyKeys[key] = entry.Name()
+		}
 	}
 	archivedEntries, err := os.ReadDir(archiveRoot)
 	if err != nil {
@@ -182,6 +195,12 @@ func Open(root string) (*Store, error) {
 		state.session.State = StateArchived
 		state.archived = true
 		store.sessions[entry.Name()] = state
+		if key := strings.TrimSpace(state.session.IdempotencyKey); key != "" {
+			if previous, exists := store.idempotencyKeys[key]; exists && previous != entry.Name() {
+				return nil, fmt.Errorf("duplicate session idempotency key %q on %s and %s", key, previous, entry.Name())
+			}
+			store.idempotencyKeys[key] = entry.Name()
+		}
 	}
 	return store, nil
 }
@@ -200,13 +219,43 @@ func (s *Store) archiveRoot() string {
 }
 
 func (s *Store) Create(input CreateInput) (Session, error) {
+	value, _, err := s.CreateOrGet(input)
+	return value, err
+}
+
+// CreateOrGet creates a Session once for a caller-supplied idempotency key.
+// A retry with identical immutable input returns the original Session; reuse
+// with different input fails closed. The key survives daemon restart because
+// it is part of the session.created fact.
+func (s *Store) CreateOrGet(input CreateInput) (Session, bool, error) {
 	if err := ValidateLaunchEnvironment(input.LaunchEnvironment); err != nil {
-		return Session{}, err
+		return Session{}, false, err
+	}
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	if strings.ContainsRune(input.IdempotencyKey, '\x00') || len(input.IdempotencyKey) > 4096 {
+		return Session{}, false, errors.New("invalid session idempotency key")
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	if input.IdempotencyKey != "" {
+		s.mu.RLock()
+		existingID := s.idempotencyKeys[input.IdempotencyKey]
+		s.mu.RUnlock()
+		if existingID != "" {
+			existing, err := s.Get(existingID)
+			if err != nil {
+				return Session{}, false, err
+			}
+			if !createInputMatches(existing, input) {
+				return Session{}, false, ErrIdempotencyConflict
+			}
+			return existing, false, nil
+		}
 	}
 	now := time.Now().UTC()
 	id, err := NewID("ses")
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 	if input.Title == "" {
 		input.Title = "New Session"
@@ -216,8 +265,11 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 		Title:             input.Title,
 		Cwd:               input.Cwd,
 		AgentName:         input.AgentName,
+		IdempotencyKey:    input.IdempotencyKey,
 		Source:            cloneSource(input.Source),
 		LaunchEnvironment: cloneEnvironment(input.LaunchEnvironment),
+		Provider:          input.Provider,
+		InputCapabilities: input.InputCapabilities,
 		State:             StateReady,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -225,25 +277,40 @@ func (s *Store) Create(input CreateInput) (Session, error) {
 	state := &sessionState{session: value, eventsLoaded: true}
 	dir := s.sessionDir(id)
 	if err := os.Mkdir(dir, 0o700); err != nil {
-		return Session{}, fmt.Errorf("create session directory: %w", err)
+		return Session{}, false, fmt.Errorf("create session directory: %w", err)
 	}
 
 	s.mu.Lock()
 	s.sessions[id] = state
+	if input.IdempotencyKey != "" {
+		s.idempotencyKeys[input.IdempotencyKey] = id
+	}
 	s.mu.Unlock()
 
 	data, err := json.Marshal(value)
 	if err != nil {
 		s.removeSession(id)
 		_ = os.RemoveAll(dir)
-		return Session{}, err
+		return Session{}, false, err
 	}
 	if _, err := s.Append(id, "session.created", "", data); err != nil {
 		s.removeSession(id)
 		_ = os.RemoveAll(dir)
-		return Session{}, err
+		return Session{}, false, err
 	}
-	return s.Get(id)
+	created, err := s.Get(id)
+	return created, true, err
+}
+
+func createInputMatches(existing Session, input CreateInput) bool {
+	title := input.Title
+	if title == "" {
+		title = "New Session"
+	}
+	return existing.Title == title && existing.Cwd == input.Cwd && existing.AgentName == input.AgentName &&
+		reflect.DeepEqual(existing.Source, cloneSource(input.Source)) &&
+		reflect.DeepEqual(existing.LaunchEnvironment, cloneEnvironment(input.LaunchEnvironment)) &&
+		existing.Provider == input.Provider && existing.InputCapabilities == input.InputCapabilities
 }
 
 func (s *Store) Get(id string) (Session, error) {
@@ -1001,6 +1068,7 @@ func applyEvent(projected *Session, event Event) error {
 		projected.AgentName = data.AgentName
 		projected.Provider = data.Provider
 		projected.ProviderSessionID = data.ProviderSessionID
+		projected.InputCapabilities = data.InputCapabilities
 	case "session.agent":
 		// Appended when a configured agent is renamed: sessions that
 		// referenced the old name are re-pointed at the new one.
@@ -1375,6 +1443,11 @@ func (s *Store) publish(event Event) {
 
 func (s *Store) removeSession(id string) {
 	s.mu.Lock()
+	if state := s.sessions[id]; state != nil {
+		if key := strings.TrimSpace(state.session.IdempotencyKey); key != "" && s.idempotencyKeys[key] == id {
+			delete(s.idempotencyKeys, key)
+		}
+	}
 	delete(s.sessions, id)
 	s.mu.Unlock()
 }
@@ -1427,6 +1500,7 @@ func cloneSource(value *Source) *Source {
 		return nil
 	}
 	cloned := *value
+	cloned.Metadata = cloneEnvironment(value.Metadata)
 	return &cloned
 }
 

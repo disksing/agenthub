@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -224,7 +225,7 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 		t.Fatalf("create response source = %+v", forgeOne.Source)
 	}
 	fetched := getSession(t, server, forgeOne.ID)
-	if fetched.Source == nil || *fetched.Source != (session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+	if fetched.Source == nil || !reflect.DeepEqual(*fetched.Source, session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
 		t.Fatalf("GET response source = %+v", fetched.Source)
 	}
 	stateData, err := json.Marshal(session.StateEventData{State: session.StateStopped})
@@ -299,7 +300,7 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Source == nil || *value.Source != (session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+	if value.Source == nil || !reflect.DeepEqual(*value.Source, session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
 		t.Fatalf("source after daemon-style reopen = %+v", value.Source)
 	}
 }
@@ -2053,6 +2054,11 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		CapabilityEventsBackwardPagination,
 		CapabilityActivityGlobalSSE,
 		CapabilitySessionSource,
+		CapabilitySessionSourceMetadata,
+		CapabilitySessionIdempotentCreate,
+		CapabilitySessionInputCapabilities,
+		CapabilityMessageIdempotency,
+		CapabilityTurnsStableIndex,
 		CapabilityEventsCanonicalTerminal,
 		CapabilityRecoveryClosedTurns,
 		CapabilitySessionLaunchEnvironment,
@@ -2131,7 +2137,12 @@ func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilityEventsBackwardPagination, CapabilityActivityGlobalSSE, CapabilitySessionSource}
+	want := []string{
+		CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilityEventsBackwardPagination,
+		CapabilityActivityGlobalSSE, CapabilitySessionSource, CapabilitySessionSourceMetadata,
+		CapabilitySessionIdempotentCreate, CapabilitySessionInputCapabilities,
+		CapabilityMessageIdempotency, CapabilityTurnsStableIndex,
+	}
 	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
 		t.Fatalf("capabilities = %v, want %v", body.Capabilities, want)
 	}

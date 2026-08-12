@@ -160,6 +160,9 @@ func NormalizeMessageInput(value MessageInput) (MessageInput, error) {
 			}
 		}
 	}
+	value.MessageID = strings.TrimSpace(value.MessageID)
+	value.ReplyTo = strings.TrimSpace(value.ReplyTo)
+	value.CorrelationID = strings.TrimSpace(value.CorrelationID)
 	return value, nil
 }
 
@@ -178,9 +181,11 @@ type Session struct {
 	Title              string            `json:"title"`
 	Cwd                string            `json:"cwd"`
 	AgentName          string            `json:"agentName,omitempty"`
+	IdempotencyKey     string            `json:"idempotencyKey,omitempty"`
 	Source             *Source           `json:"source,omitempty"`
 	LaunchEnvironment  map[string]string `json:"launchEnvironment,omitempty"`
 	Provider           string            `json:"provider,omitempty"`
+	InputCapabilities  InputCapabilities `json:"inputCapabilities"`
 	ProviderSessionID  string            `json:"providerSessionId,omitempty"`
 	State              string            `json:"state"`
 	StopReason         string            `json:"stopReason,omitempty"`
@@ -195,9 +200,17 @@ type Session struct {
 // application that created them. AgentHub stores these values verbatim and
 // does not authenticate them or impose uniqueness.
 type Source struct {
-	App        string `json:"app,omitempty"`
-	InstanceID string `json:"instanceId,omitempty"`
-	ExternalID string `json:"externalId,omitempty"`
+	App        string            `json:"app,omitempty"`
+	InstanceID string            `json:"instanceId,omitempty"`
+	ExternalID string            `json:"externalId,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
+}
+
+// InputCapabilities describes provider-independent input behavior for this
+// Session. It is captured with the Session so archived Sessions remain
+// self-describing even when the daemon configuration later changes.
+type InputCapabilities struct {
+	Steer bool `json:"steer"`
 }
 
 // Event is a durable canonical session event. StartTime is populated for a
@@ -235,8 +248,45 @@ type CreateInput struct {
 	Title             string
 	Cwd               string
 	AgentName         string
+	IdempotencyKey    string
 	Source            *Source
 	LaunchEnvironment map[string]string
+	Provider          string
+	InputCapabilities InputCapabilities
+}
+
+// TurnSummary is a rebuildable index entry over the durable event log. Every
+// reference is a stable event ID; no filesystem path or byte offset escapes
+// through the public API.
+type TurnSummary struct {
+	ID                string         `json:"id"`
+	Status            string         `json:"status"`
+	StartedAt         time.Time      `json:"startedAt"`
+	CompletedAt       *time.Time     `json:"completedAt,omitempty"`
+	FirstEventID      int64          `json:"firstEventId"`
+	LastEventID       int64          `json:"lastEventId"`
+	TriggerEventID    int64          `json:"triggerEventId,omitempty"`
+	FinalReplyEventID int64          `json:"finalReplyEventId,omitempty"`
+	TriggerPreview    string         `json:"triggerPreview,omitempty"`
+	TriggerRole       MessageRole    `json:"triggerRole,omitempty"`
+	TriggerSender     *MessageSender `json:"triggerSender,omitempty"`
+	FinalReplyPreview string         `json:"finalReplyPreview,omitempty"`
+	EventCount        int            `json:"eventCount"`
+	ToolEventCount    int            `json:"toolEventCount"`
+}
+
+// TurnPage uses exclusive stable event-ID cursors in both directions. A
+// Turn's FirstEventID is its cursor key.
+type TurnPage struct {
+	Turns         []TurnSummary `json:"turns"`
+	After         int64         `json:"after"`
+	Before        int64         `json:"before,omitempty"`
+	Limit         int           `json:"limit"`
+	NextAfter     int64         `json:"nextAfter"`
+	NextBefore    int64         `json:"nextBefore,omitempty"`
+	HasMore       bool          `json:"hasMore"`
+	HasMoreBefore bool          `json:"hasMoreBefore,omitempty"`
+	LatestCursor  int64         `json:"latestCursor"`
 }
 
 // ValidateLaunchEnvironment checks values before they are persisted and
@@ -292,7 +342,8 @@ type LaunchEnvironmentEventData struct {
 // ProviderEventData is the payload of the session.provider event. AgentName
 // names the agent configuration the session runs with.
 type ProviderEventData struct {
-	AgentName         string `json:"agentName,omitempty"`
-	Provider          string `json:"provider"`
-	ProviderSessionID string `json:"providerSessionId,omitempty"`
+	AgentName         string            `json:"agentName,omitempty"`
+	Provider          string            `json:"provider"`
+	ProviderSessionID string            `json:"providerSessionId,omitempty"`
+	InputCapabilities InputCapabilities `json:"inputCapabilities"`
 }

@@ -213,6 +213,8 @@ curl -s http://127.0.0.1:4646/api.md
 `GET /v1/status` is the compatibility handshake. It returns
 `"apiVersion": "1"` and only the capabilities this daemon instance can
 actually exercise: `session.source`, `session.launch-environment`,
+`session.source-metadata`, `session.idempotent-create`,
+`session.input-capabilities`, `messages.idempotent`, `turns.stable-index`,
 `session.launch-environment-update`,
 `session.strict-stopped`, `events.lossless-replay`, `events.delta-merge`,
 `activity.global-sse`,
@@ -252,6 +254,7 @@ POST   /v1/sessions/{id}/interrupt
 POST   /v1/sessions/{id}/stop
 POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
+GET    /v1/sessions/{id}/turns
 ```
 
 The events endpoint returns paginated JSON with an exclusive `after` cursor, `nextAfter`, `hasMore`, and the latest durable cursor. With `Accept: text/event-stream` or `?stream=true` it returns SSE and uses the same exclusive cursor through `Last-Event-ID`. The daemon subscribes before capturing a high-water mark, replays the entire durable backlog in pages, and then switches to live delivery; overflow closes the stream so reconnecting from the last contiguous id can recover from `events.jsonl`, including after a daemon restart. SSE frames use the default message channel (no per-type `event:` field), so unknown event envelopes are preserved.
@@ -265,10 +268,19 @@ Clients may attach optional caller-defined correlation metadata when creating a 
   "source": {
     "app": "forge",
     "instanceId": "mac-mini",
-    "externalId": "project7.task26"
-  }
+    "externalId": "project7.task26/1",
+    "metadata": {"resourceId": "project7.task26", "generationId": "gen-1"}
+  },
+  "idempotencyKey": "gen-1"
 }
 ```
+
+An identical create retry with the same `idempotencyKey` returns the original
+Session, including after daemon restart. Inbound messages can similarly carry
+a stable `messageId`. Session responses advertise `inputCapabilities.steer`,
+so orchestrators can queue instead of steering providers that do not support
+active-turn input. The Turn endpoint exposes a compact index whose references
+are stable event IDs and remains readable after archival.
 
 The `source` object is persisted in `session.created`, rebuilt into `session.json` on replay, and returned by session GET/list responses. It is deliberately self-asserted metadata: AgentHub does not register applications, reserve names, authenticate values, enforce uniqueness, or isolate tenants. Any client may submit any values and duplicates are valid. `GET /v1/sessions` accepts exact, case-sensitive `sourceApp`, `sourceInstanceId`, and `sourceExternalId` filters in any combination; they also compose with `includeArchived`, `archived`, and `state`. Sessions created without source metadata remain compatible and do not match source filters. See the complete [HTTP API reference](http://127.0.0.1:4646/api.md) served by the daemon.
 

@@ -99,6 +99,11 @@ Current runtime-backed daemon instances advertise:
 | Capability | Guaranteed behavior |
 | --- | --- |
 | `session.source` | Durable caller source metadata and exact list filters. |
+| `session.source-metadata` | Durable opaque string metadata entries inside `source.metadata`; AgentHub stores but does not interpret them. |
+| `session.idempotent-create` | A stable `idempotencyKey` creates at most one Session across retries and daemon restarts. |
+| `session.input-capabilities` | Every Session reports whether its selected provider supports active-Turn steer. |
+| `messages.idempotent` | A non-empty `messageId` is accepted at most once per Session and may be safely retried after a lost response. |
+| `turns.stable-index` | Turn pages expose event ranges, trigger/final-reply event references, status and forward/backward cursors. |
 | `session.launch-environment` | Durable per-session provider environment, including provider resume. |
 | `session.launch-environment-update` | Resume accepts a `launchEnvironment` overlay, persisted before provider start. |
 | `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
@@ -247,6 +252,11 @@ Daemon status, effective data paths and runtime summary.
     "events.lossless-replay",
     "events.backward-pagination",
     "session.source",
+    "session.source-metadata",
+    "session.idempotent-create",
+    "session.input-capabilities",
+    "messages.idempotent",
+    "turns.stable-index",
     "events.canonical-turn-terminals",
     "recovery.closed-turns",
     "session.launch-environment",
@@ -525,11 +535,17 @@ turn before the response returns.
   "title": "Fix the flaky test",
   "cwd": "/path/to/project",
   "agentName": "Codex",
+  "idempotencyKey": "forge-workspace-1-project7-task26-generation-1",
   "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
   "source": {
     "app": "forge",
     "instanceId": "mac-mini",
-    "externalId": "project7.task26"
+    "externalId": "project7.task26/1",
+    "metadata": {
+      "resourceId": "project7.task26",
+      "generationId": "01HZZ...",
+      "previousSessionId": "ses_..."
+    }
   },
   "initialMessage": {"text": "Reproduce the failure first.", "role": "user"}
 }
@@ -542,8 +558,15 @@ turn before the response returns.
   - `cwd` (required) — working directory for the agent; must exist and be a
     directory (symlinks are resolved).
   - `title` (optional) — display title.
+  - `idempotencyKey` (optional) — caller-stable creation key, trimmed and
+    limited to 4096 bytes. Repeating the same immutable creation request with
+    this key returns the original Session with `200` and `created: false`,
+    including after daemon restart. Reusing the key with different title,
+    cwd, Agent, source, environment, provider or input capability returns
+    `409 idempotency_conflict`.
   - `source` (optional) — caller-supplied correlation metadata containing
-    optional string fields `app`, `instanceId`, and `externalId`. The values
+    optional string fields `app`, `instanceId`, and `externalId`, plus an
+    optional string-to-string `metadata` map. The values
     are stored verbatim in `session.created`, survive event replay, and are
     returned by session GET/list responses. They are not authenticated or
     unique: any client may submit any values, and duplicate values are
@@ -560,14 +583,18 @@ turn before the response returns.
   - `initialMessage` (optional) — first inbound message; it accepts the same
     `text`, `role`, `sender`, `steer`, and reserved correlation fields as the
     messages endpoint. An omitted role means `user`; when non-empty the first
-    turn starts immediately. `assistant` is rejected.
-- **Success `201`:** `{"session": {...}}` with a
+    turn starts immediately. `assistant` is rejected. When creation itself
+    is retried, use a stable `initialMessage.messageId` as well so delivery
+    can be retried idempotently.
+- **Success `201`:** `{"session": {...}, "created": true}` with a
   `Location: /v1/sessions/{id}` header.
+- **Idempotent replay `200`:** `{"session": {...}, "created": false}`.
 - **Errors:** `400 invalid_request` (malformed body or removed/unknown fields), `415 json_required`, `422 agent_required`,
   `422 invalid_agent` (unknown agent or disabled provider),
   `422 invalid_cwd`,
   `422 invalid_launch_environment` (an environment name is empty or contains
   `=`/NUL, or a value contains NUL),
+  `409 idempotency_conflict`,
   `500 session_create_failed`,
   `502 provider_start_failed` (the provider handshake failed; the response
   `details.sessionId` names the session kept for diagnostics in the
@@ -806,6 +833,25 @@ data: {"sequence":1842,"windowStartedAt":"2026-08-10T15:06:23Z","windowEndedAt":
 curl -N -H "Accept: text/event-stream" "$BASE/v1/activity/events"
 ```
 
+### GET /v1/sessions/{id}/turns
+
+Read a compact, rebuildable Turn index for an active or archived Session.
+Each entry contains the Turn id and status, timestamps, `firstEventId` and
+`lastEventId`, the triggering `message.input` event reference and preview,
+the final assistant event reference and preview, plus event/tool counts.
+All references are stable event IDs in `events.jsonl`; byte offsets and paths
+are never exposed.
+
+- **Query parameters:** `after`, `before`, `latest=true`, and `limit` use the
+  same mutually exclusive, forward/backward semantics as event pagination.
+  A Turn's `firstEventId` is its cursor key.
+- **Success `200`:** `{"turns": [...], "page": {...}, "latestCursor": n}`.
+- **Errors:** `400 invalid_turn_cursor`, `404 session_not_found`.
+
+```bash
+curl -s "$BASE/v1/sessions/$SESSION/turns?latest=true&limit=50"
+```
+
 ### POST /v1/sessions/{id}/messages
 
 Send an inbound message. Without an active turn this starts a new turn; with
@@ -825,9 +871,13 @@ still submitted to the selected Provider as ordinary user-level prompt text.
   - `steer` (optional) — inject the message into the currently active turn
     instead of starting a new one. Providers that cannot steer an active
     prompt (the ACP providers: Kimi and OpenCode) reject steer requests.
-  - `messageId`, `replyTo`, `correlationId` (optional) — reserved string
-    fields persisted for future message correlation; AgentHub does not yet
-    implement Agent-to-Agent routing.
+  - `messageId` (optional) — caller-stable idempotency key for this Session.
+    Once the canonical input is durable, concurrent retries and retries after
+    daemon restart return success without appending or submitting it again.
+    Reusing the id with different text, provenance, correlation, or steer input
+    is rejected.
+  - `replyTo`, `correlationId` (optional) — correlation fields persisted for
+    future Agent-to-Agent routing.
 - **Success `202`:** `{"session": {...}}` — the turn runs asynchronously;
   watch it through the events endpoint.
 - **Errors:** `400 invalid_request`, `415 json_required`,
@@ -991,14 +1041,14 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/approvals/approval-1" \
 
 ### Idempotency and conflicts
 
-AgentHub does not currently interpret an `Idempotency-Key` header. Callers
-must use the following operation semantics:
+AgentHub does not interpret an `Idempotency-Key` header. Callers use the JSON
+`idempotencyKey` and `messageId` fields for durable retries:
 
 | Operation | Idempotency contract | Important conflict |
 | --- | --- | --- |
-| Create | Non-idempotent. Every accepted request creates a new session. A `provider_start_failed` response includes the created `details.sessionId`; inspect that session instead of blindly retrying. | Validation errors are 400/422; provider startup is 502. |
-| Message | Non-idempotent. A user message and `turn.started` may already be durable even if provider submission fails. | `turn_active`, `session_stopping`, `session_archived`. |
-| Steer (`messages` with `steer=true`) | Non-idempotent. Repeating it injects the text again. With no active turn it starts a normal new turn. | `session_stopping`, `session_archived`; provider rejection uses `runtime_operation_failed`. |
+| Create | Without `idempotencyKey`, every accepted request creates a Session. With a key, identical retries return the original Session across daemon restarts; reuse with different immutable creation input fails. | `idempotency_conflict`; provider startup is 502. |
+| Message | Without `messageId`, retry outcome may be ambiguous. With a stable id, concurrent or restarted identical retries append at most one canonical `message.input` event and return the current Session after acceptance. | Reusing an id with different canonical input is rejected; also `turn_active`, `session_stopping`, `session_archived`. |
+| Steer (`messages` with `steer=true`) | The same `messageId` rule applies. Active-turn steer is accepted only when `session.inputCapabilities.steer` is true. With no active turn it starts a normal turn. | `session_stopping`, `session_archived`; unsupported steer and provider rejection use `runtime_operation_failed`. |
 | Approval | Non-idempotent. Once resolved, the same id is no longer pending. | `approval_not_pending`, `session_archived`. |
 | Interrupt | Not retry-idempotent: a successful call creates one `turn.cancelled`; a repeat sees no active turn. | `turn_not_active`, `session_archived`. |
 | Stop | Idempotent for an already stopped session. It blocks through confirmed provider exit. | `session_archived`; process cleanup failure uses `runtime_operation_failed`. |

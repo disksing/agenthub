@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -419,7 +420,7 @@ func TestSessionSourcePersistsAndFilters(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if value.Source == nil || *value.Source != (Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+		if value.Source == nil || !reflect.DeepEqual(*value.Source, Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
 			t.Fatalf("replayed source for %s = %+v", id, value.Source)
 		}
 	}
