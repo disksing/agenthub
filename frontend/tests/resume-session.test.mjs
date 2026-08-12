@@ -9,7 +9,7 @@ const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..",
 
 test("only stopped sessions are resumable", () => {
   assert.equal(isResumable({ id: "ses_1", state: "stopped" }), true);
-  for (const state of ["ready", "starting", "busy", "waiting_approval", "stopping", "failed", "archived"]) {
+  for (const state of ["ready", "starting", "running", "waiting_approval", "stopping", "failed", "archived"]) {
     assert.equal(isResumable({ id: "ses_1", state }), false, `${state} must not be resumable`);
   }
   assert.equal(isResumable(null), false);

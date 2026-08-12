@@ -18,7 +18,7 @@ AgentHub is a local agent launcher and session hub. A single Go daemon manages C
 - Same-origin Web UI: session list, real-time chat, status, approvals, stop, structured settings, and a floating activity/quota companion with optional Web Audio beeps.
 - Provider model enumeration: each built-in provider reports its currently usable models through its official interface, normalized into one read-only API.
 - CLI: one-shot runs, interactive chat, attach, event queries, and session management.
-- Each session stores only `session.json` and an append-only `events.jsonl`; turns and approvals are events, with no separate files.
+- Each session stores an append-only `events.jsonl` source of truth, rebuildable `session.json`, and rebuildable compact `turns.jsonl`; approvals remain canonical Events rather than a separate authority.
 
 ## Build and Run
 
@@ -219,11 +219,11 @@ curl -s http://127.0.0.1:4646/api.md
 `"apiVersion": "1"` and only the capabilities this daemon instance can
 actually exercise: `session.source`, `session.launch-environment`,
 `session.source-metadata`, `session.idempotent-create`,
-`session.input-capabilities`, `messages.idempotent`, `turns.stable-index`,
+`session.input-capabilities`, `messages.idempotent`, `messages.at-least-once`, `turns.stable-index`, `turns.materialized`,
 `session.launch-environment-update`,
 `session.strict-stopped`, `events.lossless-replay`, `events.delta-merge`,
 `activity.global-sse`,
-`events.canonical-turn-terminals`, and `recovery.closed-turns`. A client
+`events.canonical-turn-terminals`, and `recovery.closed-turns`. Recovery closes interrupted delivered Turns, while a durably accepted input still awaiting Provider delivery remains on the at-least-once retry path. A client
 must reject an unsupported API version or a missing required capability
 before creating a session; older daemons with neither field are explicitly
 incompatible. Unknown additional capabilities, response fields and event
@@ -387,7 +387,7 @@ All persistent user data lives under a single root, `$HOME/.agenthub`:
 └── server.lock                 (transient single-daemon lock)
 ```
 
-`events.jsonl` is the single source of truth, and `session.json` is a rebuildable projection. Writes use append + fsync; snapshots use a temporary file + fsync + rename. A partial final line caused by an interrupted current write is repaired at startup. The archive is a plain directory move inside the same store: if the daemon stops between the archived event and the move, startup completes the move, so the physical location always matches the event log. Directories are created `0700` and sensitive files `0600`.
+`events.jsonl` is the single source of truth; `session.json` and compact `turns.jsonl` are rebuildable projections. Writes persist the canonical Event before updating either projection. A partial final line caused by an interrupted current write is repaired at startup or query time. The archive is a plain directory move inside the same store: if the daemon stops between the archived event and the move, startup completes the move, so the physical location always matches the event log. Directories are created `0700` and sensitive files `0600`.
 
 `agenthub status` (and `GET /v1/status`) reports the effective config, session store, archive and logs paths, so you can confirm the layout after an upgrade.
 

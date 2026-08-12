@@ -406,6 +406,13 @@ func (s *Store) Append(id, eventType, turnID string, data []byte) (Event, error)
 // subscribers receive a small append patch, so steady-state live traffic
 // stays proportional to the fragments instead of the accumulated message.
 func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, data []byte) (Event, Event, error) {
+	if eventType == "session.state" {
+		var stateData StateEventData
+		if json.Unmarshal(data, &stateData) == nil && stateData.State == legacyStateBusy {
+			stateData.State = StateRunning
+			data, _ = json.Marshal(stateData)
+		}
+	}
 	event := Event{
 		ID:        state.session.LastEventID + 1,
 		Time:      time.Now().UTC(),
@@ -439,6 +446,10 @@ func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, 
 	if err := writeJSONAtomic(s.snapshotPath(id), state.session); err != nil {
 		return Event{}, Event{}, fmt.Errorf("write session snapshot: %w", err)
 	}
+	// turns.jsonl is a rebuildable materialized view. The canonical Event and
+	// snapshot are already durable; projection failure is repaired on query or
+	// next open and must never roll back or falsify the Event fact.
+	_ = s.projectTurnEventLocked(state, id, event)
 	return event, event, nil
 }
 
@@ -1044,13 +1055,19 @@ func applyEvent(projected *Session, event Event) error {
 			return err
 		}
 		*projected = created
+		if projected.State == legacyStateBusy {
+			projected.State = StateRunning
+		}
 	case "session.state":
 		var data StateEventData
 		if err := decodeCurrentEvent(event.Data, &data); err != nil {
 			return err
 		}
+		if data.State == legacyStateBusy {
+			data.State = StateRunning
+		}
 		switch data.State {
-		case StateStarting, StateReady, StateBusy, StateWaitingApproval, StateStopping, StateStopped, StateArchived:
+		case StateStarting, StateReady, StateRunning, StateWaitingApproval, StateStopping, StateStopped, StateArchived:
 		default:
 			return fmt.Errorf("unsupported session state %q", data.State)
 		}
@@ -1090,7 +1107,7 @@ func applyEvent(projected *Session, event Event) error {
 		projected.State = StateArchived
 	case "turn.started":
 		projected.CurrentTurnID = event.TurnID
-		projected.State = StateBusy
+		projected.State = StateRunning
 	case EventTurnCompleted, EventTurnFailed, EventTurnCancelled:
 		if projected.CurrentTurnID == event.TurnID {
 			projected.CurrentTurnID = ""
@@ -1118,7 +1135,7 @@ func applyEvent(projected *Session, event Event) error {
 		if len(projected.PendingApprovalIDs) == 0 &&
 			projected.State != StateStopping && projected.State != StateStopped && projected.State != StateArchived {
 			if projected.CurrentTurnID != "" {
-				projected.State = StateBusy
+				projected.State = StateRunning
 			} else {
 				projected.State = StateReady
 			}
@@ -1475,6 +1492,14 @@ func (s *Store) snapshotPath(id string) string {
 
 func (s *Store) eventsPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "events.jsonl")
+}
+
+func (s *Store) turnsPathFor(state *sessionState, id string) string {
+	return filepath.Join(s.sessionDirFor(state, id), "turns.jsonl")
+}
+
+func (s *Store) turnsPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "turns.jsonl")
 }
 
 func cloneSession(value Session) Session {

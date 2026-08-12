@@ -53,10 +53,10 @@ func TestStorePersistsOneContinuousEventLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("expected only session.json and events.jsonl, got %d entries", len(entries))
+	if len(entries) != 3 {
+		t.Fatalf("expected session.json, events.jsonl, and turns.jsonl, got %d entries", len(entries))
 	}
-	for _, name := range []string{"session.json", "events.jsonl"} {
+	for _, name := range []string{"session.json", "events.jsonl", "turns.jsonl"} {
 		if _, err := os.Stat(filepath.Join(sessionDir, name)); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
@@ -718,7 +718,7 @@ func TestArchiveMovesWholeSessionDirectory(t *testing.T) {
 }
 
 func TestArchiveRejectsEveryNonStoppedState(t *testing.T) {
-	for _, state := range []string{StateReady, StateStarting, StateBusy, StateWaitingApproval, StateStopping} {
+	for _, state := range []string{StateReady, StateStarting, StateRunning, StateWaitingApproval, StateStopping} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			store, err := Open(root)

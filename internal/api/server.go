@@ -33,7 +33,9 @@ const (
 	CapabilitySessionIdempotentCreate  = "session.idempotent-create"
 	CapabilitySessionInputCapabilities = "session.input-capabilities"
 	CapabilityMessageIdempotency       = "messages.idempotent"
+	CapabilityMessageAtLeastOnce       = "messages.at-least-once"
 	CapabilityTurnsStableIndex         = "turns.stable-index"
+	CapabilityTurnsMaterialized        = "turns.materialized"
 	CapabilitySessionLaunchEnvironment = "session.launch-environment"
 	// CapabilitySessionLaunchEnvironmentUpdate reports that resume accepts
 	// an optional launchEnvironment overlay persisted before provider start.
@@ -230,7 +232,9 @@ func (s *Server) capabilities() []string {
 		CapabilitySessionIdempotentCreate,
 		CapabilitySessionInputCapabilities,
 		CapabilityMessageIdempotency,
+		CapabilityMessageAtLeastOnce,
 		CapabilityTurnsStableIndex,
+		CapabilityTurnsMaterialized,
 	}
 	if s.runtime != nil {
 		capabilities = append(capabilities,
@@ -677,6 +681,7 @@ func (s *Server) sessionOps() []sessionOp {
 		{http.MethodDelete, "", s.archiveSession, "DELETE /v1/sessions/{id}"},
 		{http.MethodGet, "events", s.events, "GET /v1/sessions/{id}/events"},
 		{http.MethodGet, "turns", s.turns, "GET /v1/sessions/{id}/turns"},
+		{http.MethodGet, "turns/{turnId}", s.turn, "GET /v1/sessions/{id}/turns/{turnId}"},
 		{http.MethodPost, "messages", s.sendMessage, "POST /v1/sessions/{id}/messages"},
 		{http.MethodPost, "resume", s.resumeSession, "POST /v1/sessions/{id}/resume"},
 		{http.MethodPost, "interrupt", s.interruptSession, "POST /v1/sessions/{id}/interrupt"},
@@ -1220,6 +1225,24 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	stream := strings.Contains(r.Header.Get("Accept"), "text/event-stream") || r.URL.Query().Get("stream") == "true"
+	rangeStart, rangeEnd, ranged, err := parseEventRange(r.URL.Query())
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_event_range", err.Error(), nil)
+		return
+	}
+	if ranged {
+		if backward || stream {
+			writeAPIError(w, http.StatusBadRequest, "invalid_event_range", "event ranges do not support before/latest or streaming", nil)
+			return
+		}
+		if !explicitEventCursor(r) || after < rangeStart-1 {
+			after = rangeStart - 1
+		}
+		if after >= rangeEnd {
+			writeAPIError(w, http.StatusBadRequest, "invalid_event_range", "after must be smaller than the range end", nil)
+			return
+		}
+	}
 	if !stream {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		if backward {
@@ -1254,16 +1277,35 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 			s.writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"events": page.Events,
+		events := page.Events
+		hasMore := page.HasMore
+		nextAfter := page.NextAfter
+		if ranged {
+			end := sort.Search(len(events), func(index int) bool { return events[index].ID > rangeEnd })
+			events = events[:end]
+			hasMore = len(events) > 0 && events[len(events)-1].ID < rangeEnd && events[len(events)-1].ID < page.LatestCursor
+			if len(events) == 0 {
+				hasMore = after < rangeEnd && after < page.LatestCursor
+				nextAfter = after
+			} else {
+				nextAfter = events[len(events)-1].ID
+			}
+		}
+		response := map[string]any{
+			"events": events,
 			"page": map[string]any{
 				"after":     page.After,
 				"limit":     page.Limit,
-				"nextAfter": page.NextAfter,
-				"hasMore":   page.HasMore,
+				"nextAfter": nextAfter,
+				"hasMore":   hasMore,
 			},
 			"latestCursor": page.LatestCursor,
-		})
+		}
+		if ranged {
+			response["rangeStart"] = rangeStart
+			response["rangeEnd"] = rangeEnd
+		}
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 	if backward {
@@ -1375,6 +1417,26 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 	}
 }
 
+func parseEventRange(values url.Values) (int64, int64, bool, error) {
+	startText := strings.TrimSpace(values.Get("start"))
+	endText := strings.TrimSpace(values.Get("end"))
+	if startText == "" && endText == "" {
+		return 0, 0, false, nil
+	}
+	if startText == "" || endText == "" {
+		return 0, 0, false, errors.New("start and end must be provided together")
+	}
+	start, err := strconv.ParseInt(startText, 10, 64)
+	if err != nil || start <= 0 {
+		return 0, 0, false, errors.New("start must be a positive event id")
+	}
+	end, err := strconv.ParseInt(endText, 10, 64)
+	if err != nil || end < start {
+		return 0, 0, false, errors.New("end must be an event id greater than or equal to start")
+	}
+	return start, end, true, nil
+}
+
 func (s *Server) turns(w http.ResponseWriter, r *http.Request, id string) {
 	after, err := parseEventCursor(r)
 	if err != nil {
@@ -1407,8 +1469,32 @@ func (s *Server) turns(w http.ResponseWriter, r *http.Request, id string) {
 			"nextAfter": page.NextAfter, "nextBefore": page.NextBefore,
 			"hasMore": page.HasMore, "hasMoreBefore": page.HasMoreBefore,
 		},
-		"latestCursor": page.LatestCursor,
+		"latestCursor":  page.LatestCursor,
+		"latestEventId": page.LatestEventID,
 	})
+}
+
+func (s *Server) turn(w http.ResponseWriter, r *http.Request, id string) {
+	turnID := strings.TrimSpace(r.PathValue("turnId"))
+	if turnID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_turn_id", "turn id is required", nil)
+		return
+	}
+	turn, err := s.store.Turn(id, turnID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "turn_not_found", "turn not found", nil)
+			return
+		}
+		s.writeStoreError(w, err)
+		return
+	}
+	value, err := s.store.Get(id)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"turn": turn, "latestEventId": value.LastEventID})
 }
 
 func (s *Server) writeStoreError(w http.ResponseWriter, err error) {

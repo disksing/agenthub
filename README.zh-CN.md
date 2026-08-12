@@ -19,7 +19,7 @@ AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon �
 - 浮动伙伴：展示由 OnWatch 提供的 Provider 配额，以及由 AgentHub 自身事件聚合出的实时 Session 活动，可选 Web Audio 提示音。
 - Provider 模型枚举：每个内置 Provider 都能通过各自的官方接口报告当前可用模型，统一为一个只读 API。
 - CLI：一次性运行、交互聊天、attach、事件查询和 Session 管理。
-- 每个 Session 只保存 `session.json` 与连续的 `events.jsonl`；Turn 和 Approval 都是事件，不建立独立文件。
+- 每个 Session 保存唯一事实来源 `events.jsonl`，以及可重建的 `session.json` 和紧凑 `turns.jsonl` 投影；Approval 仍只以规范 Event 为准。
 
 ## 构建与启动
 
@@ -212,13 +212,14 @@ POST   /v1/sessions/{id}/stop
 POST   /v1/sessions/{id}/approvals/{approvalId}
 GET    /v1/sessions/{id}/events
 GET    /v1/sessions/{id}/turns
+GET    /v1/sessions/{id}/turns/{turnId}
 ```
 
 事件端点在普通请求下返回分页 JSON，包含 exclusive `after` cursor、`nextAfter`、`hasMore` 和最新 durable cursor；带 `Accept: text/event-stream` 或 `?stream=true` 时返回 SSE，并通过 `Last-Event-ID` 使用相同的 exclusive cursor 语义。daemon 先建立订阅并捕获 high-water mark，再分页重放完整 durable backlog，最后切换到 live；subscriber overflow 会关闭流，客户端可从最后一个连续 id 重连并从 `events.jsonl` 恢复，daemon 重启后同样有效。SSE 帧使用默认 message 通道，因此未知 event envelope 也会原样传输。
 
 资源编排客户端可在创建请求中提供 `idempotencyKey`，并在 `source.metadata`
 保存 Workspace 实例、资源和代际标识；完全相同的请求在 daemon 重启后仍返回
-原 Session。入站消息可提供稳定 `messageId`，并发或重启重试只会持久化一次。
+原 Session。入站消息可提供稳定 `messageId`，并发或重启重试只会持久化一次规范输入。AgentHub 在返回可出队的成功响应前接管至少一次投递责任；Provider 失败、响应不明或 daemon 重启时继续重试。如果 Provider 已接收而确认 Event 尚未落盘，恢复可能产生少量重复投递。
 Session 的 `inputCapabilities.steer` 明确说明当前 Provider 是否支持活动 Turn
 输入；不支持时调用方应排队。`turns` 端点返回以稳定 event id 为引用的紧凑
 Turn 索引，Session 归档后仍可读取。
@@ -295,7 +296,7 @@ CLI 对应命令是 `agenthub session archive <id>`、`agenthub session list --a
 启动失败使用 `startup_error`；显式 stop 和 daemon 优雅关闭使用
 `requested`。daemon 被 SIGKILL 后，新 daemon 使用持久化的
 `provider.process.started` 证据终止遗留进程组，确定性取消 pending
-approval 与 open turn，最后使用 `daemon_recovery`。
+approval 与已投递的 open turn，最后使用 `daemon_recovery`。已持久接受但尚未确认交给 Provider 的输入不会被伪装成已完成；它保留在可恢复投递路径，并在 Provider 恢复后继续尝试。
 
 ## 数据与安全
 
@@ -313,7 +314,7 @@ approval 与 open turn，最后使用 `daemon_recovery`。
 └── server.lock                 （临时单 daemon 锁）
 ```
 
-`events.jsonl` 是唯一事实来源，`session.json` 是可重建投影。写入使用 append + fsync，快照使用临时文件 + fsync + rename；当前写入中断造成的最后半行可在启动时修复。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。目录默认 `0700`，敏感文件默认 `0600`。
+`events.jsonl` 是唯一事实来源，`session.json` 与紧凑的 `turns.jsonl` 都是可重建投影。写入先 append + fsync 规范 Event，再更新投影；当前写入中断造成的最后半行可在启动或查询时修复。归档只是同一 Store 内的目录移动：如果 daemon 在追加归档事件和移动目录之间停止，启动时会补完移动，使物理位置始终与事件日志一致。目录默认 `0700`，敏感文件默认 `0600`。
 
 `agenthub status`（以及 `GET /v1/status`）会报告当前生效的配置、Session Store、归档与日志路径，便于升级后确认布局。
 

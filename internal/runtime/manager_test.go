@@ -21,6 +21,7 @@ type fakeSession struct {
 	hooks        provider.Hooks
 	resumeID     string
 	prompts      []string
+	promptErrors []error
 	resolution   provider.ApprovalResolution
 	startErr     error
 	onClose      func()
@@ -54,7 +55,15 @@ func (f *fakeSession) Start(resumeID string) error {
 func (f *fakeSession) Prompt(text string, _ bool) error {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, text)
+	var promptErr error
+	if len(f.promptErrors) > 0 {
+		promptErr = f.promptErrors[0]
+		f.promptErrors = f.promptErrors[1:]
+	}
 	f.mu.Unlock()
+	if promptErr != nil {
+		return promptErr
+	}
 	f.hooks.Event(provider.Event{Type: "message.assistant.delta", Data: map[string]any{"text": "answer"}})
 	if f.holdTurn {
 		return nil
@@ -65,6 +74,150 @@ func (f *fakeSession) Prompt(text string, _ bool) error {
 		TurnDone: true,
 	})
 	return nil
+}
+
+func TestStableMessageRetryContinuesUntilProviderAccepts(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	adapter := &fakeSession{holdTurn: true, promptErrors: []error{errors.New("temporary provider failure")}}
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter.hooks = options.Hooks
+		return adapter, nil
+	}
+	input := session.MessageInput{Text: "deliver me", Role: session.MessageRoleUser, MessageID: "stable-1"}
+	if _, err := manager.SendMessage(value.ID, input); err != nil {
+		t.Fatalf("durably accepted message returned an error: %v", err)
+	}
+	message, found, err := store.DurableMessageByID(value.ID, input.MessageID)
+	if err != nil || !found || message.Delivered {
+		t.Fatalf("message after failed attempt = %+v, found=%v, err=%v", message, found, err)
+	}
+	if _, err := manager.SendMessage(value.ID, input); err != nil {
+		t.Fatalf("stable retry failed: %v", err)
+	}
+	message, found, err = store.DurableMessageByID(value.ID, input.MessageID)
+	if err != nil || !found || !message.Delivered || message.Attempt != 2 {
+		t.Fatalf("message after retry = %+v, found=%v, err=%v", message, found, err)
+	}
+	adapter.mu.Lock()
+	promptCount := len(adapter.prompts)
+	adapter.mu.Unlock()
+	if promptCount != 2 {
+		t.Fatalf("provider prompt count = %d, want 2", promptCount)
+	}
+	events, err := store.EventsAfter(value.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := 0
+	for _, event := range events {
+		if event.Type == session.EventMessageInput {
+			inputs++
+		}
+	}
+	if inputs != 1 {
+		t.Fatalf("canonical input count = %d, want 1", inputs)
+	}
+}
+
+func TestConcurrentStableMessageRetryCreatesOneInputAndOneAcceptedPrompt(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, testConfig())
+	adapter := &fakeSession{holdTurn: true}
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter.hooks = options.Hooks
+		return adapter, nil
+	}
+	input := session.MessageInput{Text: "once", Role: session.MessageRoleUser, MessageID: "stable-concurrent"}
+	var group sync.WaitGroup
+	errorsSeen := make(chan error, 12)
+	for index := 0; index < 12; index++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, err := manager.SendMessage(value.ID, input)
+			errorsSeen <- err
+		}()
+	}
+	group.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter.mu.Lock()
+	promptCount := len(adapter.prompts)
+	adapter.mu.Unlock()
+	if promptCount != 1 {
+		t.Fatalf("provider prompt count = %d, want 1", promptCount)
+	}
+	messages, err := store.DurableMessages(value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || !messages[0].Delivered {
+		t.Fatalf("durable messages = %+v", messages)
+	}
+}
+
+func TestRestartResumesUnconfirmedDurableMessage(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnID := "turn_pending"
+	input := session.MessageInput{Text: "recover", Role: session.MessageRoleUser, MessageID: "stable-restart"}
+	messageEvent, err := store.Append(value.ID, session.EventMessageInput, turnID, mustJSON(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(value.ID, "turn.started", turnID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(value.ID, session.EventMessageDelivery, turnID, mustJSON(session.MessageDeliveryEventData{
+		MessageEventID: messageEvent.ID, MessageID: input.MessageID,
+		State: session.MessageDeliveryAttempting, Attempt: 1,
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := session.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(reopened, testConfig())
+	adapter := &fakeSession{holdTurn: true}
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		adapter.hooks = options.Hooks
+		return adapter, nil
+	}
+	if _, err := manager.Start(value.ID); err != nil {
+		t.Fatal(err)
+	}
+	message, found, err := reopened.DurableMessageByID(value.ID, input.MessageID)
+	if err != nil || !found || !message.Delivered || message.Attempt != 2 {
+		t.Fatalf("recovered message = %+v, found=%v, err=%v", message, found, err)
+	}
 }
 func (f *fakeSession) Interrupt() error { return nil }
 func (f *fakeSession) Approve(_ string, resolution provider.ApprovalResolution) error {
@@ -137,15 +290,20 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	for _, event := range events {
 		types = append(types, event.Type)
 	}
-	expected := []string{"session.created", "session.state", "session.provider", "session.state", "message.input", "turn.started", "message.assistant.delta", "provider.turn.completed", "turn.completed"}
+	expected := []string{"session.created", "message.input", "turn.started", "session.state", "session.provider", "session.state", "message.delivery", "message.assistant.delta", "provider.turn.completed", "turn.completed", "message.delivery"}
 	if string(mustJSON(types)) != string(mustJSON(expected)) {
 		t.Fatalf("event types = %v", types)
 	}
-	if got := string(events[len(events)-1].Data); got != "{}" {
-		t.Fatalf("canonical turn.completed payload = %s, want provider-independent {}", got)
-	}
-	if got := string(events[len(events)-2].Data); !strings.Contains(got, "provider-private") {
-		t.Fatalf("provider-native diagnostic payload was not preserved: %s", got)
+	for index, event := range events {
+		if event.Type != session.EventTurnCompleted {
+			continue
+		}
+		if got := string(event.Data); got != "{}" {
+			t.Fatalf("canonical turn.completed payload = %s, want provider-independent {}", got)
+		}
+		if index == 0 || !strings.Contains(string(events[index-1].Data), "provider-private") {
+			t.Fatalf("provider-native diagnostic payload was not preserved before event %d", event.ID)
+		}
 	}
 
 	manager.Close()
@@ -679,7 +837,7 @@ func TestRetryableProviderErrorKeepsTurnBusyUntilCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if during.State != session.StateBusy || during.CurrentTurnID == "" {
+	if during.State != session.StateRunning || during.CurrentTurnID == "" {
 		t.Fatalf("retryable error closed the active turn: %+v", during)
 	}
 	turnID := during.CurrentTurnID

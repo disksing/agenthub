@@ -28,7 +28,7 @@ test("inactive sessions are archivable", () => {
 });
 
 test("active or unsafe sessions are not archivable", () => {
-  for (const state of ["ready", "starting", "busy", "waiting_approval", "stopping", "failed"]) {
+  for (const state of ["ready", "starting", "running", "waiting_approval", "stopping", "failed"]) {
     assert.equal(isArchivable({ ...base, state }), false, state);
     assert.match(archiveDisabledReason({ ...base, state }), /Stop the session/, state);
   }

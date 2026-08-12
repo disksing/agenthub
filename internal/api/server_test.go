@@ -1394,7 +1394,7 @@ func TestArchiveEndpointErrors(t *testing.T) {
 		t.Fatalf("missing archive status: %s", response.Status)
 	}
 
-	// A busy session conflicts and keeps its directory.
+	// A running session conflicts and keeps its directory.
 	created := createTestSession(t, server)
 	if _, err := store.Append(created.ID, "turn.started", "turn_open", nil); err != nil {
 		t.Fatal(err)
@@ -1419,7 +1419,7 @@ func TestArchiveEndpointErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.State != session.StateBusy {
+	if value.State != session.StateRunning {
 		t.Fatalf("state changed to %q after conflict", value.State)
 	}
 }
@@ -2058,7 +2058,9 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		CapabilitySessionIdempotentCreate,
 		CapabilitySessionInputCapabilities,
 		CapabilityMessageIdempotency,
+		CapabilityMessageAtLeastOnce,
 		CapabilityTurnsStableIndex,
+		CapabilityTurnsMaterialized,
 		CapabilityEventsCanonicalTerminal,
 		CapabilityRecoveryClosedTurns,
 		CapabilitySessionLaunchEnvironment,
@@ -2141,7 +2143,7 @@ func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
 		CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilityEventsBackwardPagination,
 		CapabilityActivityGlobalSSE, CapabilitySessionSource, CapabilitySessionSourceMetadata,
 		CapabilitySessionIdempotentCreate, CapabilitySessionInputCapabilities,
-		CapabilityMessageIdempotency, CapabilityTurnsStableIndex,
+		CapabilityMessageIdempotency, CapabilityMessageAtLeastOnce, CapabilityTurnsStableIndex, CapabilityTurnsMaterialized,
 	}
 	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
 		t.Fatalf("capabilities = %v, want %v", body.Capabilities, want)

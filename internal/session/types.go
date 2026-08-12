@@ -11,12 +11,14 @@ import (
 const (
 	StateStarting        = "starting"
 	StateReady           = "ready"
-	StateBusy            = "busy"
+	StateRunning         = "running"
 	StateWaitingApproval = "waiting_approval"
 	StateStopping        = "stopping"
 	StateStopped         = "stopped"
 	StateArchived        = "archived"
 )
+
+const legacyStateBusy = "busy"
 
 const (
 	StopReasonRequested      = "requested"
@@ -27,10 +29,11 @@ const (
 )
 
 const (
-	EventTurnCompleted = "turn.completed"
-	EventTurnFailed    = "turn.failed"
-	EventTurnCancelled = "turn.cancelled"
-	EventMessageInput  = "message.input"
+	EventTurnCompleted   = "turn.completed"
+	EventTurnFailed      = "turn.failed"
+	EventTurnCancelled   = "turn.cancelled"
+	EventMessageInput    = "message.input"
+	EventMessageDelivery = "message.delivery"
 )
 
 // MessageRole describes message provenance only. It is not an authorization
@@ -63,6 +66,33 @@ type MessageInput struct {
 	MessageID     string         `json:"messageId,omitempty"`
 	ReplyTo       string         `json:"replyTo,omitempty"`
 	CorrelationID string         `json:"correlationId,omitempty"`
+}
+
+// MessageDeliveryEventData records attempts to hand one durable canonical
+// input to its provider. Accepted means the provider call returned success;
+// a crash between the provider accepting the input and this event being
+// fsynced is intentionally recovered by another attempt (at-least-once).
+type MessageDeliveryEventData struct {
+	MessageEventID int64  `json:"messageEventId"`
+	MessageID      string `json:"messageId,omitempty"`
+	State          string `json:"state"`
+	Attempt        int    `json:"attempt"`
+	Error          string `json:"error,omitempty"`
+}
+
+const (
+	MessageDeliveryAttempting = "attempting"
+	MessageDeliveryPending    = "pending"
+	MessageDeliveryAccepted   = "accepted"
+)
+
+// DurableMessage is reconstructed exclusively from canonical Events.
+type DurableMessage struct {
+	EventID   int64
+	TurnID    string
+	Input     MessageInput
+	Attempt   int
+	Delivered bool
 }
 
 // MessageInputError is returned when an inbound message cannot be accepted.
@@ -259,20 +289,47 @@ type CreateInput struct {
 // reference is a stable event ID; no filesystem path or byte offset escapes
 // through the public API.
 type TurnSummary struct {
-	ID                string         `json:"id"`
-	Status            string         `json:"status"`
-	StartedAt         time.Time      `json:"startedAt"`
-	CompletedAt       *time.Time     `json:"completedAt,omitempty"`
-	FirstEventID      int64          `json:"firstEventId"`
-	LastEventID       int64          `json:"lastEventId"`
-	TriggerEventID    int64          `json:"triggerEventId,omitempty"`
-	FinalReplyEventID int64          `json:"finalReplyEventId,omitempty"`
-	TriggerPreview    string         `json:"triggerPreview,omitempty"`
-	TriggerRole       MessageRole    `json:"triggerRole,omitempty"`
-	TriggerSender     *MessageSender `json:"triggerSender,omitempty"`
-	FinalReplyPreview string         `json:"finalReplyPreview,omitempty"`
-	EventCount        int            `json:"eventCount"`
-	ToolEventCount    int            `json:"toolEventCount"`
+	ID                 string         `json:"id"`
+	TurnID             string         `json:"turnId"`
+	Status             string         `json:"status"`
+	Closed             bool           `json:"closed"`
+	StartedAt          time.Time      `json:"startedAt"`
+	EndedAt            *time.Time     `json:"endedAt,omitempty"`
+	DurationMS         int64          `json:"durationMs"`
+	StartEventID       int64          `json:"startEventId"`
+	TurnStartedEventID int64          `json:"turnStartedEventId,omitempty"`
+	EndEventID         int64          `json:"endEventId,omitempty"`
+	CompletedAt        *time.Time     `json:"completedAt,omitempty"`
+	FirstEventID       int64          `json:"firstEventId"`
+	LastEventID        int64          `json:"lastEventId"`
+	TriggerEventID     int64          `json:"triggerEventId,omitempty"`
+	FinalReplyEventID  int64          `json:"finalReplyEventId,omitempty"`
+	TriggerPreview     string         `json:"triggerPreview,omitempty"`
+	TriggerRole        MessageRole    `json:"triggerRole,omitempty"`
+	TriggerSender      *MessageSender `json:"triggerSender,omitempty"`
+	FinalReplyPreview  string         `json:"finalReplyPreview,omitempty"`
+	EventCount         int            `json:"eventCount"`
+	ToolEventCount     int            `json:"toolEventCount"`
+	Items              []TurnItem     `json:"items"`
+}
+
+// TurnItem is a compact visible projection over a stable Event range.
+// Message items retain complete text and provenance. Thinking and tool items
+// deliberately retain only deterministic count/timing metadata; callers use
+// the bounded Event range endpoint to expand their raw details.
+type TurnItem struct {
+	Type         string          `json:"type"`
+	Role         MessageRole     `json:"role,omitempty"`
+	Sender       *MessageSender  `json:"sender,omitempty"`
+	Steer        bool            `json:"steer,omitempty"`
+	Text         string          `json:"text,omitempty"`
+	StartEventID int64           `json:"startEventId"`
+	EndEventID   int64           `json:"endEventId"`
+	StartedAt    time.Time       `json:"startedAt"`
+	EndedAt      time.Time       `json:"endedAt"`
+	DurationMS   int64           `json:"durationMs"`
+	Count        int             `json:"count"`
+	Data         json.RawMessage `json:"data,omitempty"`
 }
 
 // TurnPage uses exclusive stable event-ID cursors in both directions. A
@@ -287,6 +344,7 @@ type TurnPage struct {
 	HasMore       bool          `json:"hasMore"`
 	HasMoreBefore bool          `json:"hasMoreBefore,omitempty"`
 	LatestCursor  int64         `json:"latestCursor"`
+	LatestEventID int64         `json:"latestEventId"`
 }
 
 // ValidateLaunchEnvironment checks values before they are persisted and

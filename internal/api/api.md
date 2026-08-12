@@ -102,8 +102,10 @@ Current runtime-backed daemon instances advertise:
 | `session.source-metadata` | Durable opaque string metadata entries inside `source.metadata`; AgentHub stores but does not interpret them. |
 | `session.idempotent-create` | A stable `idempotencyKey` creates at most one Session across retries and daemon restarts. |
 | `session.input-capabilities` | Every Session reports whether its selected provider supports active-Turn steer. |
-| `messages.idempotent` | A non-empty `messageId` is accepted at most once per Session and may be safely retried after a lost response. |
+| `messages.idempotent` | A non-empty `messageId` creates at most one canonical `message.input` per Session; conflicting reuse is rejected. |
+| `messages.at-least-once` | Once a message request is durably accepted, AgentHub retains provider delivery responsibility across ambiguous responses, provider failures, and daemon restarts. A crash after provider acceptance but before durable acknowledgement can cause a limited duplicate attempt. |
 | `turns.stable-index` | Turn pages expose event ranges, trigger/final-reply event references, status and forward/backward cursors. |
+| `turns.materialized` | Closed Turns and ordered compact items are read from rebuildable `turns.jsonl`; single-Turn queries repair projection lag and Event ranges provide bounded detail expansion. |
 | `session.launch-environment` | Durable per-session provider environment, including provider resume. |
 | `session.launch-environment-update` | Resume accepts a `launchEnvironment` overlay, persisted before provider start. |
 | `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
@@ -112,7 +114,7 @@ Current runtime-backed daemon instances advertise:
 | `events.backward-pagination` | JSON event pages can also read the log backwards with `latest=true` or an exclusive `before` cursor. |
 | `activity.global-sse` | Best-effort one-second activity frames across all Sessions, with no historical beep replay. |
 | `events.canonical-turn-terminals` | Provider-independent `turn.completed`, `turn.failed` and `turn.cancelled`. |
-| `recovery.closed-turns` | Daemon recovery closes open approvals and turns before publishing `stopped`. |
+| `recovery.closed-turns` | Daemon recovery closes interrupted delivered turns before publishing `stopped`; an accepted input still pending Provider delivery remains recoverable and is retried. |
 
 Store-only test/diagnostic server instances omit runtime-backed capabilities;
 the daemon never advertises them merely because their names are compiled
@@ -145,7 +147,7 @@ A session object looks like:
 }
 ```
 
-`state` is one of `starting`, `ready`, `busy`, `waiting_approval`,
+`state` is one of `starting`, `ready`, `running`, `waiting_approval`,
 `stopping`, `stopped` or `archived`. A stopped session may include `stopReason`:
 `requested`, `completed`, `provider_error`, `startup_error` or
 `daemon_recovery`. Optional fields (`agentName`, `source`,
@@ -518,7 +520,7 @@ default.
 ```bash
 curl -s "$BASE/v1/sessions"
 curl -s "$BASE/v1/sessions?archived=true"
-curl -s "$BASE/v1/sessions?state=busy,waiting_approval"
+curl -s "$BASE/v1/sessions?state=running,waiting_approval"
 curl -s "$BASE/v1/sessions?sourceApp=forge&sourceInstanceId=mac-mini&state=ready"
 ```
 
@@ -678,6 +680,10 @@ Plain requests return a JSON snapshot of the log after a cursor.
     `before`.
   - `limit=<n>` — maximum number of events returned (default `500`,
     values above `1000` are clamped to the page size).
+  - `start=<event-id>&end=<event-id>` — inclusive stable Event bounds for
+    expanding one compact Turn item. Both are required together; paginate
+    within the range with the normal exclusive `after` cursor. Ranges do not
+    support backward reads or SSE.
 - **Success `200`:** events are in ascending id order in both directions.
   `after` and `nextAfter` are exclusive cursors; `latestCursor` is the
   durable head captured for this response.
@@ -841,20 +847,36 @@ curl -N -H "Accept: text/event-stream" "$BASE/v1/activity/events"
 ### GET /v1/sessions/{id}/turns
 
 Read a compact, rebuildable Turn index for an active or archived Session.
-Each entry contains the Turn id and status, timestamps, `firstEventId` and
-`lastEventId`, the triggering `message.input` event reference and preview,
-the final assistant event reference and preview, plus event/tool counts.
+Each entry contains the Turn id, status, `closed`, full timing,
+`startEventId`, `turnStartedEventId`, `lastEventId`, terminal `endEventId`,
+and ordered compact `items`. Message items retain complete text and
+provenance. Thinking and tool items retain stable Event ranges, count, and
+duration for bounded expansion; approval, error, and lifecycle items retain
+their display data directly.
 All references are stable event IDs in `events.jsonl`; byte offsets and paths
 are never exposed.
 
 - **Query parameters:** `after`, `before`, `latest=true`, and `limit` use the
   same mutually exclusive, forward/backward semantics as event pagination.
   A Turn's `firstEventId` is its cursor key.
-- **Success `200`:** `{"turns": [...], "page": {...}, "latestCursor": n}`.
+- **Success `200`:** `{"turns": [...], "page": {...}, "latestCursor": n, "latestEventId": n}`.
 - **Errors:** `400 invalid_turn_cursor`, `404 session_not_found`.
 
 ```bash
 curl -s "$BASE/v1/sessions/$SESSION/turns?latest=true&limit=50"
+```
+
+### GET /v1/sessions/{id}/turns/{turnId}
+
+Read one compact active or closed Turn. If its terminal Event is durable but
+the materialized record is missing or incomplete, AgentHub repairs
+`turns.jsonl` from `events.jsonl` before responding.
+
+- **Success `200`:** `{"turn": {...}, "latestEventId": n}`.
+- **Errors:** `404 session_not_found`, `404 turn_not_found`.
+
+```bash
+curl -s "$BASE/v1/sessions/$SESSION/turns/$TURN"
 ```
 
 ### POST /v1/sessions/{id}/messages
@@ -878,7 +900,11 @@ still submitted to the selected Provider as ordinary user-level prompt text.
     prompt (the ACP providers: Kimi and OpenCode) reject steer requests.
   - `messageId` (optional) — caller-stable idempotency key for this Session.
     Once the canonical input is durable, concurrent retries and retries after
-    daemon restart return success without appending or submitting it again.
+    daemon restart never append it again. They return success immediately only
+    after durable Provider acceptance; an unconfirmed input stays on the
+    recoverable delivery path. A crash after Provider acceptance but before
+    the acceptance Event is durable can produce one or more limited duplicate
+    attempts, which is the intentional at-least-once tradeoff.
     Reusing the id with different text, provenance, correlation, or steer input
     is rejected.
   - `replyTo`, `correlationId` (optional) — correlation fields persisted for
@@ -1037,7 +1063,7 @@ curl -s -X POST "$BASE/v1/sessions/$SESSION/approvals/approval-1" \
 - `GET /v1/health` exists for process-level health checks only and is not
   part of the public API surface documented here.
 - The daemon writes all state; session files under the data root
-  (`events.jsonl`, `session.json`) are its private storage — read them for
+  (`events.jsonl`, `session.json`, `turns.jsonl`) are its private storage — read them for
   diagnostics if needed, but never write them.
 - JSON request objects are strict: unknown fields, malformed JSON, multiple
   top-level JSON values and bodies larger than 1 MiB are rejected with

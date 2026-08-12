@@ -96,4 +96,56 @@ func TestTurnsAPIReadsArchivedSession(t *testing.T) {
 	if response.StatusCode != http.StatusOK || len(result.Turns) != 1 || result.Turns[0].FinalReplyPreview != "world" {
 		t.Fatalf("turn response = %s %+v", response.Status, result.Turns)
 	}
+
+	single, err := http.Get(server.URL + "/v1/sessions/" + created.ID + "/turns/turn_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer single.Body.Close()
+	var singleResult struct {
+		Turn          session.TurnSummary `json:"turn"`
+		LatestEventID int64               `json:"latestEventId"`
+	}
+	if err := json.NewDecoder(single.Body).Decode(&singleResult); err != nil {
+		t.Fatal(err)
+	}
+	if single.StatusCode != http.StatusOK || singleResult.Turn.ID != "turn_1" || !singleResult.Turn.Closed || singleResult.LatestEventID == 0 {
+		t.Fatalf("single turn response = %s %+v", single.Status, singleResult)
+	}
+
+	ranged, err := http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?start=2&end=4&limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ranged.Body.Close()
+	var firstRange struct {
+		Events []session.Event `json:"events"`
+		Page   struct {
+			NextAfter int64 `json:"nextAfter"`
+			HasMore   bool  `json:"hasMore"`
+		} `json:"page"`
+	}
+	if err := json.NewDecoder(ranged.Body).Decode(&firstRange); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstRange.Events) != 2 || firstRange.Events[0].ID != 2 || firstRange.Events[1].ID != 3 || !firstRange.Page.HasMore {
+		t.Fatalf("first range = %+v", firstRange)
+	}
+	secondRange, err := http.Get(server.URL + "/v1/sessions/" + created.ID + "/events?start=2&end=4&after=3&limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondRange.Body.Close()
+	var secondResult struct {
+		Events []session.Event `json:"events"`
+		Page   struct {
+			HasMore bool `json:"hasMore"`
+		} `json:"page"`
+	}
+	if err := json.NewDecoder(secondRange.Body).Decode(&secondResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondResult.Events) != 1 || secondResult.Events[0].ID != 4 || secondResult.Page.HasMore {
+		t.Fatalf("second range = %+v", secondResult)
+	}
 }

@@ -145,6 +145,58 @@ func TestOpenReplaysWhenSnapshotLagsLog(t *testing.T) {
 	}
 }
 
+func TestOpenNormalizesLegacyBusyStateToRunning(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Title: "Legacy busy", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRawEvent(t, root, created.ID, Event{
+		ID:   2,
+		Type: "session.state",
+		Data: json.RawMessage(`{"state":"busy"}`),
+	})
+
+	reopened := reopen(t, store, root)
+	value, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.State != StateRunning {
+		t.Fatalf("legacy state = %q, want %q", value.State, StateRunning)
+	}
+	snapshot, ok := loadTrustedSnapshot(filepath.Join(root, created.ID), created.ID)
+	if !ok || snapshot.State != StateRunning {
+		t.Fatalf("normalized snapshot = %+v, ok=%v", snapshot, ok)
+	}
+}
+
+func TestAppendCanonicalizesLegacyBusyState(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Title: "Canonical state", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(created.ID, "session.state", "", []byte(`{"state":"busy"}`)); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.EventsAfter(created.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(events[len(events)-1].Data); got != `{"state":"running"}` {
+		t.Fatalf("persisted state payload = %s", got)
+	}
+}
+
 func TestOpenReplaysWhenSnapshotCorrupt(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)

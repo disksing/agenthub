@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/disksing/agenthub/internal/config"
 	"github.com/disksing/agenthub/internal/provider"
@@ -15,15 +16,16 @@ import (
 type Manager struct {
 	store *session.Store
 
-	mu      sync.Mutex
-	cfg     config.Config
-	running map[string]*active
-	factory func(provider.Options) (provider.Session, error)
+	mu       sync.Mutex
+	cfg      config.Config
+	running  map[string]*active
+	inputs   map[string]*sync.Mutex
+	retrying map[string]bool
+	factory  func(provider.Options) (provider.Session, error)
 }
 
 type active struct {
 	mu         sync.Mutex
-	inputMu    sync.Mutex
 	adapter    provider.Session
 	turnID     string
 	ready      chan struct{}
@@ -65,7 +67,10 @@ func (a *active) finishStart(err error) {
 }
 
 func New(store *session.Store, cfg config.Config) *Manager {
-	manager := &Manager{store: store, cfg: cfg, running: make(map[string]*active), factory: provider.New}
+	manager := &Manager{
+		store: store, cfg: cfg, running: make(map[string]*active),
+		inputs: make(map[string]*sync.Mutex), retrying: make(map[string]bool), factory: provider.New,
+	}
 	for _, value := range store.List(false) {
 		manager.recover(value)
 	}
@@ -130,7 +135,22 @@ func (m *Manager) Start(id string) (session.Session, error) {
 	if _, err := m.ensure(id); err != nil {
 		return session.Session{}, err
 	}
+	lock := m.inputLock(id)
+	lock.Lock()
+	m.deliverPendingLocked(id)
+	lock.Unlock()
 	return m.store.Get(id)
+}
+
+func (m *Manager) inputLock(id string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lock := m.inputs[id]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.inputs[id] = lock
+	}
+	return lock
 }
 
 func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
@@ -147,6 +167,9 @@ func (m *Manager) SendMessage(id string, input session.MessageInput) (session.Se
 	if err != nil {
 		return session.Session{}, err
 	}
+	lock := m.inputLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	value, err := m.store.Get(id)
 	if err != nil {
 		return session.Session{}, err
@@ -158,50 +181,21 @@ func (m *Manager) SendMessage(id string, input session.MessageInput) (session.Se
 		return session.Session{}, errors.New("session provider is stopping")
 	}
 	if input.MessageID != "" {
-		previous, accepted, err := m.store.MessageByID(id, input.MessageID)
+		previous, accepted, err := m.store.DurableMessageByID(id, input.MessageID)
 		if err != nil {
 			return session.Session{}, err
 		}
 		if accepted {
-			if !reflect.DeepEqual(previous, input) {
+			if !reflect.DeepEqual(previous.Input, input) {
 				return session.Session{}, session.ErrMessageIDConflict
 			}
-			return value, nil
+			if !previous.Delivered {
+				m.deliverMessageLocked(id, previous)
+			}
+			return m.store.Get(id)
 		}
 	}
 	current := value.CurrentTurnID
-	if current != "" && input.Steer && !value.InputCapabilities.Steer {
-		return session.Session{}, errors.New("session provider does not support steering an active turn")
-	}
-	if current != "" && !input.Steer {
-		return session.Session{}, errors.New("session already has an active turn; set steer=true or wait")
-	}
-	run, err := m.ensure(id)
-	if err != nil {
-		return session.Session{}, err
-	}
-	run.inputMu.Lock()
-	defer run.inputMu.Unlock()
-	// Re-read under the per-session input lock. Concurrent retries can both
-	// miss the optimistic lookup above; this second check is the exact-once
-	// boundary for durable message IDs.
-	value, err = m.store.Get(id)
-	if err != nil {
-		return session.Session{}, err
-	}
-	if input.MessageID != "" {
-		previous, accepted, err := m.store.MessageByID(id, input.MessageID)
-		if err != nil {
-			return session.Session{}, err
-		}
-		if accepted {
-			if !reflect.DeepEqual(previous, input) {
-				return session.Session{}, session.ErrMessageIDConflict
-			}
-			return value, nil
-		}
-	}
-	current = value.CurrentTurnID
 	if current != "" && input.Steer && !value.InputCapabilities.Steer {
 		return session.Session{}, errors.New("session provider does not support steering an active turn")
 	}
@@ -214,28 +208,126 @@ func (m *Manager) SendMessage(id string, input session.MessageInput) (session.Se
 		if err != nil {
 			return session.Session{}, err
 		}
-		run.setTurn(turnID)
-		if _, err := m.store.Append(id, session.EventMessageInput, turnID, marshal(input)); err != nil {
-			run.setTurn("")
+		messageEvent, err := m.store.Append(id, session.EventMessageInput, turnID, marshal(input))
+		if err != nil {
 			return session.Session{}, err
 		}
 		// turn.started is lifecycle-only. The canonical message.input event is
 		// the sole durable source for message text and provenance.
 		if _, err := m.store.Append(id, "turn.started", turnID, nil); err != nil {
-			run.setTurn("")
 			return session.Session{}, err
 		}
+		m.deliverMessageLocked(id, session.DurableMessage{EventID: messageEvent.ID, TurnID: turnID, Input: input})
 	} else {
-		if _, err := m.store.Append(id, session.EventMessageInput, turnID, marshal(input)); err != nil {
+		messageEvent, err := m.store.Append(id, session.EventMessageInput, turnID, marshal(input))
+		if err != nil {
 			return session.Session{}, err
 		}
-	}
-	if err := promptAdapter(run.adapter, input); err != nil {
-		_, _ = m.store.Append(id, session.EventTurnFailed, turnID, marshal(session.TurnTerminalEventData{Error: err.Error()}))
-		run.setTurn("")
-		return session.Session{}, err
+		m.deliverMessageLocked(id, session.DurableMessage{EventID: messageEvent.ID, TurnID: turnID, Input: input})
 	}
 	return m.store.Get(id)
+}
+
+// deliverMessageLocked attempts one pending durable input while the caller
+// holds the Session input lock. Provider errors keep the input pending: the
+// accepted HTTP request has transferred retry responsibility to AgentHub.
+func (m *Manager) deliverMessageLocked(id string, message session.DurableMessage) bool {
+	value, err := m.store.Get(id)
+	if err != nil {
+		return false
+	}
+	if value.CurrentTurnID == "" {
+		if _, err := m.store.Append(id, "turn.started", message.TurnID, nil); err != nil {
+			m.schedulePendingRetry(id)
+			return false
+		}
+	} else if value.CurrentTurnID != message.TurnID {
+		m.schedulePendingRetry(id)
+		return false
+	}
+	run, err := m.ensure(id)
+	if err != nil {
+		m.recordDelivery(id, message, session.MessageDeliveryPending, err)
+		m.schedulePendingRetry(id)
+		return false
+	}
+	run.setTurn(message.TurnID)
+	attempt := message.Attempt + 1
+	message.Attempt = attempt
+	if _, err := m.store.Append(id, session.EventMessageDelivery, message.TurnID, marshal(session.MessageDeliveryEventData{
+		MessageEventID: message.EventID, MessageID: message.Input.MessageID,
+		State: session.MessageDeliveryAttempting, Attempt: attempt,
+	})); err != nil {
+		m.schedulePendingRetry(id)
+		return false
+	}
+	if err := promptAdapter(run.adapter, message.Input); err != nil {
+		m.recordDelivery(id, message, session.MessageDeliveryPending, err)
+		m.schedulePendingRetry(id)
+		return false
+	}
+	if _, err := m.store.Append(id, session.EventMessageDelivery, message.TurnID, marshal(session.MessageDeliveryEventData{
+		MessageEventID: message.EventID, MessageID: message.Input.MessageID,
+		State: session.MessageDeliveryAccepted, Attempt: attempt,
+	})); err != nil {
+		// The provider may already have accepted the prompt. Retrying after an
+		// ambiguous acknowledgement is the deliberate at-least-once window.
+		m.schedulePendingRetry(id)
+		return false
+	}
+	return true
+}
+
+func (m *Manager) recordDelivery(id string, message session.DurableMessage, state string, cause error) {
+	data := session.MessageDeliveryEventData{
+		MessageEventID: message.EventID, MessageID: message.Input.MessageID,
+		State: state, Attempt: message.Attempt,
+	}
+	if cause != nil {
+		data.Error = cause.Error()
+	}
+	_, _ = m.store.Append(id, session.EventMessageDelivery, message.TurnID, marshal(data))
+}
+
+func (m *Manager) deliverPendingLocked(id string) {
+	messages, err := m.store.DurableMessages(id)
+	if err != nil {
+		return
+	}
+	for _, message := range messages {
+		if message.Delivered {
+			continue
+		}
+		if !m.deliverMessageLocked(id, message) {
+			return
+		}
+	}
+}
+
+func (m *Manager) schedulePendingRetry(id string) {
+	m.mu.Lock()
+	if m.retrying[id] {
+		m.mu.Unlock()
+		return
+	}
+	m.retrying[id] = true
+	m.mu.Unlock()
+	go func() {
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		<-timer.C
+		m.mu.Lock()
+		delete(m.retrying, id)
+		m.mu.Unlock()
+		lock := m.inputLock(id)
+		lock.Lock()
+		value, err := m.store.Get(id)
+		if err == nil && value.State != session.StateStopping && value.State != session.StateArchived &&
+			!(value.State == session.StateStopped && value.StopReason == session.StopReasonRequested) {
+			m.deliverPendingLocked(id)
+		}
+		lock.Unlock()
+	}()
 }
 
 func promptAdapter(adapter provider.Session, input session.MessageInput) error {
@@ -469,7 +561,11 @@ func (m *Manager) ensure(id string) (*active, error) {
 		m.convergeActive(id, run, err)
 		return nil, err
 	}
-	_, _ = m.store.Append(id, "session.state", "", marshal(session.StateEventData{State: session.StateReady}))
+	readyState := session.StateReady
+	if value.CurrentTurnID != "" {
+		readyState = session.StateRunning
+	}
+	_, _ = m.store.Append(id, "session.state", "", marshal(session.StateEventData{State: readyState}))
 	run.finishStart(nil)
 	return run, nil
 }
@@ -587,7 +683,16 @@ func (m *Manager) convergeStored(id, reason string, cause error) {
 			"approvalId": approvalID, "decision": "cancel", "reason": reason,
 		}))
 	}
-	if value.CurrentTurnID != "" {
+	pendingTurn := false
+	if messages, pendingErr := m.store.DurableMessages(id); pendingErr == nil {
+		for _, message := range messages {
+			if !message.Delivered && message.TurnID == value.CurrentTurnID {
+				pendingTurn = true
+				break
+			}
+		}
+	}
+	if value.CurrentTurnID != "" && !pendingTurn {
 		eventType := session.EventTurnCancelled
 		data := session.TurnTerminalEventData{Reason: reason}
 		if reason == session.StopReasonProviderError || reason == session.StopReasonStartupError {
@@ -609,7 +714,7 @@ func (m *Manager) recover(value session.Session) {
 	}
 	process, open, processErr := m.store.OpenProviderProcess(value.ID)
 	needsRecovery := value.State == session.StateStarting ||
-		value.State == session.StateBusy ||
+		value.State == session.StateRunning ||
 		value.State == session.StateWaitingApproval ||
 		value.State == session.StateStopping ||
 		open ||
@@ -633,6 +738,14 @@ func (m *Manager) recover(value session.Session) {
 		return
 	}
 	m.convergeStored(value.ID, session.StopReasonDaemonRecovery, errors.New("provider work was interrupted by daemon restart"))
+	if messages, err := m.store.DurableMessages(value.ID); err == nil {
+		for _, message := range messages {
+			if !message.Delivered {
+				m.schedulePendingRetry(value.ID)
+				break
+			}
+		}
+	}
 }
 
 func resolveAgent(cfg config.Config, reference string) (config.Agent, config.Provider, error) {
