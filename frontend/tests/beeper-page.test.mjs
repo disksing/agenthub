@@ -38,6 +38,9 @@ test("standalone Beeper layout fills its page and keeps responsive card queries"
 	assert.ok(styles.includes("@container companion-card (min-width: 680px)"));
 	assert.ok(styles.includes("@container companion-card (max-height: 390px)"));
 	assert.ok(styles.includes(".companion-thread-list { display: grid"));
-	assert.ok(styles.includes("min-height: 40px"));
+	const threadRow = styles.match(/\.companion-thread-row \{[^}]*\}/);
+	assert.ok(threadRow, "thread row styles must exist");
+	assert.ok(!threadRow[0].includes("min-height"), "thread rows must not force a minimum height");
+	assert.ok(threadRow[0].includes("padding: 3px 13px"), "thread rows keep only tight vertical padding");
 	assert.ok(styles.includes("background: rgba(57, 211, 192, 0.38)"));
 });
