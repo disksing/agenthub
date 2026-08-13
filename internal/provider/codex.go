@@ -290,7 +290,16 @@ func (c *codexSession) notification(method string, params json.RawMessage) {
 	case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
 		event.Type = "message.reasoning.delta"
 		event.Data = map[string]any{"text": lookup(params, "delta"), "method": method}
-	case "item/started", "item/completed", "item/updated", "item/commandExecution/outputDelta", "command/exec/outputDelta":
+	case "item/started", "item/completed", "item/updated":
+		// Codex uses generic item lifecycle notifications for messages and
+		// reasoning as well as tools. Keep the former as raw provider events;
+		// only actual tool items belong to AgentHub's tool.event contract.
+		switch lookup(params, "item", "type") {
+		case "userMessage", "agentMessage", "reasoning":
+		default:
+			event.Type = "tool.event"
+		}
+	case "item/commandExecution/outputDelta", "command/exec/outputDelta":
 		event.Type = "tool.event"
 	}
 	if c.options.Hooks.Event != nil {

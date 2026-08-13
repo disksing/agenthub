@@ -52,6 +52,34 @@ func TestCodexTranslatesStreamingTurnAndApproval(t *testing.T) {
 	}
 }
 
+func TestCodexClassifiesItemLifecycleNotifications(t *testing.T) {
+	var events []Event
+	value := newCodex("unused", Options{Hooks: Hooks{
+		Event: func(event Event) { events = append(events, event) },
+	}})
+
+	tests := []struct {
+		method string
+		params string
+		want   string
+	}{
+		{method: "item/started", params: `{"item":{"id":"user-1","type":"userMessage"}}`, want: "provider.event"},
+		{method: "item/completed", params: `{"item":{"id":"agent-1","type":"agentMessage"}}`, want: "provider.event"},
+		{method: "item/updated", params: `{"item":{"id":"reasoning-1","type":"reasoning"}}`, want: "provider.event"},
+		{method: "item/started", params: `{"item":{"id":"search-1","type":"webSearch"}}`, want: "tool.event"},
+		{method: "item/completed", params: `{"item":{"id":"command-1","type":"commandExecution"}}`, want: "tool.event"},
+		{method: "item/commandExecution/outputDelta", params: `{"itemId":"command-1","delta":"ok"}`, want: "tool.event"},
+		{method: "command/exec/outputDelta", params: `{"callId":"command-2","delta":"ok"}`, want: "tool.event"},
+	}
+
+	for _, test := range tests {
+		value.notification(test.method, json.RawMessage(test.params))
+		if got := events[len(events)-1].Type; got != test.want {
+			t.Fatalf("%s event type = %q, want %q", test.method, got, test.want)
+		}
+	}
+}
+
 func TestCodexRetryableErrorKeepsTurnOpenAndNormalizesData(t *testing.T) {
 	var events []Event
 	value := newCodex("unused", Options{Hooks: Hooks{
