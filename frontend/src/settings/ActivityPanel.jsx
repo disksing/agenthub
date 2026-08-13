@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { Play } from "@phosphor-icons/react";
 import { COMPLETION_SOUNDS, TonePlayer } from "../companion/audio.js";
-import { BEEP_CHORDS } from "../companion/chords.js";
+import { BEEP_CHORDS, BEEP_PROGRESSIONS } from "../companion/chords.js";
 import { Toggle } from "./fields.jsx";
 
 export function ActivityPanel({ draft, mutate }) {
@@ -12,7 +12,7 @@ export function ActivityPanel({ draft, mutate }) {
     if (await player.current.resume()) player.current.completion(value.completionSound, value.beepVolume);
   };
   const previewChord = async () => {
-    if (await player.current.resume()) player.current.previewChord(value.beepChord, value.beepVolume);
+    if (await player.current.resume()) player.current.previewProgression(value.beepProgression, value.beepChord, value.beepVolume);
   };
   return (
     <div className="settings-section-stack">
@@ -21,9 +21,16 @@ export function ActivityPanel({ draft, mutate }) {
         <div className="settings-toggle-row"><div><strong>Show activity</strong><small>Subscribe to AgentHub's live Session activity stream.</small></div><Toggle checked={value.showActivity} label="Show activity" onChange={(checked) => update("showActivity", checked)} /></div>
         <div className="settings-toggle-row"><div><strong>Enable beeping</strong><small>Play at most one pulse per active Session each second.</small></div><Toggle checked={value.enableBeeping} label="Enable beeping" onChange={(checked) => update("enableBeeping", checked)} /></div>
         <label className="settings-field">
-          <span>Beep chord</span>
+          <span>Chord movement</span>
+          <select value={value.beepProgression} onChange={(event) => update("beepProgression", event.target.value)}>
+            {BEEP_PROGRESSIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+          </select>
+          <small>{BEEP_PROGRESSIONS.find((option) => option.value === value.beepProgression)?.description}</small>
+        </label>
+        <label className="settings-field">
+          <span>{value.beepProgression === "single" ? "Beep chord" : "Single-chord base"}</span>
           <div className="settings-preview-row">
-            <select value={value.beepChord} onChange={(event) => update("beepChord", event.target.value)}>
+            <select value={value.beepChord} disabled={value.beepProgression !== "single"} onChange={(event) => update("beepChord", event.target.value)}>
               <optgroup label="Major">
                 {BEEP_CHORDS.filter((option) => option.quality === "major").map((option) => <option value={option.value} key={option.value}>{option.label} · {option.noteNames.join(" ")}</option>)}
               </optgroup>

@@ -3,7 +3,15 @@ import { ArrowSquareOut, Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosp
 import { api } from "../api.js";
 import { BEEPER_PATH } from "../routes.js";
 import { activityPlaybackPlan, COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio.js";
-import { DEFAULT_BEEP_CHORD, normalizeBeepChord, noteForToneSlot } from "./chords.js";
+import {
+  DEFAULT_BEEP_CHORD,
+  DEFAULT_BEEP_PROGRESSION,
+  nextProgressionFrame,
+  normalizeBeepChord,
+  normalizeBeepProgression,
+  noteForToneSlot,
+  progressionChordValues,
+} from "./chords.js";
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
   activityPulsesForFrame, activitySessionHoldsTone, activitySessionNeedsTone,
@@ -17,6 +25,7 @@ const DEFAULT_COMPANION = {
   enableBeeping: true,
   beepVolume: 0.28,
   beepChord: DEFAULT_BEEP_CHORD,
+  beepProgression: DEFAULT_BEEP_PROGRESSION,
   completionSound: "completed-voice",
 };
 const POSITION_STORAGE_KEY = "agenthub.companion.position.v1";
@@ -96,6 +105,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   const [quotaIndex, setQuotaIndex] = useState(0);
   const [cyclePaused, setCyclePaused] = useState(false);
   const [activityState, setActivityState] = useState("connecting");
+  const [activityChord, setActivityChord] = useState(DEFAULT_BEEP_CHORD);
   const [activeSessions, setActiveSessions] = useState(() => new Map());
   const [activityPulses, setActivityPulses] = useState([]);
   const [audioBlocked, setAudioBlocked] = useState(false);
@@ -109,6 +119,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   const [resizing, setResizing] = useState(false);
   const tonePlayer = useRef(new TonePlayer());
   const toneAllocator = useRef(new SessionToneAllocator());
+  const progressionFrame = useRef(null);
   const activeSessionsRef = useRef(new Map());
   const sequence = useRef(0);
   const pillRef = useRef(null);
@@ -120,6 +131,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
     ...DEFAULT_COMPANION,
     ...(settings.companion || {}),
     beepChord: normalizeBeepChord(settings.companion?.beepChord),
+    beepProgression: normalizeBeepProgression(settings.companion?.beepProgression),
     completionSound: normalizeCompletionSound(settings.companion?.completionSound),
   };
   const cycleItems = useMemo(() => quotaCycleItems(quota), [quota]);
@@ -246,6 +258,8 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
     }
     let disposed = false;
     const source = new EventSource("/v1/activity/events");
+    progressionFrame.current = null;
+    setActivityChord(progressionChordValues(companion.beepProgression, companion.beepChord)[0]);
     setActivityState("connecting");
     source.onopen = () => { if (!disposed) setActivityState("live"); };
     source.onerror = () => { if (!disposed) setActivityState("connecting"); };
@@ -259,8 +273,17 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
         setActiveSessions(cleared);
         setActivityPulses([]);
         toneAllocator.current.retain([]);
+        progressionFrame.current = null;
       }
       sequence.current = frame.sequence;
+      progressionFrame.current = nextProgressionFrame(
+        progressionFrame.current,
+        companion.beepProgression,
+        companion.beepChord,
+        frame.sequence,
+      );
+      const frameChord = progressionFrame.current.chord;
+      setActivityChord(frameChord);
       const sessions = [...(frame.sessions || [])]
         .sort((a, b) => String(a.sessionId).localeCompare(String(b.sessionId)))
         .map((session) => {
@@ -289,12 +312,12 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
           tonePlayer.current.completion(companion.completionSound, companion.beepVolume);
           return;
         }
-        tonePlayer.current.pulse(session.toneSlot, companion.beepChord, companion.beepVolume * gain, delay);
+        tonePlayer.current.pulse(session.toneSlot, frameChord, companion.beepVolume * gain, delay);
       });
       setAudioBlocked(tonePlayer.current.status() !== "running");
     };
     return () => { disposed = true; source.close(); };
-  }, [companion.showActivity, companion.enableBeeping, companion.beepVolume, companion.beepChord, companion.completionSound]);
+  }, [companion.showActivity, companion.enableBeeping, companion.beepVolume, companion.beepChord, companion.beepProgression, companion.completionSound]);
 
   const resumeAudio = async () => {
     if (!companion.enableBeeping) return;
@@ -503,7 +526,10 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
                 {activeList.map((session) => (
                   <div className={`companion-thread-row ${activityTerminalTone(session)}`} key={`${session.sessionId}:${session.lastActiveAt}`}>
                     <span className="companion-thread-title">{session.title || session.sessionId.slice(0, 8)}</span>
-                    <span className="companion-thread-note">{noteForToneSlot(session.toneSlot, companion.beepChord).name}</span>
+                    <span className="companion-thread-note">{noteForToneSlot(
+                      session.toneSlot,
+                      activityChord,
+                    ).name}</span>
                   </div>
                 ))}
                 {!activeList.length ? <span className="idle">Waiting for activity</span> : null}

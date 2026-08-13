@@ -1,4 +1,7 @@
 export const DEFAULT_BEEP_CHORD = "c-major";
+export const DEFAULT_BEEP_PROGRESSION = "single";
+export const BEEP_MIN_FRAMES_PER_CHORD = 1;
+export const BEEP_MAX_FRAMES_PER_CHORD = 6;
 // Prefer the lower octave bands before reaching the highest activity tones.
 export const BEEP_OCTAVE_ORDER = [5, 4, 6, 3, 7];
 
@@ -37,14 +40,100 @@ export const BEEP_CHORDS = [
   chord("b-minor", "B Minor", "minor", [11, 2, 6], ["B", "D", "F#"]),
 ];
 
+const progression = (value, label, description, chords) => ({
+  value,
+  label,
+  description,
+  chords,
+});
+
+export const BEEP_PROGRESSIONS = [
+  progression("single", "Single chord", "Hold the selected chord", null),
+  progression(
+    "canon-in-c",
+    "Canon in C",
+    "C · G · Am · Em · F · C · F · G · random 1–6 frames each",
+    ["c-major", "g-major", "a-minor", "e-minor", "f-major", "c-major", "f-major", "g-major"],
+  ),
+];
+
 const CHORD_BY_VALUE = new Map(BEEP_CHORDS.map((value) => [value.value, value]));
+const PROGRESSION_BY_VALUE = new Map(BEEP_PROGRESSIONS.map((value) => [value.value, value]));
 
 export function normalizeBeepChord(value) {
   return String(value || DEFAULT_BEEP_CHORD);
 }
 
+export function normalizeBeepProgression(value) {
+  return String(value || DEFAULT_BEEP_PROGRESSION);
+}
+
 export function beepChord(value) {
   return CHORD_BY_VALUE.get(value) || CHORD_BY_VALUE.get(DEFAULT_BEEP_CHORD);
+}
+
+export function beepProgression(value) {
+  return PROGRESSION_BY_VALUE.get(normalizeBeepProgression(value))
+    || PROGRESSION_BY_VALUE.get(DEFAULT_BEEP_PROGRESSION);
+}
+
+export function progressionChordValues(value, selectedChord = DEFAULT_BEEP_CHORD) {
+  const selected = beepProgression(value);
+  return selected.chords?.length ? [...selected.chords] : [normalizeBeepChord(selectedChord)];
+}
+
+export function randomProgressionDuration(
+  random = Math.random,
+  minimum = BEEP_MIN_FRAMES_PER_CHORD,
+  maximum = BEEP_MAX_FRAMES_PER_CHORD,
+) {
+  const low = Math.max(1, Math.floor(Number(minimum) || BEEP_MIN_FRAMES_PER_CHORD));
+  const high = Math.max(low, Math.floor(Number(maximum) || BEEP_MAX_FRAMES_PER_CHORD));
+  const sample = Math.max(0, Math.min(0.999999999999, Number(random()) || 0));
+  return low + Math.floor(sample * (high - low + 1));
+}
+
+export function nextProgressionFrame(
+  current,
+  value,
+  selectedChord = DEFAULT_BEEP_CHORD,
+  frameSequence = 0,
+  random = Math.random,
+) {
+  const selected = beepProgression(value);
+  const chords = progressionChordValues(value, selectedChord);
+  const sequence = Math.max(0, Math.floor(Number(frameSequence) || 0));
+  const key = `${selected.value}:${chords.join(",")}`;
+  if (chords.length === 1) {
+    return { key, sequence, chord: chords[0], chordIndex: 0, duration: null, frameInChord: 1 };
+  }
+  const contiguous = current?.key === key && current.sequence + 1 === sequence;
+  if (!contiguous) {
+    return {
+      key,
+      sequence,
+      chord: chords[0],
+      chordIndex: 0,
+      duration: randomProgressionDuration(random),
+      frameInChord: 1,
+    };
+  }
+  if (current.frameInChord >= current.duration) {
+    const chordIndex = (current.chordIndex + 1) % chords.length;
+    return {
+      key,
+      sequence,
+      chord: chords[chordIndex],
+      chordIndex,
+      duration: randomProgressionDuration(random),
+      frameInChord: 1,
+    };
+  }
+  return {
+    ...current,
+    sequence,
+    frameInChord: current.frameInChord + 1,
+  };
 }
 
 export function chordTonePool(value) {

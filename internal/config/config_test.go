@@ -125,7 +125,7 @@ func TestLoadAddsCompanionDefaultsToLegacyConfig(t *testing.T) {
 	if loaded.OnWatch.ServerURL != "http://127.0.0.1:9211" || loaded.OnWatch.RefreshIntervalSeconds != 60 {
 		t.Fatalf("OnWatch defaults = %+v", loaded.OnWatch)
 	}
-	if !loaded.Companion.ShowActivity || !loaded.Companion.EnableBeeping || loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.CompletionSound != DefaultCompletionSound {
+	if !loaded.Companion.ShowActivity || !loaded.Companion.EnableBeeping || loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.BeepProgression != DefaultBeepProgression || loaded.Companion.CompletionSound != DefaultCompletionSound {
 		t.Fatalf("companion defaults = %+v", loaded.Companion)
 	}
 }
@@ -143,7 +143,7 @@ func TestLoadMigratesLegacyCompletionSound(t *testing.T) {
 	if loaded.Companion.CompletionSound != DefaultCompletionSound {
 		t.Fatalf("legacy completion sound was not migrated: %+v", loaded.Companion)
 	}
-	if loaded.Companion.BeepChord != DefaultBeepChord {
+	if loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.BeepProgression != DefaultBeepProgression {
 		t.Fatalf("legacy config did not receive the default beep chord: %+v", loaded.Companion)
 	}
 }
@@ -161,7 +161,7 @@ func TestLoadAddsDefaultBeepChordWithoutOverwritingCompanion(t *testing.T) {
 	if loaded.Companion.ShowActivity || loaded.Companion.EnableBeeping || loaded.Companion.BeepVolume != 0 {
 		t.Fatalf("legacy companion controls were overwritten: %+v", loaded.Companion)
 	}
-	if loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.CompletionSound != "smile" {
+	if loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.BeepProgression != DefaultBeepProgression || loaded.Companion.CompletionSound != "smile" {
 		t.Fatalf("legacy companion defaults = %+v", loaded.Companion)
 	}
 }
@@ -208,6 +208,16 @@ func TestCompanionConfigValidation(t *testing.T) {
 	cfg.Companion.BeepChord = "noise"
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepChord") {
 		t.Fatalf("beep chord validation = %v", err)
+	}
+	cfg = Defaults()
+	cfg.Companion.BeepProgression = "noise"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepProgression") {
+		t.Fatalf("beep progression validation = %v", err)
+	}
+	cfg = Defaults()
+	cfg.Companion.BeepProgression = "canon-in-c"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("canon progression validation = %v", err)
 	}
 }
 

@@ -1,5 +1,12 @@
 import { COMPLETION_SOUNDS, normalizeCompletionSound } from "../companion/audio.js";
-import { BEEP_CHORDS, DEFAULT_BEEP_CHORD, normalizeBeepChord } from "../companion/chords.js";
+import {
+  BEEP_CHORDS,
+  BEEP_PROGRESSIONS,
+  DEFAULT_BEEP_CHORD,
+  DEFAULT_BEEP_PROGRESSION,
+  normalizeBeepChord,
+  normalizeBeepProgression,
+} from "../companion/chords.js";
 
 // Pure data helpers with no React dependency, shared by the settings UI and tests.
 // The config model mirrors internal/config/config.go.
@@ -65,6 +72,7 @@ export const DEFAULT_COMPANION = {
   enableBeeping: true,
   beepVolume: 0.28,
   beepChord: DEFAULT_BEEP_CHORD,
+  beepProgression: DEFAULT_BEEP_PROGRESSION,
   completionSound: "completed-voice",
 };
 
@@ -145,6 +153,7 @@ export function normalizeConfig(config = {}) {
     enableBeeping: rawCompanion.enableBeeping == null ? DEFAULT_COMPANION.enableBeeping : Boolean(rawCompanion.enableBeeping),
     beepVolume: rawCompanion.beepVolume == null ? DEFAULT_COMPANION.beepVolume : Number(rawCompanion.beepVolume),
     beepChord: normalizeBeepChord(rawCompanion.beepChord),
+    beepProgression: normalizeBeepProgression(rawCompanion.beepProgression),
     completionSound: normalizeCompletionSound(String(rawCompanion.completionSound ?? DEFAULT_COMPANION.completionSound)),
   };
   return {
@@ -224,6 +233,9 @@ export function validateDraft(draft) {
   }
   if (!BEEP_CHORDS.some((option) => option.value === draft.companion.beepChord)) {
     push("activity", 0, "beepChord", "Select a supported beep chord");
+  }
+  if (!BEEP_PROGRESSIONS.some((option) => option.value === draft.companion.beepProgression)) {
+    push("activity", 0, "beepProgression", "Select a supported chord progression");
   }
   if (!COMPLETION_SOUNDS.some((option) => option.value === draft.companion.completionSound)) {
     push("activity", 0, "completionSound", "Select a supported completion sound");

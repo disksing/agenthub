@@ -338,6 +338,7 @@ only writer) and applies it in memory.
       "enableBeeping": true,
       "beepVolume": 0.28,
       "beepChord": "c-major",
+      "beepProgression": "single",
       "completionSound": "completed-voice"
     }
   }
@@ -359,6 +360,11 @@ only writer) and applies it in memory.
   `bb-major`, `b-major`) or 12 minor triads (`c-minor`, `cs-minor`, `d-minor`,
   `eb-minor`, `e-minor`, `f-minor`, `fs-minor`, `g-minor`, `gs-minor`,
   `a-minor`, `bb-minor`, `b-minor`); an omitted value defaults to `c-major`.
+  `beepProgression` is `single` or `canon-in-c`; an omitted value defaults to
+  `single`. The Canon progression follows `C`, `G`, `Am`, `Em`, `F`, `C`, `F`,
+  `G`; each chord independently lasts a random one to six one-second activity
+  frames, and all Session tones switch immediately at each boundary. The
+  selected single chord remains the fallback when `beepProgression` is `single`.
   Activity tone slots fill octave bands 5, 4, 6, 3, then 7, prioritizing the
   lower bands before the highest tone, and remain stable for each active
   Session until release.

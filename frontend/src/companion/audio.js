@@ -1,4 +1,10 @@
-import { chordTonePool, DEFAULT_BEEP_CHORD, noteForToneSlot } from "./chords.js";
+import {
+  chordTonePool,
+  DEFAULT_BEEP_CHORD,
+  DEFAULT_BEEP_PROGRESSION,
+  noteForToneSlot,
+  progressionChordValues,
+} from "./chords.js";
 export { activityPlaybackPlan } from "./schedule.js";
 
 export const COMPLETION_SOUNDS = [
@@ -59,6 +65,14 @@ export class TonePlayer {
     return chordTonePool(chord).slice(0, 3).map((note, index) => (
       this.playFrequency(note.frequency, volume, index * 0.12, 0.16)
     ));
+  }
+
+  previewProgression(progression = DEFAULT_BEEP_PROGRESSION, chord = DEFAULT_BEEP_CHORD, volume = 0.28) {
+    const chordValues = progressionChordValues(progression, chord);
+    const chordDuration = 0.72;
+    return chordValues.flatMap((value, chordIndex) => chordTonePool(value).slice(0, 3).map((note, noteIndex) => (
+      this.playFrequency(note.frequency, volume, chordIndex * chordDuration + noteIndex * 0.12, 0.16)
+    )));
   }
 
   completion(sound = "completed-voice", volume = 0.28) {

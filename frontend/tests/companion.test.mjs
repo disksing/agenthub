@@ -4,7 +4,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { activityPlaybackPlan, COMPLETION_SOUNDS, completionSoundURL, TonePlayer } from "../src/companion/audio.js";
-import { BEEP_CHORDS, BEEP_OCTAVE_ORDER, chordTonePool, noteForToneSlot } from "../src/companion/chords.js";
+import {
+	BEEP_CHORDS,
+	BEEP_MAX_FRAMES_PER_CHORD,
+	BEEP_MIN_FRAMES_PER_CHORD,
+	BEEP_OCTAVE_ORDER,
+	BEEP_PROGRESSIONS,
+	chordTonePool,
+	nextProgressionFrame,
+	noteForToneSlot,
+	progressionChordValues,
+	randomProgressionDuration,
+} from "../src/companion/chords.js";
 import {
 	ACTIVITY_SESSION_RETENTION_MS,
 	activityPulsesForFrame,
@@ -56,6 +67,41 @@ test("session tone slots fill in octave order and reuse released slots", () => {
 	assert.equal(allocator.assign("ses_new"), 1);
 	allocator.retain(["ses_5"]);
 	assert.equal(allocator.assign("ses_after_retain"), 0);
+});
+
+test("canon progression uses immediate random one-to-six-frame chord changes", () => {
+	assert.equal(BEEP_MIN_FRAMES_PER_CHORD, 1);
+	assert.equal(BEEP_MAX_FRAMES_PER_CHORD, 6);
+	assert.deepEqual(BEEP_PROGRESSIONS.map((option) => option.value), ["single", "canon-in-c"]);
+	assert.deepEqual(progressionChordValues("canon-in-c"), [
+		"c-major", "g-major", "a-minor", "e-minor", "f-major", "c-major", "f-major", "g-major",
+	]);
+	assert.equal(randomProgressionDuration(() => 0), 1);
+	assert.equal(randomProgressionDuration(() => 0.999999), 6);
+
+	const samples = [0, 0.999999, 0.2];
+	const random = () => samples.shift();
+	let frame = null;
+	const observed = [];
+	for (let sequence = 1; sequence <= 9; sequence += 1) {
+		frame = nextProgressionFrame(frame, "canon-in-c", "c-major", sequence, random);
+		observed.push([frame.chord, frame.frameInChord, frame.duration]);
+	}
+	assert.deepEqual(observed, [
+		["c-major", 1, 1],
+		["g-major", 1, 6],
+		["g-major", 2, 6],
+		["g-major", 3, 6],
+		["g-major", 4, 6],
+		["g-major", 5, 6],
+		["g-major", 6, 6],
+		["a-minor", 1, 2],
+		["a-minor", 2, 2],
+	]);
+	const reset = nextProgressionFrame(frame, "canon-in-c", "c-major", 20, () => 0.5);
+	assert.deepEqual([reset.chord, reset.frameInChord, reset.duration], ["c-major", 1, 4]);
+	const single = nextProgressionFrame(null, "single", "d-major", 1, () => { throw new Error("single chord must not sample"); });
+	assert.deepEqual([single.chord, single.duration], ["d-major", null]);
 });
 
 test("activity expires after five minutes", () => {
@@ -235,6 +281,8 @@ test("TonePlayer uses a suspended Web Audio context only after resume", async ()
 	assert.ok(scheduled.some(([kind, frequency]) => kind === "frequency" && Math.abs(frequency - 523.2511306) < 0.0001));
 	assert.deepEqual(player.previewChord("c-major", 0.2), [true, true, true]);
 	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.24));
+	assert.equal(player.previewProgression("canon-in-c", "c-major", 0.2).length, 24);
+	assert.equal(scheduled.some(([kind]) => kind === "ramp"), false);
 });
 
 test("TonePlayer plays each bundled Codex Beeper completion sound", async () => {
@@ -264,6 +312,9 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.ok(source.includes('new EventSource("/v1/activity/events")'));
 	assert.ok(source.includes("activityPulsesForFrame(assignedFrame, receivedAt)"));
 	assert.ok(source.includes("activityPlaybackPlan(sessions, frame.sequence)"));
+	assert.ok(source.includes("nextProgressionFrame("));
+	assert.ok(source.includes("tonePlayer.current.pulse(session.toneSlot, frameChord"));
+	assert.ok(!source.includes("chordForProgressionToneSlot"));
 	assert.ok(source.includes("toneAllocator.current.assign(session.sessionId)"));
 	assert.ok(source.includes("session.toneReleaseAt - now"));
 	assert.ok(source.includes("activityTerminalTone(session)"));

@@ -44,11 +44,13 @@ type Companion struct {
 	EnableBeeping   bool    `json:"enableBeeping"`
 	BeepVolume      float64 `json:"beepVolume"`
 	BeepChord       string  `json:"beepChord"`
+	BeepProgression string  `json:"beepProgression"`
 	CompletionSound string  `json:"completionSound"`
 }
 
 const DefaultCompletionSound = "completed-voice"
 const DefaultBeepChord = "c-major"
+const DefaultBeepProgression = "single"
 
 var beepChords = map[string]struct{}{
 	"c-major": {}, "db-major": {}, "d-major": {}, "eb-major": {},
@@ -57,6 +59,10 @@ var beepChords = map[string]struct{}{
 	"c-minor": {}, "cs-minor": {}, "d-minor": {}, "eb-minor": {},
 	"e-minor": {}, "f-minor": {}, "fs-minor": {}, "g-minor": {},
 	"gs-minor": {}, "a-minor": {}, "bb-minor": {}, "b-minor": {},
+}
+
+var beepProgressions = map[string]struct{}{
+	"single": {}, "canon-in-c": {},
 }
 
 var completionSounds = map[string]struct{}{
@@ -307,6 +313,7 @@ func defaultCompanion() Companion {
 		EnableBeeping:   true,
 		BeepVolume:      0.28,
 		BeepChord:       DefaultBeepChord,
+		BeepProgression: DefaultBeepProgression,
 		CompletionSound: DefaultCompletionSound,
 	}
 }
@@ -326,6 +333,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.Companion.BeepChord == "" {
 		c.Companion.BeepChord = DefaultBeepChord
+	}
+	if c.Companion.BeepProgression == "" {
+		c.Companion.BeepProgression = DefaultBeepProgression
 	}
 	return c
 }
@@ -361,6 +371,9 @@ func (value Companion) validate() error {
 	}
 	if _, ok := beepChords[value.BeepChord]; !ok {
 		return fmt.Errorf("companion.beepChord %q is unsupported", value.BeepChord)
+	}
+	if _, ok := beepProgressions[value.BeepProgression]; !ok {
+		return fmt.Errorf("companion.beepProgression %q is unsupported", value.BeepProgression)
 	}
 	if _, ok := completionSounds[value.CompletionSound]; !ok {
 		return fmt.Errorf("companion.completionSound %q is unsupported", value.CompletionSound)

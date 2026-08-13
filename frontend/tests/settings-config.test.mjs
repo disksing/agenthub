@@ -123,18 +123,19 @@ test("companion settings are normalized and validated", () => {
 	});
 	assert.equal(normalized.onWatch.serverUrl, "http://localhost:9211");
 	assert.equal(normalized.onWatch.enabled, true);
-	assert.deepEqual(normalized.companion, { showActivity: false, enableBeeping: false, beepVolume: 0, beepChord: "c-major", completionSound: "completed-voice" });
+	assert.deepEqual(normalized.companion, { showActivity: false, enableBeeping: false, beepVolume: 0, beepChord: "c-major", beepProgression: "single", completionSound: "completed-voice" });
 	assert.deepEqual(validateDraft(normalized), []);
 
 	const invalid = createDraft({
 		onWatch: { serverUrl: "file:///tmp/quota", authMode: "basic", username: "", refreshIntervalSeconds: 13 },
-		companion: { beepVolume: 2, beepChord: "noise", completionSound: "noise" },
+		companion: { beepVolume: 2, beepChord: "noise", beepProgression: "noise", completionSound: "noise" },
 	});
 	const errors = validateDraft(invalid);
 	assert.ok(errors.some((item) => item.section === "general" && item.field === "serverUrl"));
 	assert.ok(errors.some((item) => item.section === "general" && item.field === "username"));
 	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepVolume"));
 	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepChord"));
+	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepProgression"));
 	assert.ok(errors.some((item) => item.section === "activity" && item.field === "completionSound"));
 });
 

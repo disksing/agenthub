@@ -61,6 +61,7 @@ func TestConfigAPIKeepsOnWatchPasswordServerSide(t *testing.T) {
 	}
 	fetched.Config.Companion.BeepVolume = 0.51
 	fetched.Config.Companion.BeepChord = "a-minor"
+	fetched.Config.Companion.BeepProgression = "canon-in-c"
 	body, _ := json.Marshal(map[string]any{"config": fetched.Config})
 	request, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/config", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -85,7 +86,7 @@ func TestConfigAPIKeepsOnWatchPasswordServerSide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.OnWatch.Password != "secret" || stored.Companion.BeepVolume != 0.51 || stored.Companion.BeepChord != "a-minor" {
+	if stored.OnWatch.Password != "secret" || stored.Companion.BeepVolume != 0.51 || stored.Companion.BeepChord != "a-minor" || stored.Companion.BeepProgression != "canon-in-c" {
 		t.Fatalf("stored config = %+v", stored)
 	}
 }
