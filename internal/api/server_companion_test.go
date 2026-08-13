@@ -155,6 +155,7 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	second, _ := store.Create(session.CreateInput{Title: "Second", Cwd: t.TempDir(), AgentName: "Kimi"})
 	third, _ := store.Create(session.CreateInput{Title: "Third", Cwd: t.TempDir(), AgentName: "Pi"})
 	fourth, _ := store.Create(session.CreateInput{Title: "Fourth", Cwd: t.TempDir(), AgentName: "OpenCode"})
+	noise, _ := store.Create(session.CreateInput{Title: "Idle background", Cwd: t.TempDir(), AgentName: "Codex"})
 	providerData, _ := json.Marshal(session.ProviderEventData{Provider: "codex"})
 	_, _ = store.Append(first.ID, "session.provider", "", providerData)
 	server := httptest.NewServer(New(store, "test", time.Now()).Handler())
@@ -178,6 +179,14 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	_, _ = store.Append(third.ID, session.EventTurnCancelled, "turn-3", []byte(`{"reason":"stopped"}`))
 	_, _ = store.Append(fourth.ID, session.EventTurnCompleted, "turn-4a", []byte(`{}`))
 	_, _ = store.Append(fourth.ID, "turn.started", "turn-4b", []byte(`{}`))
+	// Daemon shutdown/recovery bookkeeping and idle Provider maintenance are
+	// durable events, but must not create or refresh Activity Monitor rows.
+	_, _ = store.Append(first.ID, "provider.metadata", "turn-1", []byte(`{"kind":"usage_update"}`))
+	_, _ = store.Append(first.ID, session.EventMessageDelivery, "turn-1", []byte(`{"state":"accepted"}`))
+	_, _ = store.Append(noise.ID, "provider.stderr", "", []byte(`{"text":"background refresh failed"}`))
+	_, _ = store.Append(noise.ID, "provider.event", "", []byte(`{"method":"skills/changed"}`))
+	_, _ = store.Append(noise.ID, "session.state", "", []byte(`{"state":"stopping"}`))
+	_, _ = store.Append(noise.ID, "session.state", "", []byte(`{"state":"stopped","reason":"requested"}`))
 
 	scanner := bufio.NewScanner(response.Body)
 	var frame activityFrame
@@ -200,6 +209,9 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	if byID[first.ID].EventCount != 2 || !byID[first.ID].Completed || byID[first.ID].Provider != "codex" || byID[first.ID].Title != "First" {
 		t.Fatalf("first activity = %+v", byID[first.ID])
 	}
+	if _, ok := byID[noise.ID]; ok {
+		t.Fatalf("idle background session appeared in activity frame: %+v", byID[noise.ID])
+	}
 	if byID[first.ID].TurnID != "turn-1" || byID[first.ID].TurnTerminal == nil || byID[first.ID].TurnTerminal.Status != "completed" || byID[first.ID].TurnTerminal.TurnID != "turn-1" || byID[first.ID].TurnTerminal.EndedAt.IsZero() {
 		t.Fatalf("first terminal activity = %+v", byID[first.ID])
 	}
@@ -211,5 +223,34 @@ func TestActivitySSEAggregatesAllSessionsPerSecond(t *testing.T) {
 	}
 	if byID[fourth.ID].EventCount != 2 || byID[fourth.ID].Completed || byID[fourth.ID].TurnID != "turn-4b" || byID[fourth.ID].TurnTerminal != nil {
 		t.Fatalf("fourth activity = %+v", byID[fourth.ID])
+	}
+}
+
+func TestActivityEventClassification(t *testing.T) {
+	tests := []struct {
+		name  string
+		event session.Event
+		want  bool
+	}{
+		{name: "turn start", event: session.Event{Type: "turn.started", TurnID: "turn-1"}, want: true},
+		{name: "assistant output", event: session.Event{Type: "message.assistant.delta", TurnID: "turn-1"}, want: true},
+		{name: "reasoning", event: session.Event{Type: "message.reasoning.delta", TurnID: "turn-1"}, want: true},
+		{name: "tool", event: session.Event{Type: "tool.event", TurnID: "turn-1"}, want: true},
+		{name: "approval", event: session.Event{Type: "approval.requested", TurnID: "turn-1"}, want: true},
+		{name: "turn error", event: session.Event{Type: "provider.error", TurnID: "turn-1"}, want: true},
+		{name: "terminal", event: session.Event{Type: session.EventTurnCancelled, TurnID: "turn-1"}, want: true},
+		{name: "background stderr", event: session.Event{Type: "provider.stderr"}},
+		{name: "raw provider notification", event: session.Event{Type: "provider.event", TurnID: "turn-1"}},
+		{name: "provider metadata", event: session.Event{Type: "provider.metadata", TurnID: "turn-1"}},
+		{name: "delivery bookkeeping", event: session.Event{Type: session.EventMessageDelivery, TurnID: "turn-1"}},
+		{name: "session lifecycle", event: session.Event{Type: "session.state"}},
+		{name: "turn event without turn", event: session.Event{Type: "tool.event"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isActivityEvent(test.event); got != test.want {
+				t.Fatalf("isActivityEvent(%+v) = %v, want %v", test.event, got, test.want)
+			}
+		})
 	}
 }

@@ -1135,6 +1135,9 @@ func (s *Server) activityEvents(w http.ResponseWriter, r *http.Request) {
 			if live.Overflowed() {
 				return
 			}
+			if !isActivityEvent(event) {
+				continue
+			}
 			entry := pending[event.SessionID]
 			if entry.SessionID == "" {
 				entry.SessionID = event.SessionID
@@ -1195,6 +1198,34 @@ func (s *Server) activityEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		}
+	}
+}
+
+// isActivityEvent limits the monitor to user-visible work within a Turn.
+// Session/process lifecycle records and raw Provider diagnostics are durable
+// for recovery and debugging, but they do not mean an agent is doing work.
+// In particular, a daemon shutdown appends state records for every resident
+// Provider session, and background Provider stderr/metadata can arrive long
+// after its last Turn. Neither should make an idle session look active.
+func isActivityEvent(event session.Event) bool {
+	if event.TurnID == "" {
+		return false
+	}
+	switch event.Type {
+	case "turn.started",
+		session.EventMessageInput,
+		"message.assistant.delta",
+		"message.reasoning.delta",
+		"tool.event",
+		"approval.requested",
+		"approval.resolved",
+		"provider.error",
+		session.EventTurnCompleted,
+		session.EventTurnFailed,
+		session.EventTurnCancelled:
+		return true
+	default:
+		return false
 	}
 }
 
