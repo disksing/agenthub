@@ -93,30 +93,6 @@ func waitForStatus(t *testing.T, addr string) map[string]any {
 	return nil
 }
 
-func stopDaemon(t *testing.T, root string, done chan error) {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "state", "server.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state struct {
-		PID int `json:"pid"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Kill(state.PID, syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("serve returned: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("daemon did not shut down")
-	}
-}
 
 // SIGTERM must stop the daemon promptly and cleanly even while an SSE client
 // keeps an event stream open.

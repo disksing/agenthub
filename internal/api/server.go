@@ -1786,7 +1786,3 @@ func spaHandler(root string) http.Handler {
 		http.ServeFile(w, r, filepath.Join(root, "index.html"))
 	})
 }
-
-func Shutdown(ctx context.Context, server *http.Server) error {
-	return server.Shutdown(ctx)
-}
