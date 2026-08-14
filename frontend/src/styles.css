@@ -257,12 +257,6 @@ select {
   font-weight: 600;
 }
 
-/* The currently open row keeps its active background while hovered instead of
-   switching to the generic hover tint. */
-.session-row.active:hover {
-  background: #f0f2f1;
-}
-
 .session-row.active::before {
   position: absolute;
   inset: 0 auto 0 0;
