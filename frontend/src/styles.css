@@ -506,6 +506,42 @@ select {
   min-width: 0;
 }
 
+/* Drag handle used to reorder agent cards. It is the only draggable surface
+   of a card, so dragging never conflicts with expanding, editing, or the
+   delete button. Keyboard focus moves the row up/down with the arrow keys. */
+.settings-drag-handle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0 -4px -8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+}
+
+.settings-drag-handle:hover {
+  color: var(--teal);
+  background: #f0f7f6;
+}
+
+.settings-drag-handle:active {
+  cursor: grabbing;
+}
+
+.settings-card.dragging {
+  opacity: 0.45;
+}
+
+.settings-card.drop-target {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 1px var(--teal);
+}
+
 .settings-card-toggle {
   display: flex;
   flex: 1;

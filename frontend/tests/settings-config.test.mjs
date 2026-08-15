@@ -9,6 +9,7 @@ import {
   normalizeAgentName,
   normalizeAgentOptions,
   normalizeConfig,
+  reorderAgents,
   uniqueAgentName,
   validateDraft,
 } from "../src/settings/configModel.js";
@@ -217,4 +218,17 @@ test("normalizeAgentName trims and lower-cases", () => {
   assert.equal(normalizeAgentName("  Kimi K3 "), "kimi k3");
   assert.equal(normalizeAgentName(""), "");
   assert.equal(normalizeAgentName(undefined), "");
+});
+
+test("reorderAgents moves an element without mutating the source", () => {
+  const source = [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }];
+  // Move forward: the source element lands at the destination index.
+  assert.deepEqual(reorderAgents(source, 0, 2), [{ name: "B" }, { name: "C" }, { name: "A" }, { name: "D" }]);
+  // Move backward: the source element lands at the destination index.
+  assert.deepEqual(reorderAgents(source, 3, 0), [{ name: "D" }, { name: "A" }, { name: "B" }, { name: "C" }]);
+  // No-op move returns an equal but distinct array.
+  assert.deepEqual(reorderAgents(source, 1, 1), source);
+  assert.notEqual(reorderAgents(source, 1, 1), source);
+  // The source array is never mutated.
+  assert.deepEqual(source, [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }]);
 });

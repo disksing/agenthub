@@ -296,3 +296,13 @@ export function summarizeOptions(options = {}) {
     .filter(([, value]) => String(value ?? "").trim())
     .map(([key, value]) => `${key}=${value}`);
 }
+
+// reorderAgents returns a new agents array with the element at fromIndex moved
+// to toIndex. It is the pure counterpart of the drag-and-drop (and keyboard)
+// reordering in the Agents settings panel; the source array is never mutated.
+export function reorderAgents(agents, fromIndex, toIndex) {
+  const next = agents.slice();
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}

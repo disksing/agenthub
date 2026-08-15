@@ -1,18 +1,37 @@
 import { useRef, useState } from "react";
-import { CaretDown, CaretRight, Plus, Robot, Trash } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, DotsSixVertical, Plus, Robot, Trash } from "@phosphor-icons/react";
 import {
-  normalizeAgentOptions, providerOptionSchema, summarizeOptions, uniqueAgentName,
+  normalizeAgentOptions, providerOptionSchema, reorderAgents, summarizeOptions, uniqueAgentName,
 } from "./configModel";
 import { Field, fieldError } from "./fields";
 import { ModelSelect } from "./ModelSelect";
 
+// remapExpanded maps expanded-row indices through a move operation so cards
+// stay expanded after a reorder: the moved row takes the destination index and
+// rows between the source and destination shift by one.
+function remapExpanded(indices, from, to) {
+  const next = new Set();
+  for (const idx of indices) {
+    if (idx === from) next.add(to);
+    else if (from < to && idx > from && idx <= to) next.add(idx - 1);
+    else if (from > to && idx >= to && idx < from) next.add(idx + 1);
+    else next.add(idx);
+  }
+  return next;
+}
+
 // AgentsPanel edits the agents of the settings draft. Agents are identified
 // by their unique name only; there is no separate id field. React list keys
 // come from a per-mount counter aligned with the draft rows (adds appends,
-// removes splice, edits never reorder), so rows never key on the array index
-// and edits cannot shift onto the wrong card.
+// removes and reorders splice, edits never reorder), so rows never key on the
+// array index and edits cannot shift onto the wrong card.
 export function AgentsPanel({ draft, errors, showErrors, mutate }) {
   const [expanded, setExpanded] = useState(() => new Set());
+  // dragIndex/dropIndex track an in-flight reorder gesture: dragIndex is the
+  // row being dragged and dropIndex the row currently highlighted as the drop
+  // target (dropIndex is used only for visual feedback).
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dropIndex, setDropIndex] = useState(null);
   const keyCounter = useRef(0);
   const rowKeys = useRef(draft.agents.map(() => keyCounter.current++));
   // Re-synchronize if the draft was replaced externally (e.g. a reload after
@@ -59,6 +78,16 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
     });
   };
 
+  const moveAgent = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    // Keep row keys and the expanded set aligned with the new agent order.
+    rowKeys.current.splice(toIndex, 0, rowKeys.current.splice(fromIndex, 1)[0]);
+    setExpanded((current) => remapExpanded(current, fromIndex, toIndex));
+    mutate((next) => {
+      next.agents = reorderAgents(next.agents, fromIndex, toIndex);
+    });
+  };
+
   const removeAgent = (index) => {
     rowKeys.current.splice(index, 1);
     mutate((next) => {
@@ -94,8 +123,50 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
         const base = `settings-agent-${index}`;
         const pillText = `${provider ? provider.name || provider.id : "Unknown provider"}${summary ? ` · ${summary}` : ""}`;
         return (
-          <article className="settings-card" key={rowKeys.current[index]}>
+          <article
+            className={`settings-card ${dragIndex === index ? "dragging" : ""} ${dropIndex === index ? "drop-target" : ""}`}
+            key={rowKeys.current[index]}
+            onDragOver={(event) => {
+              if (dragIndex === null || dragIndex === index) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              if (dropIndex !== index) setDropIndex(index);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (dragIndex === null || dragIndex === index) return;
+              moveAgent(dragIndex, index);
+              setDragIndex(null);
+              setDropIndex(null);
+            }}
+          >
             <div className="settings-card-head">
+              <button
+                className="settings-drag-handle"
+                aria-label={`Reorder agent ${agent.name || "Unnamed agent"}`}
+                title="Drag to reorder"
+                draggable
+                onDragStart={(event) => {
+                  setDragIndex(index);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", String(index));
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setDropIndex(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowUp" && index > 0) {
+                    event.preventDefault();
+                    moveAgent(index, index - 1);
+                  } else if (event.key === "ArrowDown" && index < draft.agents.length - 1) {
+                    event.preventDefault();
+                    moveAgent(index, index + 1);
+                  }
+                }}
+              >
+                <DotsSixVertical size={18} />
+              </button>
               <button
                 className="settings-card-toggle"
                 aria-expanded={open}
