@@ -18,18 +18,20 @@ import (
 )
 
 type fakeSession struct {
-	hooks        provider.Hooks
-	resumeID     string
-	prompts      []string
-	promptErrors []error
-	resolution   provider.ApprovalResolution
-	startErr     error
-	onClose      func()
-	holdTurn     bool
-	closeStarted chan struct{}
-	closeRelease chan struct{}
-	closeOnce    sync.Once
-	mu           sync.Mutex
+	hooks         provider.Hooks
+	resumeID      string
+	prompts       []string
+	promptErrors  []error
+	resolution    provider.ApprovalResolution
+	startErr      error
+	onClose       func()
+	holdTurn      bool
+	suppressReply bool
+	onInterrupt   func()
+	closeStarted  chan struct{}
+	closeRelease  chan struct{}
+	closeOnce     sync.Once
+	mu            sync.Mutex
 }
 
 type sourceAwareFakeSession struct {
@@ -64,7 +66,9 @@ func (f *fakeSession) Prompt(text string, _ bool) error {
 	if promptErr != nil {
 		return promptErr
 	}
-	f.hooks.Event(provider.Event{Type: "message.assistant.delta", Data: map[string]any{"text": "answer"}})
+	if !f.suppressReply {
+		f.hooks.Event(provider.Event{Type: "message.assistant.delta", Data: map[string]any{"text": "answer"}})
+	}
 	if f.holdTurn {
 		return nil
 	}
@@ -219,7 +223,12 @@ func TestRestartResumesUnconfirmedDurableMessage(t *testing.T) {
 		t.Fatalf("recovered message = %+v, found=%v, err=%v", message, found, err)
 	}
 }
-func (f *fakeSession) Interrupt() error { return nil }
+func (f *fakeSession) Interrupt() error {
+	if f.onInterrupt != nil {
+		f.onInterrupt()
+	}
+	return nil
+}
 func (f *fakeSession) Approve(_ string, resolution provider.ApprovalResolution) error {
 	f.mu.Lock()
 	f.resolution = resolution
@@ -715,6 +724,94 @@ func TestStopPublishesStoppedOnlyAfterCloseConfirmsExit(t *testing.T) {
 	}
 	if manager.IsRunning(value.ID) {
 		t.Fatal("provider remains registered after stopped")
+	}
+}
+
+func TestInterruptClassifiesProviderCompletionAsCancelled(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		suppressReply bool
+	}{
+		{name: "without final reply", suppressReply: true},
+		{name: "with final reply", suppressReply: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := session.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err := store.Create(session.CreateInput{Cwd: t.TempDir(), AgentName: "Fast Agent"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := New(store, testConfig())
+			var adapter *fakeSession
+			manager.factory = func(options provider.Options) (provider.Session, error) {
+				adapter = &fakeSession{hooks: options.Hooks, holdTurn: true, suppressReply: test.suppressReply}
+				return adapter, nil
+			}
+			if _, err := manager.Send(value.ID, "run a long tool", false); err != nil {
+				t.Fatal(err)
+			}
+			turnID, err := store.Get(value.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if turnID.CurrentTurnID == "" {
+				t.Fatal("Send did not leave the Turn active")
+			}
+			activeTurnID := turnID.CurrentTurnID
+			adapter.hooks.Event(provider.Event{Type: "tool.event", Data: map[string]any{"method": "item/started"}})
+			adapter.onInterrupt = func() {
+				// Codex and other adapters may report a provider completion as the
+				// response to an interrupt request. It must remain cancelled.
+				adapter.hooks.Event(provider.Event{
+					Type:     "provider.turn.completed",
+					Data:     map[string]any{"nativeTurnId": "provider-private"},
+					TurnDone: true,
+				})
+			}
+			if err := manager.Interrupt(value.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			projected, err := store.Get(value.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if projected.State != session.StateReady || projected.CurrentTurnID != "" {
+				t.Fatalf("interrupted session projection = %+v", projected)
+			}
+			events, err := store.EventsAfter(value.ID, 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var completed, cancelled int
+			for _, event := range events {
+				switch event.Type {
+				case session.EventTurnCompleted:
+					completed++
+				case session.EventTurnCancelled:
+					cancelled++
+					if event.TurnID != activeTurnID || string(event.Data) != `{"reason":"interrupted"}` {
+						t.Fatalf("unexpected cancellation event = %+v", event)
+					}
+				}
+			}
+			if completed != 0 || cancelled != 1 {
+				t.Fatalf("terminal events = completed:%d cancelled:%d; all events=%+v", completed, cancelled, events)
+			}
+			summary, err := store.Turn(value.ID, activeTurnID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if summary.Status != "cancelled" || !summary.Closed {
+				t.Fatalf("Turn summary = %+v", summary)
+			}
+			if (summary.FinalReplyPreview != "") == test.suppressReply {
+				t.Fatalf("FinalReplyPreview = %q, suppressReply=%v", summary.FinalReplyPreview, test.suppressReply)
+			}
+		})
 	}
 }
 

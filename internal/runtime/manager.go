@@ -25,14 +25,18 @@ type Manager struct {
 }
 
 type active struct {
-	mu         sync.Mutex
-	adapter    provider.Session
-	turnID     string
-	ready      chan struct{}
-	startErr   error
-	stopReason string
-	finalized  bool
-	finalize   sync.Once
+	mu      sync.Mutex
+	adapter provider.Session
+	turnID  string
+	// interruptRequested is set before calling the provider so a provider
+	// completion notification caused by that call cannot be mistaken for a
+	// naturally completed Turn.
+	interruptRequested bool
+	ready              chan struct{}
+	startErr           error
+	stopReason         string
+	finalized          bool
+	finalize           sync.Once
 	// replies holds custom text replies queued while the owning turn is still
 	// open. Providers cannot accept free text inside an approval response, so
 	// each reply dismisses its question immediately and is delivered as a
@@ -49,6 +53,24 @@ func (a *active) turn() string {
 func (a *active) setTurn(value string) {
 	a.mu.Lock()
 	a.turnID = value
+	a.mu.Unlock()
+}
+
+func (a *active) requestInterrupt() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finalized || a.turnID == "" {
+		return false
+	}
+	a.interruptRequested = true
+	return true
+}
+
+func (a *active) clearInterruptRequest() {
+	a.mu.Lock()
+	if a.turnID != "" {
+		a.interruptRequested = false
+	}
 	a.mu.Unlock()
 }
 
@@ -348,13 +370,25 @@ func (m *Manager) Interrupt(id string) error {
 	if run == nil {
 		return errors.New("session provider is not running")
 	}
+	if !run.requestInterrupt() {
+		return errors.New("session has no active turn to interrupt")
+	}
 	if err := run.adapter.Interrupt(); err != nil {
+		run.clearInterruptRequest()
 		return err
 	}
-	if turnID := run.turn(); turnID != "" {
+	// Providers differ in whether Interrupt emits a terminal notification. If
+	// one did not, close the canonical Turn here; withEvent makes this idempotent
+	// with the providerEvent path and serializes the race with a late provider
+	// notification.
+	run.withEvent(func(turnID string) {
+		if turnID == "" || !run.interruptRequested {
+			return
+		}
 		_, _ = m.store.Append(id, session.EventTurnCancelled, turnID, marshal(session.TurnTerminalEventData{Reason: "interrupted"}))
-		run.setTurn("")
-	}
+		run.interruptRequested = false
+		run.turnID = ""
+	})
 	return nil
 }
 
@@ -582,7 +616,12 @@ func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
 		eventType := session.EventTurnCompleted
 		terminal := session.TurnTerminalEventData{}
 		approvalReason := session.StopReasonCompleted
-		if event.TurnFailed {
+		interrupted := run.interruptRequested
+		if interrupted {
+			eventType = session.EventTurnCancelled
+			terminal.Reason = "interrupted"
+			approvalReason = "interrupted"
+		} else if event.TurnFailed {
 			eventType = session.EventTurnFailed
 			terminal.Error = providerEventMessage(event.Data)
 			approvalReason = session.StopReasonProviderError
@@ -600,6 +639,7 @@ func (m *Manager) providerEvent(id string, run *active, event provider.Event) {
 			}
 		}
 		_, _ = m.store.Append(id, eventType, turnID, marshal(terminal))
+		run.interruptRequested = false
 		run.turnID = ""
 		replies = run.replies
 		run.replies = nil
