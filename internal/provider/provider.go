@@ -472,7 +472,9 @@ func (r *jsonRPC) readLoop(reader io.Reader) error {
 
 func (r *jsonRPC) consumeStdout(reader io.Reader) {
 	if err := r.readLoop(reader); err != nil {
-		r.failTransport(fmt.Errorf("read provider stdout: %w", err))
+		transportErr := fmt.Errorf("read provider stdout: %w", err)
+		r.emit("provider.error", map[string]any{"message": transportErr.Error()})
+		r.failTransport(transportErr)
 	}
 }
 

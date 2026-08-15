@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -567,7 +568,8 @@ type unexpectedEOFReader struct{}
 func (unexpectedEOFReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func TestJSONRPCReadFailureImmediatelyFailsPendingRequest(t *testing.T) {
-	value := newJSONRPC("unused", nil, "", nil, Hooks{})
+	events := make(chan Event, 1)
+	value := newJSONRPC("unused", nil, "", nil, Hooks{Event: func(event Event) { events <- event }})
 	var input bytes.Buffer
 	value.stdin = writeCloser{&input}
 
@@ -591,6 +593,14 @@ func TestJSONRPCReadFailureImmediatelyFailsPendingRequest(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("request remained blocked after stdout read failure")
+	}
+	select {
+	case event := <-events:
+		if event.Type != "provider.error" || !strings.Contains(fmt.Sprint(event.Data), "unexpected EOF") {
+			t.Fatalf("transport event = %#v, want provider.error with stdout failure", event)
+		}
+	default:
+		t.Fatal("stdout read failure did not emit provider.error")
 	}
 	if err := value.close(); err != nil {
 		t.Fatal(err)
