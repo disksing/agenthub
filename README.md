@@ -308,9 +308,11 @@ submitted by an inbound client.
 New inputs are persisted as one `message.input` event containing the original
 text, role, sender, and `steer` flag. Historical `message.user` and
 `message.user.steer` events replay as user messages without rewriting the
-session log. System and agent inputs are delivered to Codex, Kimi, OpenCode,
-and Pi as ordinary user-level text with a JSON provenance envelope; the
-envelope is not stored in the event timeline or shown in the Web UI.
+session log. Sourced and steer inputs are delivered to Codex, Kimi, OpenCode,
+and Pi as ordinary user-level text with a compact header such as
+`Message from agent "Review Agent" (steer):`; the original text follows on the
+next line. Delivery and correlation fields are not included in Provider prompt
+text. The header is not stored in the event timeline or shown in the Web UI.
 
 Examples:
 

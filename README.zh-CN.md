@@ -236,9 +236,11 @@ provenance（消息来源）：它们由调用方自报、不会认证，也不�
 
 新消息统一持久化为包含原始文本、role、sender 和 `steer` 的
 `message.input` 事件。历史 `message.user` 与 `message.user.steer` 事件重放
-时等价为 user 消息，不改写 Session 日志。system 与 agent 消息发给 Codex、
-Kimi、OpenCode 和 Pi 时仍是普通用户级文本，只额外携带 JSON 来源信封；信封
-不会进入公共事件时间线，也不会显示在 Web UI 中。
+时等价为 user 消息，不改写 Session 日志。带来源或 steer 标记的消息发给
+Codex、Kimi、OpenCode 和 Pi 时仍是普通用户级文本，只在原文前增加
+`Message from agent "Review Agent" (steer):` 这样的简短来源行。
+投递和关联字段不会加入 Provider prompt；来源行也不会进入公共事件
+时间线或显示在 Web UI 中。
 
 示例：
 

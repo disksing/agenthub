@@ -894,6 +894,11 @@ an active turn the message is rejected unless `steer` is set. The role and
 sender describe message provenance only. They are not authentication,
 authorization, trust, or instruction-priority signals. Every accepted input is
 still submitted to the selected Provider as ordinary user-level prompt text.
+Sourced and steer inputs receive a compact first line such as
+`Message from agent "Review Agent" (steer):`, followed immediately by the
+original text. The sender label prefers `name`, then `id`, then `sessionId`.
+Idempotency and correlation fields remain durable metadata and are not exposed
+in Provider prompt text.
 
 - **Request body:** `{"text": "...", "role": "user", "sender": {...}, "steer": false}`
   - `text` (required) — the original message text; blank text is rejected.
