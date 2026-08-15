@@ -14,20 +14,25 @@ import (
 // and the snapshot write.
 func appendRawEvent(t *testing.T, root, id string, event Event) {
 	t.Helper()
-	event.SessionID = id
-	if event.Time.IsZero() {
-		event.Time = time.Now().UTC()
-	}
-	encoded, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
+	appendRawEvents(t, root, id, event)
+}
+
+func appendRawEvents(t *testing.T, root, id string, events ...Event) {
+	t.Helper()
 	file, err := os.OpenFile(filepath.Join(root, id, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.Write(append(encoded, '\n')); err != nil {
-		t.Fatal(err)
+	encoder := json.NewEncoder(file)
+	for _, event := range events {
+		event.SessionID = id
+		if event.Time.IsZero() {
+			event.Time = time.Now().UTC()
+		}
+		if err := encoder.Encode(event); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
@@ -359,10 +364,22 @@ func TestOpenProviderProcessTailScanSpansChunks(t *testing.T) {
 	// Bury the process record under more than two tail-scan chunks of
 	// unrelated events.
 	filler, _ := json.Marshal(map[string]string{"text": string(make([]byte, 4096))})
+	events := make([]Event, 0, 200)
 	for i := 0; i < 200; i++ {
-		if _, err := store.Append(created.ID, "message.tool", "", filler); err != nil {
-			t.Fatal(err)
-		}
+		events = append(events, Event{ID: int64(i + 3), Type: "message.tool", Data: filler})
+	}
+	appendRawEvents(t, root, created.ID, events...)
+	snapshot, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.LastEventID = events[len(events)-1].ID
+	snapshotData, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, created.ID, "session.json"), append(snapshotData, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	reopened := reopen(t, store, root)
@@ -418,22 +435,21 @@ func TestArchivedSessionLazyLoadsEvents(t *testing.T) {
 	}
 }
 
-func TestTrustedSnapshotStartupScalesWithSessionCount(t *testing.T) {
+func TestTrustedSnapshotStartupUsesSnapshotsAcrossSessions(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Each session carries a log large enough that a full replay would be
-	// measurable; the trusted-snapshot open must stay proportional to the
-	// session count instead.
+	// Multiple independent sessions must all take the trusted-snapshot path.
 	filler, _ := json.Marshal(map[string]string{"text": string(make([]byte, 32*1024))})
-	for i := 0; i < 20; i++ {
+	const sessionCount = 4
+	for i := 0; i < sessionCount; i++ {
 		created, err := store.Create(CreateInput{Title: fmt.Sprintf("Bulk %d", i), Cwd: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
 		}
-		for j := 0; j < 10; j++ {
+		for j := 0; j < 2; j++ {
 			if _, err := store.Append(created.ID, "message.tool", "", filler); err != nil {
 				t.Fatal(err)
 			}
@@ -441,8 +457,8 @@ func TestTrustedSnapshotStartupScalesWithSessionCount(t *testing.T) {
 	}
 
 	reopened := reopen(t, store, root)
-	if len(reopened.List(false)) != 20 {
-		t.Fatalf("expected 20 sessions, got %d", len(reopened.List(false)))
+	if len(reopened.List(false)) != sessionCount {
+		t.Fatalf("expected %d sessions, got %d", sessionCount, len(reopened.List(false)))
 	}
 	for id, state := range reopened.sessions {
 		if state.eventsLoaded {

@@ -407,6 +407,7 @@ The no-authentication mode is only suitable for the local machine and trusted ne
 
 ```bash
 go test -race ./...
+go test -race -count=1 -tags=integration ./integration
 go vet ./...
 cd frontend
 npm ci
@@ -415,8 +416,8 @@ npm test
 npm run test:sites
 ```
 
-The Go suite includes a real-process
-[Forge integration gate](docs/forge-integration-gate.md): it launches an
+The separately invoked real-process
+[Forge integration gate](docs/forge-integration-gate.md) launches an
 isolated daemon and fake ACP provider subprocesses, injects lifecycle and
 streaming failures, and verifies cleanup, recovery, replay, capabilities,
 and structured errors across the process boundary.

@@ -67,7 +67,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test -race -count=1 ./integration
+      - run: go test -race -count=1 -tags=integration ./integration
 
   web:
     name: Web

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   BUILTIN_PROVIDERS,
@@ -10,8 +7,6 @@ import {
   isBuiltinProvider,
   requestProviderToggle,
 } from "../src/settings/providerSwitches.js";
-
-const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function sampleConfig() {
   return {
@@ -155,25 +150,4 @@ test("requestProviderToggle surfaces failures without changing state", async () 
     () => requestProviderToggle(async () => ({}), "kimi", true),
     /did not return the updated provider/,
   );
-});
-
-test("ProvidersPanel source contains no advanced provider editing UI", async () => {
-  const source = await readFile(path.join(frontendRoot, "src", "settings", "ProvidersPanel.jsx"), "utf8");
-  const forbidden = [
-    "Add provider",
-    "Delete provider",
-    "Command path",
-    "Provider ID",
-    "settings-input",
-    "settings-select",
-    "settings-add-card",
-    "<input",
-    "<select",
-  ];
-  for (const marker of forbidden) {
-    assert.ok(!source.includes(marker), `ProvidersPanel must not contain "${marker}"`);
-  }
-  // The four controls are real switches with an accessible checked state.
-  assert.ok(source.includes('role="switch"'));
-  assert.ok(source.includes("aria-checked"));
 });

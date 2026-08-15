@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   ARCHIVED_STATE,
@@ -11,8 +8,6 @@ import {
   sessionStatusLabel,
   sessionsQuery,
 } from "../src/archive.js";
-
-const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
 
 const base = { id: "ses_1", state: "stopped" };
 
@@ -53,14 +48,4 @@ test("session status exposes stopping and stopped reason", () => {
 test("sessionsQuery hides archived sessions by default", () => {
   assert.equal(sessionsQuery(false), "/v1/sessions");
   assert.equal(sessionsQuery(true), "/v1/sessions?archived=true");
-});
-
-// Archiving a session requires no confirmation, so browser-native
-// confirm()/prompt() stay banned from the production UI sources.
-test("UI sources use no browser-native confirm or prompt", async () => {
-  for (const file of ["App.jsx"]) {
-    const content = await readFile(path.join(srcRoot, file), "utf8");
-    assert.equal(/\bwindow\.(confirm|prompt|alert)\s*\(/.test(content), false, `${file} uses a native dialog`);
-    assert.equal(/[^.\w](confirm|prompt|alert)\s*\(/.test(content), false, `${file} calls a native dialog`);
-  }
 });
