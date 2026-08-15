@@ -10,11 +10,11 @@ default AgentHub data root.
 Run the complete gate with:
 
 ```bash
-go test -race ./integration
+go test -race -count=1 -tags=integration ./integration
 ```
 
-The normal backend command, `go test -race ./...`, includes the same gate and
-is the required CI check.
+The normal backend command, `go test -race ./...`, intentionally excludes this
+process-level gate. CI runs the command above as a separate required job.
 
 ## Covered contract
 

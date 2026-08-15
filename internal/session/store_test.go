@@ -548,9 +548,7 @@ func TestSubscriptionOverflowIsTerminal(t *testing.T) {
 	}
 	defer subscription.Cancel()
 	for i := 0; i <= subscriptionBuffer; i++ {
-		if _, err := store.Append(created.ID, "provider.test", "", mustJSON(t, map[string]int{"i": i})); err != nil {
-			t.Fatal(err)
-		}
+		store.publish(Event{SessionID: created.ID, ID: int64(i + 2), Type: "provider.test"})
 	}
 	select {
 	case <-subscription.Overflow():

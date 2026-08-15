@@ -329,6 +329,7 @@ daemon 只读取统一的 `~/.agenthub` 布局。旧版本可能把 Session 存�
 
 ```bash
 go test -race ./...
+go test -race -count=1 -tags=integration ./integration
 go vet ./...
 cd frontend
 npm run build

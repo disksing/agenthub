@@ -183,7 +183,8 @@ func TestEventsPageBeforeAtLogStart(t *testing.T) {
 }
 
 func TestEventsPageBeforeNormalizesLimit(t *testing.T) {
-	store, err := Open(t.TempDir())
+	root := t.TempDir()
+	store, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +192,12 @@ func TestEventsPageBeforeNormalizesLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedBackwardEvents(t, store, created.ID, 1100) // head = 1101
+	events := make([]Event, 0, 1100)
+	for id := int64(2); id <= 1101; id++ {
+		events = append(events, Event{ID: id, Type: "test.event"})
+	}
+	appendRawEvents(t, root, created.ID, events...)
+	store = reopen(t, store, root)
 
 	page, err := store.EventsPageBefore(created.ID, math.MaxInt64, 0)
 	if err != nil {
