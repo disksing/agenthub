@@ -540,6 +540,63 @@ func TestJSONRPCDrainsFinalOutputBeforeProcessEnd(t *testing.T) {
 	}
 }
 
+func TestJSONRPCAcceptsResponseLargerThanScannerLimit(t *testing.T) {
+	value := newJSONRPC(helperCLI(t, "jsonrpc-large-response"), nil, t.TempDir(), nil, Hooks{})
+	if err := value.start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = value.close() })
+
+	raw, err := value.requestWithTimeout("large/result", map[string]any{}, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Payload string `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Payload) != 17*1024*1024 {
+		t.Fatalf("payload bytes = %d, want %d", len(result.Payload), 17*1024*1024)
+	}
+}
+
+type unexpectedEOFReader struct{}
+
+func (unexpectedEOFReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestJSONRPCReadFailureImmediatelyFailsPendingRequest(t *testing.T) {
+	value := newJSONRPC("unused", nil, "", nil, Hooks{})
+	var input bytes.Buffer
+	value.stdin = writeCloser{&input}
+
+	requestDone := make(chan error, 1)
+	go func() {
+		_, err := value.requestLongRunning("thread/resume", map[string]any{})
+		requestDone <- err
+	}()
+	waitForWaitingRequest(t, func() int {
+		value.mu.Lock()
+		defer value.mu.Unlock()
+		return len(value.waiting)
+	})
+
+	value.consumeStdout(unexpectedEOFReader{})
+	select {
+	case err := <-requestDone:
+		if err == nil || !strings.Contains(err.Error(), "read provider stdout") ||
+			!strings.Contains(err.Error(), "unexpected EOF") {
+			t.Fatalf("request error = %v, want stdout read failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request remained blocked after stdout read failure")
+	}
+	if err := value.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestJSONRPCCloseReleasesLongRunningRequest(t *testing.T) {
 	value := newJSONRPC(helperCLI(t, "sleep"), nil, t.TempDir(), nil, Hooks{})
 	if err := value.start(); err != nil {

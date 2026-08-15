@@ -63,6 +63,10 @@ func (c *codexSession) Start(resumeID string) error {
 	if resumeID != "" {
 		method = "thread/resume"
 		params["threadId"] = resumeID
+		// AgentHub persists and renders its own normalized event history. The
+		// app-server only needs to restore the thread internally; returning every
+		// historical turn can make this single JSON-RPC response tens of MiB.
+		params["excludeTurns"] = true
 	}
 	result, err := c.startRequest(method, params)
 	if err != nil {

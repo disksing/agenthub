@@ -31,6 +31,18 @@ func TestHelperProcess(t *testing.T) {
 	switch mode {
 	case "jsonrpc-output-then-exit":
 		fmt.Println(`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"final"}}}}`)
+	case "jsonrpc-large-response":
+		for scanner.Scan() {
+			var request struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &request) != nil || len(request.ID) == 0 {
+				continue
+			}
+			payload := strings.Repeat("x", 17*1024*1024)
+			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"payload":%q}}`+"\n", request.ID, payload)
+			break
+		}
 	case "pi-output-then-exit":
 		for scanner.Scan() {
 			var request struct {
@@ -61,12 +73,21 @@ func TestHelperProcess(t *testing.T) {
 			if mode == "codex-session-environment" && (request.Method == "thread/start" || request.Method == "thread/resume") {
 				expected := os.Getenv("AGENTHUB_EXPECTED_LAUNCH_ENV")
 				var params struct {
-					Config map[string]any `json:"config"`
+					Config       map[string]any `json:"config"`
+					ExcludeTurns bool           `json:"excludeTurns"`
 				}
 				_ = json.Unmarshal(request.Params, &params)
 				if os.Getenv("AGENTHUB_PROCESS_ENV") != expected ||
 					params.Config["shell_environment_policy.set.AGENTHUB_PROCESS_ENV"] != expected {
 					fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"launch environment missing"}}`+"\n", request.ID)
+					continue
+				}
+				if request.Method == "thread/resume" && !params.ExcludeTurns {
+					fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"resume did not exclude turns"}}`+"\n", request.ID)
+					continue
+				}
+				if request.Method == "thread/start" && params.ExcludeTurns {
+					fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"start unexpectedly excluded turns"}}`+"\n", request.ID)
 					continue
 				}
 				result, _ = json.Marshal(map[string]any{"thread": map[string]any{"id": expected}})

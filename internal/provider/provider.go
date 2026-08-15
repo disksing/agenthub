@@ -236,6 +236,10 @@ type jsonRPC struct {
 	pending map[string]pendingRequest
 	closed  bool
 	done    chan struct{}
+
+	transportErr  error
+	terminateOnce sync.Once
+	terminateErr  error
 }
 
 type pendingRequest struct {
@@ -298,7 +302,7 @@ func (r *jsonRPC) start() error {
 	go func() {
 		defer close(stdoutDone)
 		defer stdout.Close()
-		r.readLoop(stdout)
+		r.consumeStdout(stdout)
 	}()
 	go func() {
 		defer close(stderrDone)
@@ -450,45 +454,90 @@ func (r *jsonRPC) writeRawLocked(value any) error {
 	return err
 }
 
-func (r *jsonRPC) readLoop(reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var envelope map[string]json.RawMessage
-		if err := json.Unmarshal(scanner.Bytes(), &envelope); err != nil {
-			r.emit("provider.error", map[string]any{"message": "invalid JSON-RPC output", "error": err.Error()})
-			continue
+func (r *jsonRPC) readLoop(reader io.Reader) error {
+	buffered := bufio.NewReader(reader)
+	for {
+		line, readErr := buffered.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			r.handleJSONRPCLine(line)
 		}
-		method := rawString(envelope["method"])
-		if id, ok := envelope["id"]; ok {
-			if method != "" {
-				if r.inbound != nil {
-					r.inbound(id, method, envelope["params"])
-				} else {
-					_ = r.respondError(id, -32601, "unsupported request")
-				}
-				continue
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
 			}
-			key := strings.Trim(string(id), `"`)
-			r.mu.Lock()
-			ch := r.waiting[key]
-			delete(r.waiting, key)
-			r.mu.Unlock()
-			if ch == nil {
-				continue
-			}
-			if raw, ok := envelope["error"]; ok && len(raw) > 0 && string(raw) != "null" {
-				ch <- rpcResult{err: fmt.Errorf("%s", compact(raw))}
-			} else {
-				ch <- rpcResult{data: envelope["result"]}
-			}
-			close(ch)
-			continue
-		}
-		if method != "" && r.notify != nil {
-			r.notify(method, envelope["params"])
+			return readErr
 		}
 	}
+}
+
+func (r *jsonRPC) consumeStdout(reader io.Reader) {
+	if err := r.readLoop(reader); err != nil {
+		r.failTransport(fmt.Errorf("read provider stdout: %w", err))
+	}
+}
+
+func (r *jsonRPC) handleJSONRPCLine(line []byte) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		r.emit("provider.error", map[string]any{"message": "invalid JSON-RPC output", "error": err.Error()})
+		return
+	}
+	method := rawString(envelope["method"])
+	if id, ok := envelope["id"]; ok {
+		if method != "" {
+			if r.inbound != nil {
+				r.inbound(id, method, envelope["params"])
+			} else {
+				_ = r.respondError(id, -32601, "unsupported request")
+			}
+			return
+		}
+		key := strings.Trim(string(id), `"`)
+		r.mu.Lock()
+		ch := r.waiting[key]
+		delete(r.waiting, key)
+		r.mu.Unlock()
+		if ch == nil {
+			return
+		}
+		if raw, ok := envelope["error"]; ok && len(raw) > 0 && string(raw) != "null" {
+			ch <- rpcResult{err: fmt.Errorf("%s", compact(raw))}
+		} else {
+			ch <- rpcResult{data: envelope["result"]}
+		}
+		close(ch)
+		return
+	}
+	if method != "" && r.notify != nil {
+		r.notify(method, envelope["params"])
+	}
+}
+
+// failTransport turns a stdout read failure into an immediate request failure
+// and starts asynchronous process cleanup. Cleanup cannot run synchronously in
+// the stdout reader because exec.Cmd.Wait waits for that reader to return.
+func (r *jsonRPC) failTransport(err error) {
+	r.writeMu.Lock()
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		r.writeMu.Unlock()
+		return
+	}
+	r.closed = true
+	r.transportErr = err
+	cmd, pgid, stdin, done := r.cmd, r.pgid, r.stdin, r.done
+	for key, ch := range r.waiting {
+		delete(r.waiting, key)
+		ch <- rpcResult{err: err}
+		close(ch)
+	}
+	r.mu.Unlock()
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	r.writeMu.Unlock()
+	go func() { _ = r.terminate(cmd, pgid, stdin, done) }()
 }
 
 func (r *jsonRPC) stderrLoop(reader io.Reader) {
@@ -509,6 +558,9 @@ func (r *jsonRPC) emit(kind string, data any) {
 func (r *jsonRPC) finish(processErr error) {
 	r.mu.Lock()
 	r.closed = true
+	if r.transportErr != nil {
+		processErr = r.transportErr
+	}
 	for key, ch := range r.waiting {
 		delete(r.waiting, key)
 		close(ch)
@@ -526,26 +578,21 @@ func (r *jsonRPC) close() error {
 	// under writeMu keeps an in-flight request from racing the shutdown.
 	r.writeMu.Lock()
 	r.mu.Lock()
-	if r.closed {
-		cmd, pgid, stdin, done := r.cmd, r.pgid, r.stdin, r.done
-		r.mu.Unlock()
-		if stdin != nil {
-			_ = stdin.Close()
-		}
-		r.writeMu.Unlock()
-		if cmd != nil {
-			return terminateChildProcess(cmd, pgid, stdin, done)
-		}
-		return nil
-	}
 	r.closed = true
-	cmd, pgid, stdin := r.cmd, r.pgid, r.stdin
+	cmd, pgid, stdin, done := r.cmd, r.pgid, r.stdin, r.done
 	r.mu.Unlock()
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	r.writeMu.Unlock()
-	return terminateChildProcess(cmd, pgid, stdin, r.done)
+	return r.terminate(cmd, pgid, stdin, done)
+}
+
+func (r *jsonRPC) terminate(cmd *exec.Cmd, pgid int, stdin io.Closer, done <-chan struct{}) error {
+	r.terminateOnce.Do(func() {
+		r.terminateErr = terminateChildProcess(cmd, pgid, stdin, done)
+	})
+	return r.terminateErr
 }
 
 const processTerminateGrace = 2 * time.Second
