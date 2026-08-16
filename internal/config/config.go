@@ -39,45 +39,6 @@ type OnWatch struct {
 	RefreshIntervalSeconds int    `json:"refreshIntervalSeconds"`
 }
 
-type Companion struct {
-	ShowActivity    bool    `json:"showActivity"`
-	EnableBeeping   bool    `json:"enableBeeping"`
-	BeepVolume      float64 `json:"beepVolume"`
-	BeepChord       string  `json:"beepChord"`
-	BeepProgression string  `json:"beepProgression"`
-	CompletionSound string  `json:"completionSound"`
-}
-
-const DefaultCompletionSound = "completed-voice"
-const DefaultBeepChord = "c-major"
-const DefaultBeepProgression = "single"
-
-var beepChords = map[string]struct{}{
-	"c-major": {}, "db-major": {}, "d-major": {}, "eb-major": {},
-	"e-major": {}, "f-major": {}, "gb-major": {}, "g-major": {},
-	"ab-major": {}, "a-major": {}, "bb-major": {}, "b-major": {},
-	"c-minor": {}, "cs-minor": {}, "d-minor": {}, "eb-minor": {},
-	"e-minor": {}, "f-minor": {}, "fs-minor": {}, "g-minor": {},
-	"gs-minor": {}, "a-minor": {}, "bb-minor": {}, "b-minor": {},
-}
-
-var beepProgressions = map[string]struct{}{
-	"single": {}, "canon-in-c": {},
-}
-
-var completionSounds = map[string]struct{}{
-	"completed-voice":       {},
-	"done-for-you-girl":     {},
-	"light-hearted-message": {},
-	"not-bad":               {},
-	"slow-spring-board":     {},
-	"smile":                 {},
-}
-
-var legacyCompletionSounds = map[string]struct{}{
-	"chime": {}, "bell": {}, "ding": {}, "marimba": {}, "pop": {},
-}
-
 // AgentNameMaxLength bounds the length of an agent name (counted in runes
 // after trimming).
 const AgentNameMaxLength = 80
@@ -92,11 +53,11 @@ func NormalizeAgentName(name string) string {
 }
 
 type Config struct {
-	Version        int        `json:"version"`
-	AgentProviders []Provider `json:"agentProviders"`
-	Agents         []Agent    `json:"agents"`
-	OnWatch        OnWatch    `json:"onWatch"`
-	Companion      Companion  `json:"companion"`
+	Version         int             `json:"version"`
+	AgentProviders  []Provider      `json:"agentProviders"`
+	Agents          []Agent         `json:"agents"`
+	OnWatch         OnWatch         `json:"onWatch"`
+	LegacyCompanion json.RawMessage `json:"companion,omitempty"`
 }
 
 type Probe struct {
@@ -119,7 +80,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{OnWatch: defaultOnWatch(), Companion: defaultCompanion()}
+	cfg := Config{OnWatch: defaultOnWatch()}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
@@ -177,9 +138,6 @@ func Save(path string, cfg Config) error {
 func (c Config) Validate() error {
 	effective := c.WithDefaults()
 	if err := effective.OnWatch.validate(); err != nil {
-		return err
-	}
-	if err := effective.Companion.validate(); err != nil {
 		return err
 	}
 	providers := make(map[string]Provider)
@@ -259,7 +217,6 @@ func (c Config) SetProviderEnabled(id string, enabled bool) (Config, Provider, e
 		AgentProviders: make([]Provider, len(c.AgentProviders)),
 		Agents:         make([]Agent, len(c.Agents)),
 		OnWatch:        c.OnWatch,
-		Companion:      c.Companion,
 	}
 	copy(next.AgentProviders, c.AgentProviders)
 	for i, agent := range c.Agents {
@@ -294,7 +251,6 @@ func Defaults() Config {
 		AgentProviders: providers,
 		Agents:         []Agent{{Name: "Codex", ProviderID: "codex", Options: map[string]string{"approval": "never", "sandbox": "danger-full-access"}}},
 		OnWatch:        defaultOnWatch(),
-		Companion:      defaultCompanion(),
 	}
 }
 
@@ -307,36 +263,15 @@ func defaultOnWatch() OnWatch {
 	}
 }
 
-func defaultCompanion() Companion {
-	return Companion{
-		ShowActivity:    true,
-		EnableBeeping:   true,
-		BeepVolume:      0.28,
-		BeepChord:       DefaultBeepChord,
-		BeepProgression: DefaultBeepProgression,
-		CompletionSound: DefaultCompletionSound,
-	}
-}
-
-// WithDefaults fills companion fields absent from configurations written by
-// older AgentHub versions. It intentionally treats only an entirely empty
-// nested object as absent, so explicit false and zero values survive when the
-// remaining fields identify a current configuration.
+// WithDefaults fills fields absent from configurations written by older
+// AgentHub versions. Companion preferences moved to browser-local storage;
+// accepting and clearing the legacy field keeps existing config files
+// loadable while ensuring the daemon never returns or writes it again.
 func (c Config) WithDefaults() Config {
 	if c.OnWatch.ServerURL == "" && c.OnWatch.AuthMode == "" && c.OnWatch.RefreshIntervalSeconds == 0 {
 		c.OnWatch = defaultOnWatch()
 	}
-	if c.Companion.CompletionSound == "" {
-		c.Companion = defaultCompanion()
-	} else if _, legacy := legacyCompletionSounds[c.Companion.CompletionSound]; legacy {
-		c.Companion.CompletionSound = DefaultCompletionSound
-	}
-	if c.Companion.BeepChord == "" {
-		c.Companion.BeepChord = DefaultBeepChord
-	}
-	if c.Companion.BeepProgression == "" {
-		c.Companion.BeepProgression = DefaultBeepProgression
-	}
+	c.LegacyCompanion = nil
 	return c
 }
 
@@ -365,25 +300,10 @@ func (value OnWatch) validate() error {
 	return nil
 }
 
-func (value Companion) validate() error {
-	if value.BeepVolume < 0 || value.BeepVolume > 1 {
-		return errors.New("companion.beepVolume must be between 0 and 1")
-	}
-	if _, ok := beepChords[value.BeepChord]; !ok {
-		return fmt.Errorf("companion.beepChord %q is unsupported", value.BeepChord)
-	}
-	if _, ok := beepProgressions[value.BeepProgression]; !ok {
-		return fmt.Errorf("companion.beepProgression %q is unsupported", value.BeepProgression)
-	}
-	if _, ok := completionSounds[value.CompletionSound]; !ok {
-		return fmt.Errorf("companion.completionSound %q is unsupported", value.CompletionSound)
-	}
-	return nil
-}
-
 // Redacted returns a copy safe to expose through the public configuration API.
 // The stored Basic Auth password remains available only inside the daemon.
 func (c Config) Redacted() Config {
+	c = c.WithDefaults()
 	c.OnWatch.Password = ""
 	return c
 }

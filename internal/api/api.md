@@ -297,7 +297,7 @@ curl -s "$BASE/v1/status"
 Read the effective configuration.
 
 - **Success `200`:** `{"config": {...}}` — the configuration object
-  (`version`, `agentProviders`, `agents`, `onWatch`, `companion`; see
+  (`version`, `agentProviders`, `agents`, `onWatch`; see
   `PUT /v1/config` for the schema and constraints). `onWatch.password` is
   always returned as an empty string; the stored secret never leaves the
   daemon.
@@ -332,14 +332,6 @@ only writer) and applies it in memory.
       "username": "admin",
       "password": "",
       "refreshIntervalSeconds": 60
-    },
-    "companion": {
-      "showActivity": true,
-      "enableBeeping": true,
-      "beepVolume": 0.28,
-      "beepChord": "c-major",
-      "beepProgression": "single",
-      "completionSound": "completed-voice"
     }
   }
 }
@@ -354,24 +346,10 @@ only writer) and applies it in memory.
   refresh is 30, 60 or 300 seconds. Basic Auth requires a username and, when
   enabled, a password. Because GET responses redact the password, an empty
   Basic password in PUT preserves the currently stored value.
-- **Companion constraints:** `beepVolume` is between 0 and 1. `beepChord` is
-  one of the 12 major triads (`c-major`, `db-major`, `d-major`, `eb-major`,
-  `e-major`, `f-major`, `gb-major`, `g-major`, `ab-major`, `a-major`,
-  `bb-major`, `b-major`) or 12 minor triads (`c-minor`, `cs-minor`, `d-minor`,
-  `eb-minor`, `e-minor`, `f-minor`, `fs-minor`, `g-minor`, `gs-minor`,
-  `a-minor`, `bb-minor`, `b-minor`); an omitted value defaults to `c-major`.
-  `beepProgression` is `single` or `canon-in-c`; an omitted value defaults to
-  `single`. The Canon progression follows `C`, `G`, `Am`, `Em`, `F`, `C`, `F`,
-  `G`; each chord independently lasts a random one to six one-second activity
-  frames, and all Session tones switch immediately at each boundary. The
-  selected single chord remains the fallback when `beepProgression` is `single`.
-  Activity tone slots fill octave bands 5, 4, 6, 3, then 7, prioritizing the
-  lower bands before the highest tone, and remain stable for each active
-  Session until release.
-  `completionSound` is independent of the
-  activity chord and is `completed-voice`, `done-for-you-girl`,
-  `light-hearted-message`, `not-bad`, `slow-spring-board` or `smile`.
-  Legacy synthesized sound names are migrated to `completed-voice` when read.
+- **Browser preferences:** Activity Monitor controls are stored only in the
+  browser's `localStorage` and are absent from this API. For upgrade
+  compatibility, a legacy top-level `companion` object is accepted and
+  discarded; it is omitted from responses and from the next config-file write.
 - **Rename semantics:** if an agent disappears while exactly one new agent
   with an identical provider and options appears, the change is treated as a
   rename and active sessions referencing the old name are migrated with a

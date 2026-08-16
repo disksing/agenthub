@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	DEFAULT_COMPANION,
 	DEFAULT_ONWATCH,
   buildPayload,
   createDraft,
@@ -41,7 +40,6 @@ test("normalizeConfig normalizes the structure and drops blank fields", () => {
       { name: "Backup", providerId: "kimi" },
     ],
 	onWatch: DEFAULT_ONWATCH,
-	companion: DEFAULT_COMPANION,
   });
 });
 
@@ -51,7 +49,6 @@ test("normalizeConfig tolerates empty config and missing arrays", () => {
     agentProviders: [],
     agents: [],
 	onWatch: DEFAULT_ONWATCH,
-	companion: DEFAULT_COMPANION,
   });
   assert.deepEqual(normalizeConfig({ agentProviders: "x", agents: 1 }), normalizeConfig({}));
 });
@@ -117,27 +114,16 @@ test("validateDraft returns no errors for a valid config", () => {
   assert.deepEqual(validateDraft(createDraft({})), []);
 });
 
-test("companion settings are normalized and validated", () => {
+test("server config ignores legacy companion settings", () => {
 	const normalized = normalizeConfig({
 		onWatch: { enabled: true, serverUrl: " http://localhost:9211 ", authMode: "none", refreshIntervalSeconds: 30 },
 		companion: { showActivity: false, enableBeeping: false, beepVolume: 0, completionSound: "pop" },
 	});
 	assert.equal(normalized.onWatch.serverUrl, "http://localhost:9211");
 	assert.equal(normalized.onWatch.enabled, true);
-	assert.deepEqual(normalized.companion, { showActivity: false, enableBeeping: false, beepVolume: 0, beepChord: "c-major", beepProgression: "single", completionSound: "completed-voice" });
+	assert.equal("companion" in normalized, false);
+	assert.equal("companion" in buildPayload(normalized), false);
 	assert.deepEqual(validateDraft(normalized), []);
-
-	const invalid = createDraft({
-		onWatch: { serverUrl: "file:///tmp/quota", authMode: "basic", username: "", refreshIntervalSeconds: 13 },
-		companion: { beepVolume: 2, beepChord: "noise", beepProgression: "noise", completionSound: "noise" },
-	});
-	const errors = validateDraft(invalid);
-	assert.ok(errors.some((item) => item.section === "general" && item.field === "serverUrl"));
-	assert.ok(errors.some((item) => item.section === "general" && item.field === "username"));
-	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepVolume"));
-	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepChord"));
-	assert.ok(errors.some((item) => item.section === "activity" && item.field === "beepProgression"));
-	assert.ok(errors.some((item) => item.section === "activity" && item.field === "completionSound"));
 });
 
 test("validateDraft reports duplicate provider ids and missing required fields", () => {

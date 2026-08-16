@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -59,9 +60,12 @@ func TestConfigAPIKeepsOnWatchPasswordServerSide(t *testing.T) {
 	if fetched.Config.OnWatch.Password != "" {
 		t.Fatal("GET /v1/config exposed the OnWatch password")
 	}
-	fetched.Config.Companion.BeepVolume = 0.51
-	fetched.Config.Companion.BeepChord = "a-minor"
-	fetched.Config.Companion.BeepProgression = "canon-in-c"
+	if fetched.Config.LegacyCompanion != nil {
+		t.Fatal("GET /v1/config exposed legacy companion settings")
+	}
+	// Old clients may still submit this field during a rolling upgrade. Accept
+	// it for compatibility, but discard it before updating runtime or disk.
+	fetched.Config.LegacyCompanion = json.RawMessage(`{"enableBeeping":false,"beepChord":"a-minor"}`)
 	body, _ := json.Marshal(map[string]any{"config": fetched.Config})
 	request, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/config", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -82,12 +86,22 @@ func TestConfigAPIKeepsOnWatchPasswordServerSide(t *testing.T) {
 	if savedResponse.Config.OnWatch.Password != "" {
 		t.Fatal("PUT /v1/config response exposed the OnWatch password")
 	}
+	if savedResponse.Config.LegacyCompanion != nil {
+		t.Fatal("PUT /v1/config response exposed legacy companion settings")
+	}
 	stored, err := config.Load(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.OnWatch.Password != "secret" || stored.Companion.BeepVolume != 0.51 || stored.Companion.BeepChord != "a-minor" || stored.Companion.BeepProgression != "canon-in-c" {
+	if stored.OnWatch.Password != "secret" || stored.LegacyCompanion != nil {
 		t.Fatalf("stored config = %+v", stored)
+	}
+	written, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(written, []byte(`"companion"`)) {
+		t.Fatalf("stored config retained legacy companion settings: %s", written)
 	}
 }
 

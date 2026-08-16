@@ -325,6 +325,8 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.ok(styles.includes(".companion-thread-row.terminal-error"));
 	assert.ok(source.includes('className="companion-resize-handle"'));
 	assert.ok(source.includes("agenthub.companion.size.v1"));
+	assert.ok(source.includes("saveCompanionPreferences"));
+	assert.ok(!source.includes('api("/v1/config", { method: "PUT"'));
 	assert.ok(styles.includes("@container companion-card (min-width: 560px)"));
 	assert.ok(styles.includes("@container companion-card (max-height: 390px)"));
 	assert.ok(!model.includes("Math.random"));

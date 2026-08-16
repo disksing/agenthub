@@ -4,10 +4,9 @@ import { COMPLETION_SOUNDS, TonePlayer } from "../companion/audio.js";
 import { BEEP_CHORDS, BEEP_PROGRESSIONS } from "../companion/chords.js";
 import { Toggle } from "./fields.jsx";
 
-export function ActivityPanel({ draft, mutate }) {
+export function ActivityPanel({ value, mutate }) {
   const player = useRef(new TonePlayer());
-  const value = draft.companion;
-  const update = (field, nextValue) => mutate((next) => { next.companion[field] = nextValue; });
+  const update = (field, nextValue) => mutate((next) => { next[field] = nextValue; });
   const previewCompletion = async () => {
     if (await player.current.resume()) player.current.completion(value.completionSound, value.beepVolume);
   };
