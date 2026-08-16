@@ -32,8 +32,8 @@ jobs:
             test_args: -v -timeout=90s
           - name: client-config
             packages: ./internal/client ./internal/config
-          - name: migrate-paths
-            packages: ./internal/migrate ./internal/paths
+          - name: paths
+            packages: ./internal/paths
           - name: support
             packages: ./internal/daemon ./internal/integrationtest/...
     steps:
