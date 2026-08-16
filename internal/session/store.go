@@ -406,13 +406,6 @@ func (s *Store) Append(id, eventType, turnID string, data []byte) (Event, error)
 // subscribers receive a small append patch, so steady-state live traffic
 // stays proportional to the fragments instead of the accumulated message.
 func (s *Store) appendLocked(state *sessionState, id, eventType, turnID string, data []byte) (Event, Event, error) {
-	if eventType == "session.state" {
-		var stateData StateEventData
-		if json.Unmarshal(data, &stateData) == nil && stateData.State == legacyStateBusy {
-			stateData.State = StateRunning
-			data, _ = json.Marshal(stateData)
-		}
-	}
 	event := Event{
 		ID:        state.session.LastEventID + 1,
 		Time:      time.Now().UTC(),
@@ -1055,16 +1048,10 @@ func applyEvent(projected *Session, event Event) error {
 			return err
 		}
 		*projected = created
-		if projected.State == legacyStateBusy {
-			projected.State = StateRunning
-		}
 	case "session.state":
 		var data StateEventData
 		if err := decodeCurrentEvent(event.Data, &data); err != nil {
 			return err
-		}
-		if data.State == legacyStateBusy {
-			data.State = StateRunning
 		}
 		switch data.State {
 		case StateStarting, StateReady, StateRunning, StateWaitingApproval, StateStopping, StateStopped, StateArchived:

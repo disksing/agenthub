@@ -74,10 +74,6 @@ var completionSounds = map[string]struct{}{
 	"smile":                 {},
 }
 
-var legacyCompletionSounds = map[string]struct{}{
-	"chime": {}, "bell": {}, "ding": {}, "marimba": {}, "pop": {},
-}
-
 // AgentNameMaxLength bounds the length of an agent name (counted in runes
 // after trimming).
 const AgentNameMaxLength = 80
@@ -328,8 +324,6 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.Companion.CompletionSound == "" {
 		c.Companion = defaultCompanion()
-	} else if _, legacy := legacyCompletionSounds[c.Companion.CompletionSound]; legacy {
-		c.Companion.CompletionSound = DefaultCompletionSound
 	}
 	if c.Companion.BeepChord == "" {
 		c.Companion.BeepChord = DefaultBeepChord

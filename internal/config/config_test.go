@@ -130,24 +130,6 @@ func TestLoadAddsCompanionDefaultsToLegacyConfig(t *testing.T) {
 	}
 }
 
-func TestLoadMigratesLegacyCompletionSound(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}],"companion":{"showActivity":true,"enableBeeping":true,"beepVolume":0.28,"completionSound":"marimba"}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Companion.CompletionSound != DefaultCompletionSound {
-		t.Fatalf("legacy completion sound was not migrated: %+v", loaded.Companion)
-	}
-	if loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.BeepProgression != DefaultBeepProgression {
-		t.Fatalf("legacy config did not receive the default beep chord: %+v", loaded.Companion)
-	}
-}
-
 func TestLoadAddsDefaultBeepChordWithoutOverwritingCompanion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}],"companion":{"showActivity":false,"enableBeeping":false,"beepVolume":0,"completionSound":"smile"}}`

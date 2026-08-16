@@ -18,8 +18,6 @@ const (
 	StateArchived        = "archived"
 )
 
-const legacyStateBusy = "busy"
-
 const (
 	StopReasonRequested      = "requested"
 	StopReasonCompleted      = "completed"
