@@ -1,6 +1,6 @@
-# Forge Integration Gate
+# PUA Integration Gate
 
-AgentHub includes a black-box contract gate for clients such as Forge. The
+AgentHub includes a black-box contract gate for clients such as PUA. The
 gate starts a race-enabled `agenthub serve` binary and a deterministic fake
 ACP provider as separate operating-system processes. It uses a new
 `AGENTHUB_HOME`, working directory, loopback port, daemon process group, and
@@ -49,10 +49,10 @@ the provider process group. Temporary roots are removed by the Go test
 harness. Tests may run repeatedly or in parallel without sharing ports,
 processes, or session directories.
 
-## Forge responsibilities
+## PUA responsibilities
 
 AgentHub provides durable sessions, process lifecycle, replay cursors,
-capability negotiation, and structured errors. Forge still owns:
+capability negotiation, and structured errors. PUA still owns:
 
 - Workspace, Project, Task, and Agent Profile configuration;
 - resource-scoped file-ownership instructions and GUI run projections;
@@ -65,12 +65,12 @@ capability negotiation, and structured errors. Forge still owns:
   idempotency, and reconciling ambiguous message delivery through events;
 - deciding when a stopped session should be resumed or archived.
 
-Forge no longer exposes resource Session Locks, AutoRun/Self-Driving, a
+PUA no longer exposes resource Session Locks, AutoRun/Self-Driving, a
 reserved Scheduler Profile, or public commands for manually creating,
 binding, heartbeating, or ending its local Session projections. Those local
-projections are created and reconciled internally by `forge serve`.
+projections are created and reconciled internally by `pua serve`.
 
 Source metadata is self-asserted correlation data, not authentication or
 tenant isolation. Launch environment values are durable and visible through
-the Session API, so Forge must not place secrets there unless persistence is
+the Session API, so PUA must not place secrets there unless persistence is
 intended.

@@ -7,7 +7,7 @@ The Go daemon, filesystem Session Store, HTTP/SSE API, and CLI are the primary p
 - Do not add tokens, accounts, or API authentication. Non-loopback listening is allowed only through the explicit `serve --addr` flag, must print the startup security warning, and must keep the Host/Origin guards intact.
 - Do not add SQLite or separate Turn/Approval persistence files.
 - Keep Provider-specific fields behind adapters rather than exposing them as public Session fields.
-- Run `go test -race ./...` for backend changes. Run `go test -race -count=1 -tags=integration ./integration` when changing process lifecycle, durable replay, SSE recovery, or the Forge-facing contract.
+- Run `go test -race ./...` for backend changes. Run `go test -race -count=1 -tags=integration ./integration` when changing process lifecycle, durable replay, SSE recovery, or the PUA-facing contract.
 
 Run the local server yourself and open the preview in the browser available to this environment. Do not give the user server-start instructions when you can run it.
 

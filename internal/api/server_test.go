@@ -214,25 +214,25 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 		}
 		return result.Session
 	}
-	sourceValue := map[string]any{"app": "forge", "instanceId": "mac-1", "externalId": "task-1"}
-	forgeOne := create("forge one", sourceValue)
-	forgeDuplicate := create("forge duplicate", sourceValue)
-	forgeTwo := create("forge two", map[string]any{"app": "forge", "instanceId": "mac-2", "externalId": "task-2"})
+	sourceValue := map[string]any{"app": "pua", "instanceId": "mac-1", "externalId": "task-1"}
+	puaOne := create("pua one", sourceValue)
+	puaDuplicate := create("pua duplicate", sourceValue)
+	puaTwo := create("pua two", map[string]any{"app": "pua", "instanceId": "mac-2", "externalId": "task-2"})
 	other := create("other", map[string]any{"app": "other", "instanceId": "mac-1", "externalId": "task-1"})
 	legacy := create("legacy", nil)
 
-	if forgeOne.Source == nil || forgeOne.Source.App != "forge" {
-		t.Fatalf("create response source = %+v", forgeOne.Source)
+	if puaOne.Source == nil || puaOne.Source.App != "pua" {
+		t.Fatalf("create response source = %+v", puaOne.Source)
 	}
-	fetched := getSession(t, server, forgeOne.ID)
-	if fetched.Source == nil || !reflect.DeepEqual(*fetched.Source, session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+	fetched := getSession(t, server, puaOne.ID)
+	if fetched.Source == nil || !reflect.DeepEqual(*fetched.Source, session.Source{App: "pua", InstanceID: "mac-1", ExternalID: "task-1"}) {
 		t.Fatalf("GET response source = %+v", fetched.Source)
 	}
 	stateData, err := json.Marshal(session.StateEventData{State: session.StateStopped})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Append(forgeTwo.ID, "session.state", "", stateData); err != nil {
+	if _, err := store.Append(puaTwo.ID, "session.state", "", stateData); err != nil {
 		t.Fatal(err)
 	}
 	stoppedDuplicate, err := json.Marshal(session.StateEventData{
@@ -241,10 +241,10 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Append(forgeDuplicate.ID, "session.state", "", stoppedDuplicate); err != nil {
+	if _, err := store.Append(puaDuplicate.ID, "session.state", "", stoppedDuplicate); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
+	if _, err := store.Archive(puaDuplicate.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -277,16 +277,16 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 			}
 		}
 	}
-	assertList("sourceApp=forge", forgeOne.ID, forgeTwo.ID)
-	assertList("sourceInstanceId=mac-1", forgeOne.ID, other.ID)
-	assertList("sourceExternalId=task-2", forgeTwo.ID)
-	assertList("sourceApp=forge&sourceInstanceId=mac-1&sourceExternalId=task-1", forgeOne.ID)
-	assertList("includeArchived=true&sourceApp=forge&sourceInstanceId=mac-1&sourceExternalId=task-1", forgeOne.ID, forgeDuplicate.ID)
-	assertList("archived=true&sourceApp=forge&sourceInstanceId=mac-1", forgeDuplicate.ID)
-	assertList("sourceApp=forge&sourceExternalId=task-2&state=stopped", forgeTwo.ID)
+	assertList("sourceApp=pua", puaOne.ID, puaTwo.ID)
+	assertList("sourceInstanceId=mac-1", puaOne.ID, other.ID)
+	assertList("sourceExternalId=task-2", puaTwo.ID)
+	assertList("sourceApp=pua&sourceInstanceId=mac-1&sourceExternalId=task-1", puaOne.ID)
+	assertList("includeArchived=true&sourceApp=pua&sourceInstanceId=mac-1&sourceExternalId=task-1", puaOne.ID, puaDuplicate.ID)
+	assertList("archived=true&sourceApp=pua&sourceInstanceId=mac-1", puaDuplicate.ID)
+	assertList("sourceApp=pua&sourceExternalId=task-2&state=stopped", puaTwo.ID)
 
 	for _, id := range []string{legacy.ID, other.ID} {
-		if list := listIDs(t, server, "?sourceApp=forge"); list[id] != "" {
+		if list := listIDs(t, server, "?sourceApp=pua"); list[id] != "" {
 			t.Fatalf("unmatched session %s appeared in source filter", id)
 		}
 	}
@@ -296,11 +296,11 @@ func TestSessionSourceAPIAndCombinedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := reopened.Get(forgeOne.ID)
+	value, err := reopened.Get(puaOne.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Source == nil || !reflect.DeepEqual(*value.Source, session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+	if value.Source == nil || !reflect.DeepEqual(*value.Source, session.Source{App: "pua", InstanceID: "mac-1", ExternalID: "task-1"}) {
 		t.Fatalf("source after daemon-style reopen = %+v", value.Source)
 	}
 }
@@ -2010,7 +2010,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 	created, err := store.Create(session.CreateInput{
 		Cwd:               t.TempDir(),
 		AgentName:         "Agent",
-		Source:            &session.Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-30"},
+		Source:            &session.Source{App: "pua", InstanceID: "mac-1", ExternalID: "task-30"},
 		LaunchEnvironment: map[string]string{"SESSION_CONTEXT_ID": "context-30"},
 	})
 	if err != nil {
@@ -2069,7 +2069,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		t.Fatalf("capabilities = %v, want %v", status.Capabilities, wantCapabilities)
 	}
 
-	response, err = http.Get(server.URL + "/v1/sessions?sourceApp=forge&sourceInstanceId=mac-1&sourceExternalId=task-30")
+	response, err = http.Get(server.URL + "/v1/sessions?sourceApp=pua&sourceInstanceId=mac-1&sourceExternalId=task-30")
 	if err != nil {
 		t.Fatal(err)
 	}

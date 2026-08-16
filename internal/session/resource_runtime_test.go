@@ -16,7 +16,7 @@ func TestCreateOrGetIsDurablyIdempotent(t *testing.T) {
 		Title: "Resource generation", Cwd: t.TempDir(), AgentName: "Codex",
 		IdempotencyKey: "generation-01H", Provider: "codex",
 		InputCapabilities: InputCapabilities{Steer: true},
-		Source: &Source{App: "forge", InstanceID: "workspace-1", ExternalID: "project1.task2/1", Metadata: map[string]string{
+		Source: &Source{App: "pua", InstanceID: "workspace-1", ExternalID: "project1.task2/1", Metadata: map[string]string{
 			"resourceId": "project1.task2", "generationId": "generation-01H",
 		}},
 	}

@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 	_, file, _, _ := runtime.Caller(0)
 	repositoryRoot = filepath.Dir(filepath.Dir(file))
 	var err error
-	buildRoot, err = os.MkdirTemp("", "agenthub-forge-gate-*")
+	buildRoot, err = os.MkdirTemp("", "agenthub-pua-gate-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -191,7 +191,7 @@ func writeConfig(t *testing.T, root string) {
 	payload := map[string]any{
 		"version": 1,
 		"agentProviders": []map[string]any{{
-			"id": "fake", "name": "Forge gate fake ACP", "type": "kimi",
+			"id": "fake", "name": "PUA gate fake ACP", "type": "kimi",
 			"enabled": true, "command": providerBinary,
 		}},
 		"agents": []map[string]any{{"name": "Fake ACP", "providerId": "fake"}},
@@ -312,7 +312,7 @@ func (d *daemon) request(method, path string, body any) (int, map[string]any) {
 
 func (d *daemon) create(environment map[string]string, source *sourceValue) (int, map[string]any) {
 	body := map[string]any{
-		"title": "Forge contract gate", "cwd": d.cwd, "agentName": "Fake ACP",
+		"title": "PUA contract gate", "cwd": d.cwd, "agentName": "Fake ACP",
 		"launchEnvironment": environment,
 	}
 	if source != nil {
@@ -426,7 +426,7 @@ func requireOrdered(t *testing.T, types []string, wanted ...string) {
 	}
 }
 
-func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
+func TestPUAGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 	gate := newGate(t)
 	status, body := gate.request(http.MethodGet, "/v1/status", nil)
 	if status != http.StatusOK || body["apiVersion"] != "1" {
@@ -450,10 +450,10 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		err     error
 	}
 	results := make(chan created, 2)
-	for index, id := range []string{"forge-one", "forge-two"} {
+	for index, id := range []string{"pua-one", "pua-two"} {
 		index, id := index, id
 		go func() {
-			source := &sourceValue{App: "forge", InstanceID: "gate", ExternalID: "task-" + strconv.Itoa(index)}
+			source := &sourceValue{App: "pua", InstanceID: "gate", ExternalID: "task-" + strconv.Itoa(index)}
 			code, response := gate.create(map[string]string{
 				"SESSION_CONTEXT_ID": id,
 				"FAKE_INSTANCE":      strconv.Itoa(index),
@@ -495,7 +495,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		gate.waitSession(value.ID, func(current sessionValue) bool { return current.CurrentTurnID == "" })
 		text := assistantText(gate.events(value.ID))
 		for _, want := range []string{
-			"context=forge-" + []string{"one", "two"}[index],
+			"context=pua-" + []string{"one", "two"}[index],
 			"instance=" + strconv.Itoa(index),
 			"resumed=false",
 			"native=native-" + strconv.Itoa(index),
@@ -506,7 +506,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		}
 	}
 
-	query := url.Values{"sourceApp": {"forge"}, "sourceInstanceId": {"gate"}, "sourceExternalId": {"task-1"}}
+	query := url.Values{"sourceApp": {"pua"}, "sourceInstanceId": {"gate"}, "sourceExternalId": {"task-1"}}
 	code, filtered := gate.request(http.MethodGet, "/v1/sessions?"+query.Encode(), nil)
 	if code != http.StatusOK || len(filtered["sessions"].([]any)) != 1 {
 		t.Fatalf("combined source filter: status=%d body=%v", code, filtered)
@@ -527,7 +527,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		restarted.waitSession(value.ID, func(current sessionValue) bool { return current.CurrentTurnID == "" })
 		current := restarted.session(value.ID)
 		if current.Source == nil || current.Source.ExternalID != "task-"+strconv.Itoa(index) ||
-			current.LaunchEnvironment["SESSION_CONTEXT_ID"] != "forge-"+[]string{"one", "two"}[index] {
+			current.LaunchEnvironment["SESSION_CONTEXT_ID"] != "pua-"+[]string{"one", "two"}[index] {
 			t.Errorf("session metadata did not survive restart: %+v", current)
 		}
 		text := assistantText(restarted.events(value.ID))
@@ -550,7 +550,7 @@ func TestForgeGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 	}
 }
 
-func TestForgeGateStrictStoppedFaultMatrix(t *testing.T) {
+func TestPUAGateStrictStoppedFaultMatrix(t *testing.T) {
 	t.Run("startup failure", func(t *testing.T) {
 		gate := newGate(t)
 		code, body := gate.create(map[string]string{"FAKE_MODE": "startup-crash"}, nil)
@@ -670,7 +670,7 @@ func TestForgeGateStrictStoppedFaultMatrix(t *testing.T) {
 	})
 }
 
-func TestForgeGateDaemonKillRecoveryClosesOpenWork(t *testing.T) {
+func TestPUAGateDaemonKillRecoveryClosesOpenWork(t *testing.T) {
 	gate := newGate(t)
 	code, body := gate.create(map[string]string{"FAKE_MODE": "approval-hold"}, nil)
 	if code != http.StatusCreated {
@@ -716,7 +716,7 @@ func TestForgeGateDaemonKillRecoveryClosesOpenWork(t *testing.T) {
 	}
 }
 
-func TestForgeGateLosslessReplayBacklogDisconnectOverflowAndCatchup(t *testing.T) {
+func TestPUAGateLosslessReplayBacklogDisconnectOverflowAndCatchup(t *testing.T) {
 	t.Run("backlog disconnect REST catch-up and cursor gap", func(t *testing.T) {
 		gate := newGate(t)
 		code, body := gate.create(nil, nil)

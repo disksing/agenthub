@@ -277,7 +277,7 @@ Clients may attach optional caller-defined correlation metadata when creating a 
   "agentName": "Codex",
   "cwd": "/path/to/project",
   "source": {
-    "app": "forge",
+    "app": "pua",
     "instanceId": "mac-mini",
     "externalId": "project7.task26/1",
     "metadata": {"resourceId": "project7.task26", "generationId": "gen-1"}
@@ -419,7 +419,7 @@ npm run test:sites
 ```
 
 The separately invoked real-process
-[Forge integration gate](docs/forge-integration-gate.md) launches an
+[PUA integration gate](docs/pua-integration-gate.md) launches an
 isolated daemon and fake ACP provider subprocesses, injects lifecycle and
 streaming failures, and verifies cleanup, recovery, replay, capabilities,
 and structured errors across the process boundary.

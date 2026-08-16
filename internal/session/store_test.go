@@ -366,25 +366,25 @@ func TestSessionSourcePersistsAndFilters(t *testing.T) {
 		}
 		return value
 	}
-	forgeOne := create("forge one", &Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"})
-	forgeDuplicate := create("forge duplicate", &Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"})
-	forgeTwo := create("forge two", &Source{App: "forge", InstanceID: "mac-2", ExternalID: "task-2"})
+	puaOne := create("pua one", &Source{App: "pua", InstanceID: "mac-1", ExternalID: "task-1"})
+	puaDuplicate := create("pua duplicate", &Source{App: "pua", InstanceID: "mac-1", ExternalID: "task-1"})
+	puaTwo := create("pua two", &Source{App: "pua", InstanceID: "mac-2", ExternalID: "task-2"})
 	other := create("other app", &Source{App: "other", InstanceID: "mac-1", ExternalID: "task-1"})
 	_ = create("legacy", nil)
 
-	if _, err := store.Append(forgeTwo.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
+	if _, err := store.Append(puaTwo.ID, "session.state", "", mustJSON(t, StateEventData{State: StateStopped})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Append(forgeDuplicate.ID, "session.state", "", mustJSON(t, StateEventData{
+	if _, err := store.Append(puaDuplicate.ID, "session.state", "", mustJSON(t, StateEventData{
 		State: StateStopped, Reason: StopReasonRequested,
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Archive(forgeDuplicate.ID); err != nil {
+	if _, err := store.Archive(puaDuplicate.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	app, instance, external := "forge", "mac-1", "task-1"
+	app, instance, external := "pua", "mac-1", "task-1"
 	assertIDs := func(name string, filter ListFilter, want ...string) {
 		t.Helper()
 		values := store.Filter(filter)
@@ -401,30 +401,30 @@ func TestSessionSourcePersistsAndFilters(t *testing.T) {
 			}
 		}
 	}
-	assertIDs("app", ListFilter{SourceApp: &app}, forgeOne.ID, forgeTwo.ID)
-	assertIDs("instance", ListFilter{SourceInstanceID: &instance}, forgeOne.ID, other.ID)
-	assertIDs("external", ListFilter{SourceExternalID: &external}, forgeOne.ID, other.ID)
+	assertIDs("app", ListFilter{SourceApp: &app}, puaOne.ID, puaTwo.ID)
+	assertIDs("instance", ListFilter{SourceInstanceID: &instance}, puaOne.ID, other.ID)
+	assertIDs("external", ListFilter{SourceExternalID: &external}, puaOne.ID, other.ID)
 	assertIDs("combination", ListFilter{
 		SourceApp: &app, SourceInstanceID: &instance, SourceExternalID: &external,
-	}, forgeOne.ID)
+	}, puaOne.ID)
 	assertIDs("combination including archived", ListFilter{
 		IncludeArchived: true, SourceApp: &app, SourceInstanceID: &instance, SourceExternalID: &external,
-	}, forgeOne.ID, forgeDuplicate.ID)
+	}, puaOne.ID, puaDuplicate.ID)
 
 	reopened, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{forgeOne.ID, forgeDuplicate.ID} {
+	for _, id := range []string{puaOne.ID, puaDuplicate.ID} {
 		value, err := reopened.Get(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if value.Source == nil || !reflect.DeepEqual(*value.Source, Source{App: "forge", InstanceID: "mac-1", ExternalID: "task-1"}) {
+		if value.Source == nil || !reflect.DeepEqual(*value.Source, Source{App: "pua", InstanceID: "mac-1", ExternalID: "task-1"}) {
 			t.Fatalf("replayed source for %s = %+v", id, value.Source)
 		}
 	}
-	events, err := reopened.EventsAfter(forgeOne.ID, 0, 10)
+	events, err := reopened.EventsAfter(puaOne.ID, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestSessionSourcePersistsAndFilters(t *testing.T) {
 	if err := json.Unmarshal(events[0].Data, &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Source == nil || created.Source.App != "forge" {
+	if created.Source == nil || created.Source.App != "pua" {
 		t.Fatalf("session.created source = %+v", created.Source)
 	}
 }

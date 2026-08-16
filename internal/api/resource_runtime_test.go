@@ -22,7 +22,7 @@ func TestCreateSessionIdempotencyAndSourceMetadataAPI(t *testing.T) {
 		"title": "generation", "cwd": t.TempDir(), "agentName": "Agent",
 		"idempotencyKey": "generation-stable-1",
 		"source": map[string]any{
-			"app": "forge", "instanceId": "workspace-1", "externalId": "project1.task2/1",
+			"app": "pua", "instanceId": "workspace-1", "externalId": "project1.task2/1",
 			"metadata": map[string]string{"resourceId": "project1.task2", "generationId": "generation-stable-1"},
 		},
 	}

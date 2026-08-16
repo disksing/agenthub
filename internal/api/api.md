@@ -132,7 +132,7 @@ A session object looks like:
   "agentName": "Codex",
   "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
   "source": {
-    "app": "forge",
+    "app": "pua",
     "instanceId": "mac-mini",
     "externalId": "project7.task26"
   },
@@ -529,7 +529,7 @@ default.
 curl -s "$BASE/v1/sessions"
 curl -s "$BASE/v1/sessions?archived=true"
 curl -s "$BASE/v1/sessions?state=running,waiting_approval"
-curl -s "$BASE/v1/sessions?sourceApp=forge&sourceInstanceId=mac-mini&state=ready"
+curl -s "$BASE/v1/sessions?sourceApp=pua&sourceInstanceId=mac-mini&state=ready"
 ```
 
 ### POST /v1/sessions
@@ -545,10 +545,10 @@ turn before the response returns.
   "title": "Fix the flaky test",
   "cwd": "/path/to/project",
   "agentName": "Codex",
-  "idempotencyKey": "forge-workspace-1-project7-task26-generation-1",
+  "idempotencyKey": "pua-workspace-1-project7-task26-generation-1",
   "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
   "source": {
-    "app": "forge",
+    "app": "pua",
     "instanceId": "mac-mini",
     "externalId": "project7.task26/1",
     "metadata": {
@@ -621,7 +621,7 @@ curl -s -X POST "$BASE/v1/sessions" \
     "agentName": "Codex",
     "launchEnvironment": {"SESSION_CONTEXT_ID": "context-123"},
     "source": {
-      "app": "forge",
+      "app": "pua",
       "instanceId": "mac-mini",
       "externalId": "project7.task26"
     },
@@ -1101,7 +1101,7 @@ AgentHub does not interpret an `Idempotency-Key` header. Callers use the JSON
 
 ### Complete session flow
 
-The following sequence negotiates the contract, creates a Forge-owned
+The following sequence negotiates the contract, creates a PUA-owned
 session, catches up through the durable cursor, sends a message, resolves an
 approval if one appears, waits for a canonical terminal event, then stops
 and resumes the session. Shell snippets use `jq` for brevity:
@@ -1119,10 +1119,10 @@ done
 CREATED=$(curl -fsS -X POST "$BASE/v1/sessions" \
   -H "Content-Type: application/json" \
   -d "{
-    \"title\":\"Forge task\",
+    \"title\":\"PUA task\",
     \"cwd\":\"$PWD\",
     \"agentName\":\"Codex\",
-    \"source\":{\"app\":\"forge\",\"instanceId\":\"mac-mini\",\"externalId\":\"project7.task30\"},
+    \"source\":{\"app\":\"pua\",\"instanceId\":\"mac-mini\",\"externalId\":\"project7.task30\"},
     \"launchEnvironment\":{\"SESSION_CONTEXT_ID\":\"context-123\"}
   }")
 SESSION=$(jq -r .session.id <<<"$CREATED")
