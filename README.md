@@ -53,6 +53,16 @@ The hostname must resolve to a local network interface or loopback. Unresolvable
 
 When listening on a non-loopback address, the local CLI still discovers the daemon automatically through the loopback endpoint in `server.json`. Browser write requests still require the `Origin` to match the request `Host`, and the `Host` must be a local interface address or the local hostname (to prevent DNS rebinding); arbitrary origins are not accepted.
 
+### Reverse Proxy
+
+When the daemon sits behind a reverse proxy that terminates TLS (Caddy, nginx, ...), browser write requests carry the public https `Origin`, which does not match the daemon's own origin and would be rejected with `403 origin_rejected`. Trust the public origin explicitly (repeatable):
+
+```bash
+agenthub serve --addr 0.0.0.0:4646 --allow-origin https://agenthub.example.com:8443
+```
+
+Browsers forbid forging the `Origin` header, so the allowlist only admits the exact origins you configure; all other cross-origin writes stay rejected. Keep the proxy rewriting `Host` to the upstream address (the default for Caddy's `reverse_proxy`) so the DNS-rebinding Host guard keeps passing.
+
 During development you can run the two parts separately:
 
 ```bash

@@ -91,6 +91,90 @@ func TestMutationRejectsCrossOriginOnLANListener(t *testing.T) {
 	}
 }
 
+func TestMutationAcceptsAllowedProxyOrigin(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{
+		AllowedOrigins: []string{"https://agenthub.example:18443"},
+	}).Handler())
+	defer server.Close()
+
+	body, _ := json.Marshal(map[string]any{"title": "proxied", "cwd": t.TempDir(), "agentName": "Agent"})
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", bytes.NewReader(body))
+	// A reverse proxy terminates TLS and typically rewrites Host to the
+	// upstream address, so the daemon sees its own host while the browser
+	// Origin carries the public https origin.
+	request.Host = "127.0.0.1:4646"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://agenthub.example:18443")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+}
+
+func TestMutationRejectsUnlistedProxyOrigin(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", time.Now(), Dependencies{
+		AllowedOrigins: []string{"https://agenthub.example:18443"},
+	}).Handler())
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/sessions", strings.NewReader(`{}`))
+	request.Host = "127.0.0.1:4646"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://other.example:18443")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected status: %s", response.Status)
+	}
+}
+
+func TestNormalizeOrigin(t *testing.T) {
+	valid := map[string]string{
+		"https://agenthub.example:18443":   "https://agenthub.example:18443",
+		"http://192.168.2.150:4646":        "http://192.168.2.150:4646",
+		"HTTPS://AgentHub.Example:18443":   "https://agenthub.example:18443",
+		" https://agenthub.example:18443 ": "https://agenthub.example:18443",
+	}
+	for input, want := range valid {
+		got, err := NormalizeOrigin(input)
+		if err != nil {
+			t.Fatalf("NormalizeOrigin(%q): %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("NormalizeOrigin(%q) = %q, want %q", input, got, want)
+		}
+	}
+	invalid := []string{
+		"",
+		"agenthub.example:18443",
+		"ftp://agenthub.example",
+		"https://agenthub.example/path",
+		"https://agenthub.example?x=1",
+		"https://user@agenthub.example",
+		"https://agenthub.example#frag",
+	}
+	for _, input := range invalid {
+		if got, err := NormalizeOrigin(input); err == nil {
+			t.Fatalf("NormalizeOrigin(%q) = %q, want error", input, got)
+		}
+	}
+}
+
 func TestSessionAPIUsesEventLog(t *testing.T) {
 	store, err := session.Open(t.TempDir())
 	if err != nil {

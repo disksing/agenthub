@@ -67,6 +67,11 @@ type Server struct {
 	listen    *ListenAddress
 	models    ModelLister
 	quotas    *companion.Service
+	// allowedOrigins holds normalized origins (see NormalizeOrigin) that are
+	// trusted in addition to the daemon's own origin, for reverse proxy
+	// deployments where the public browser origin differs from the daemon
+	// address.
+	allowedOrigins map[string]bool
 	// closing, when set, is closed once the HTTP server begins shutting
 	// down so long-lived handlers (SSE streams) can finish promptly.
 	closing <-chan struct{}
@@ -90,6 +95,11 @@ type Dependencies struct {
 	// LogsDir is the directory service logs are written to, reported by
 	// the status endpoint.
 	LogsDir string
+	// AllowedOrigins lists browser origins (scheme://host[:port]) trusted
+	// for mutating requests in addition to the daemon's own origin, e.g.
+	// the public https origin of a reverse proxy in front of the daemon.
+	// Entries are normalized with NormalizeOrigin when the Server is built.
+	AllowedOrigins []string
 	// Closing, when set, is closed when the HTTP server starts shutting
 	// down; streaming handlers must return so Shutdown can complete.
 	Closing <-chan struct{}
@@ -106,6 +116,14 @@ func New(store *session.Store, version string, startedAt time.Time, dependencies
 		server.models = dependencies[0].Models
 		server.quotas = companion.NewService(dependencies[0].QuotaHTTPClient)
 		server.closing = dependencies[0].Closing
+		if origins := dependencies[0].AllowedOrigins; len(origins) > 0 {
+			server.allowedOrigins = make(map[string]bool, len(origins))
+			for _, origin := range origins {
+				if normalized, err := NormalizeOrigin(origin); err == nil {
+					server.allowedOrigins[normalized] = true
+				}
+			}
+		}
 	}
 	return server
 }
@@ -171,7 +189,7 @@ func (s *Server) mux() *http.ServeMux {
 }
 
 func (s *Server) Handler() http.Handler {
-	var handler http.Handler = requestMiddleware(s.mux())
+	var handler http.Handler = requestMiddleware(s.allowsOrigin, s.mux())
 	if s.listen != nil {
 		handler = hostGuardMiddleware(s.listen, handler)
 	}
@@ -1536,7 +1554,7 @@ func (s *Server) writeStoreError(w http.ResponseWriter, err error) {
 	writeAPIError(w, http.StatusInternalServerError, "session_store_failed", err.Error(), nil)
 }
 
-func requestMiddleware(next http.Handler) http.Handler {
+func requestMiddleware(allowOrigin func(origin, host string) bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if mutatingMethod(r.Method) {
@@ -1545,7 +1563,7 @@ func requestMiddleware(next http.Handler) http.Handler {
 				writeAPIError(w, http.StatusUnsupportedMediaType, "json_required", "Content-Type must be application/json", nil)
 				return
 			}
-			if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && !sameOrigin(origin, r.Host) {
+			if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && !allowOrigin(origin, r.Host) {
 				writeAPIError(w, http.StatusForbidden, "origin_rejected", "browser origin does not match the daemon origin", nil)
 				return
 			}
@@ -1767,12 +1785,45 @@ func mutatingMethod(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
 }
 
+// allowsOrigin reports whether a mutating request carrying the given Origin
+// header may proceed: either the origin is the daemon's own origin (a
+// same-origin browser page) or it was explicitly trusted through
+// Dependencies.AllowedOrigins (a reverse proxy whose public origin differs
+// from the daemon address). Browsers forbid forging the Origin header, so
+// an explicit allowlist keeps cross-site writes rejected.
+func (s *Server) allowsOrigin(origin, host string) bool {
+	if sameOrigin(origin, host) {
+		return true
+	}
+	normalized, err := NormalizeOrigin(origin)
+	return err == nil && s.allowedOrigins[normalized]
+}
+
 func sameOrigin(origin, host string) bool {
 	parsed, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "http") && strings.EqualFold(parsed.Host, host)
+}
+
+// NormalizeOrigin canonicalizes an origin for comparison: the scheme must
+// be http or https, a host is required, and user info, path, query, and
+// fragment are rejected. The result is "scheme://host[:port]" with scheme
+// and host lower-cased.
+func NormalizeOrigin(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid origin %q: %w", trimmed, err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return "", fmt.Errorf("invalid origin %q: scheme must be http or https", trimmed)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid origin %q: expected scheme://host[:port] with no user info, path, query, or fragment", trimmed)
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
 }
 
 func spaHandler(root string) http.Handler {

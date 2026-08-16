@@ -42,10 +42,12 @@ Security model — read this before exposing the daemon anywhere:
   blocks DNS-rebinding attacks from browsers on the local network.
 - **Cross-origin write protection.** Mutating requests (`POST`, `PUT`,
   `PATCH`, `DELETE`) that carry an `Origin` header are rejected with
-  `403 origin_rejected` unless the origin matches the daemon's own origin.
-  The daemon sends no permissive CORS headers, so browsers on other origins
-  cannot issue writes. Non-browser clients (curl, the CLI) simply omit the
-  `Origin` header.
+  `403 origin_rejected` unless the origin matches the daemon's own origin
+  or was explicitly trusted with `agenthub serve --allow-origin` (for
+  reverse proxy deployments whose public origin differs from the daemon
+  address). The daemon sends no permissive CORS headers, so browsers on
+  other origins cannot issue writes. Non-browser clients (curl, the CLI)
+  simply omit the `Origin` header.
 - **JSON writes only.** Mutating requests must send
   `Content-Type: application/json` (`415 json_required` otherwise). Bodies
   are limited to 1 MiB and unknown JSON fields are rejected.
