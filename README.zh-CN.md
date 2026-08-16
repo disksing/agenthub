@@ -54,6 +54,16 @@ agenthub serve --addr myhost.local:4646    # 解析到本机接口的主机名/�
 
 非 loopback 监听时，本机 CLI 仍通过 `server.json` 中的 loopback endpoint 自动发现 daemon。浏览器写请求仍要求 `Origin` 与请求 `Host` 一致，且 `Host` 必须是本机接口地址或本机主机名（防止 DNS rebinding），不接受任意 Origin。
 
+### 反向代理
+
+当 daemon 位于终止 TLS 的反向代理（Caddy、nginx 等）之后时，浏览器写请求携带的是公网 https `Origin`，与 daemon 自身 origin 不一致，会被拒绝并返回 `403 origin_rejected`。需要显式信任该公网 origin（参数可重复）：
+
+```bash
+agenthub serve --addr 0.0.0.0:4646 --allow-origin https://agenthub.example.com:8443
+```
+
+浏览器禁止伪造 `Origin` 头，因此 allowlist 只放行你显式配置的 origin，其他跨域写请求仍会被拒绝。建议保持代理将 `Host` 改写为 upstream 地址（Caddy `reverse_proxy` 的默认行为），这样防 DNS rebinding 的 Host 检查会继续通过。
+
 开发时可分别运行：
 
 ```bash

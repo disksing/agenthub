@@ -76,16 +76,36 @@ func run(args []string) error {
 	}
 }
 
+// stringListFlag collects the values of a repeatable string flag.
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ", ") }
+
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	address := flags.String("addr", api.DefaultListenAddress, "listen address as host:port; default "+api.DefaultListenAddress+" (loopback only); IPv6 needs brackets, e.g. [::1]:4646")
 	webDir := flags.String("web-dir", "", "built Web UI directory (defaults to ./frontend/dist/client when present)")
+	var allowedOrigins stringListFlag
+	flags.Var(&allowedOrigins, "allow-origin", "trusted browser origin (scheme://host[:port]) for mutating requests through a reverse proxy; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return flagParseError(err, "serve")
 	}
 	if flags.NArg() != 0 {
-		return usageError("agenthub serve [--addr host:port] [--web-dir path]", "serve")
+		return usageError("agenthub serve [--addr host:port] [--web-dir path] [--allow-origin origin]...", "serve")
+	}
+	normalizedOrigins := make([]string, 0, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		normalized, err := api.NormalizeOrigin(origin)
+		if err != nil {
+			return err
+		}
+		normalizedOrigins = append(normalizedOrigins, normalized)
 	}
 	listenAddress, err := api.ResolveListenAddress(*address)
 	if err != nil {
@@ -143,6 +163,7 @@ func runServe(args []string) error {
 		Handler: api.New(store, version, startedAt, api.Dependencies{
 			Runtime: manager, ConfigPath: resolved.ConfigFile, WebDir: *webDir, Listen: listenAddress,
 			Models: provider.NewModelCache(), LogsDir: resolved.LogsDir, Closing: closing,
+			AllowedOrigins: normalizedOrigins,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       75 * time.Second,

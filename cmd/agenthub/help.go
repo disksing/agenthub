@@ -152,7 +152,7 @@ var helpTopics = map[string]string{
 	"serve": `Start the AgentHub daemon.
 
 Usage:
-  agenthub serve [--addr host:port] [--web-dir path]
+  agenthub serve [--addr host:port] [--web-dir path] [--allow-origin origin]...
 
 The daemon serves the HTTP JSON/SSE API and, when built, the Web UI. It is
 the single writer of sessions and the config file; every other agenthub
@@ -167,6 +167,11 @@ Options:
                      startup; there is no silent fallback.
   --web-dir path     Built Web UI directory (default ./frontend/dist/client
                      when present).
+  --allow-origin o   Trusted browser origin (scheme://host[:port]) for
+                     mutating requests, in addition to the daemon's own
+                     origin. Repeatable. Use when a reverse proxy exposes
+                     the daemon under a public origin, e.g.
+                     --allow-origin https://agenthub.example.com:8443.
 
 AgentHub has no authentication: a non-loopback address prints a startup
 warning and must only be used on trusted networks.
