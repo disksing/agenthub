@@ -7,6 +7,12 @@ import { ProvidersPanel } from "./ProvidersPanel";
 import { AgentsPanel } from "./AgentsPanel";
 import { GeneralPanel } from "./GeneralPanel.jsx";
 import { ActivityPanel } from "./ActivityPanel.jsx";
+import {
+  companionPreferencesEqual,
+  loadCompanionPreferences,
+  saveCompanionPreferences,
+  validateCompanionPreferences,
+} from "../companion/preferences.js";
 
 const SECTIONS = [
   { id: "general", label: "General" },
@@ -26,7 +32,10 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
   const [loadError, setLoadError] = useState("");
   const [draft, setDraft] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
+  const [activityDraft, setActivityDraft] = useState(null);
+  const [activitySnapshot, setActivitySnapshot] = useState(null);
   const [probes, setProbes] = useState([]);
+  const [quota, setQuota] = useState({ providers: [] });
   const [section, setSection] = useState("general");
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -40,8 +49,16 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
   const dialogRef = useRef(null);
   const savedTimer = useRef(null);
 
-  const dirty = draft && snapshot ? isDirty(draft, snapshot) : false;
-  const errors = useMemo(() => (draft ? validateDraft(draft) : []), [draft]);
+  const serverDirty = draft && snapshot ? isDirty(draft, snapshot) : false;
+  const activityDirty = activityDraft && activitySnapshot
+    ? !companionPreferencesEqual(activityDraft, activitySnapshot)
+    : false;
+  const dirty = serverDirty || activityDirty;
+  const errors = useMemo(() => (
+    draft && activityDraft
+      ? [...validateDraft(draft), ...validateCompanionPreferences(activityDraft)]
+      : []
+  ), [draft, activityDraft]);
 
   const load = useCallback(async () => {
     setPhase("loading");
@@ -50,11 +67,19 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     setSaveError("");
     setShowErrors(false);
     try {
-      const [configBody, agentsBody] = await Promise.all([api("/v1/config"), api("/v1/agents")]);
+      const [configBody, agentsBody, quotaBody] = await Promise.all([
+        api("/v1/config"),
+        api("/v1/agents"),
+        api("/v1/quota").catch((error) => ({ quota: { providers: [], error: error.message } })),
+      ]);
       const next = createDraft(configBody.config || {});
+      const nextActivity = loadCompanionPreferences();
       setDraft(next);
       setSnapshot(clone(next));
+      setActivityDraft(nextActivity);
+      setActivitySnapshot(clone(nextActivity));
       setProbes(agentsBody.probes || []);
+      setQuota(quotaBody.quota || { providers: [] });
       setPhase("ready");
     } catch (value) {
       setLoadError(value.message || "Failed to load the configuration");
@@ -93,6 +118,16 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     setSaveError("");
     setSavedOk(false);
     setDraft((current) => {
+      const next = clone(current);
+      recipe(next);
+      return next;
+    });
+  }, []);
+
+  const mutateActivity = useCallback((recipe) => {
+    setSaveError("");
+    setSavedOk(false);
+    setActivityDraft((current) => {
       const next = clone(current);
       recipe(next);
       return next;
@@ -140,7 +175,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     setSaving(true);
     setSaveError("");
     try {
-      if (!force) {
+      if (serverDirty && !force) {
         // Concurrency guard: make sure the server-side config has not been
         // changed by another client before saving.
         const current = await api("/v1/config");
@@ -149,11 +184,18 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
           return;
         }
       }
-      const payload = buildPayload(draft);
-      await api("/v1/config", { method: "PUT", body: JSON.stringify({ config: payload }) });
-      const agentsBody = await api("/v1/agents");
-      setProbes(agentsBody.probes || []);
-      setSnapshot(clone(payload));
+      if (activityDirty) {
+        const savedActivity = saveCompanionPreferences(activityDraft);
+        setActivityDraft(savedActivity);
+        setActivitySnapshot(clone(savedActivity));
+      }
+      if (serverDirty) {
+        const payload = buildPayload(draft);
+        await api("/v1/config", { method: "PUT", body: JSON.stringify({ config: payload }) });
+        const agentsBody = await api("/v1/agents");
+        setProbes(agentsBody.probes || []);
+        setSnapshot(clone(payload));
+      }
       setShowErrors(false);
       setConflict(false);
       setSavedOk(true);
@@ -226,7 +268,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
                   <GeneralPanel draft={draft} errors={errors} showErrors={showErrors} mutate={mutate} />
                 ) : null}
                 {section === "activity" ? (
-                  <ActivityPanel draft={draft} mutate={mutate} />
+                  <ActivityPanel value={activityDraft} mutate={mutateActivity} quota={quota} />
                 ) : null}
                 {section === "providers" ? (
                   <ProvidersPanel

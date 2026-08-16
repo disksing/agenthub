@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,9 +113,9 @@ func TestLoadCreatesIndependentDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadAddsCompanionDefaultsToLegacyConfig(t *testing.T) {
+func TestLoadAcceptsAndDropsLegacyCompanionConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}]}`
+	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}],"companion":{"showActivity":false,"enableBeeping":false,"beepVolume":0,"beepChord":"a-minor","beepProgression":"canon-in-c","completionSound":"smile"}}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -125,26 +126,18 @@ func TestLoadAddsCompanionDefaultsToLegacyConfig(t *testing.T) {
 	if loaded.OnWatch.ServerURL != "http://127.0.0.1:9211" || loaded.OnWatch.RefreshIntervalSeconds != 60 {
 		t.Fatalf("OnWatch defaults = %+v", loaded.OnWatch)
 	}
-	if !loaded.Companion.ShowActivity || !loaded.Companion.EnableBeeping || loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.BeepProgression != DefaultBeepProgression || loaded.Companion.CompletionSound != DefaultCompletionSound {
-		t.Fatalf("companion defaults = %+v", loaded.Companion)
+	if loaded.LegacyCompanion != nil {
+		t.Fatalf("legacy companion config survived normalization: %s", loaded.LegacyCompanion)
 	}
-}
-
-func TestLoadAddsDefaultBeepChordWithoutOverwritingCompanion(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"version":1,"agentProviders":[{"id":"codex","name":"Codex","type":"codex","enabled":true}],"agents":[{"name":"Codex","providerId":"codex"}],"companion":{"showActivity":false,"enableBeeping":false,"beepVolume":0,"completionSound":"smile"}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+	if err := Save(path, loaded); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(path)
+	written, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Companion.ShowActivity || loaded.Companion.EnableBeeping || loaded.Companion.BeepVolume != 0 {
-		t.Fatalf("legacy companion controls were overwritten: %+v", loaded.Companion)
-	}
-	if loaded.Companion.BeepChord != DefaultBeepChord || loaded.Companion.BeepProgression != DefaultBeepProgression || loaded.Companion.CompletionSound != "smile" {
-		t.Fatalf("legacy companion defaults = %+v", loaded.Companion)
+	if bytes.Contains(written, []byte(`"companion"`)) {
+		t.Fatalf("legacy companion config was written back: %s", written)
 	}
 }
 
@@ -158,9 +151,8 @@ func TestConfigRedactsAndPreservesOnWatchPassword(t *testing.T) {
 	if public.OnWatch.Password != "" || previous.OnWatch.Password != "secret" {
 		t.Fatalf("redaction mutated or exposed password: public=%+v stored=%+v", public.OnWatch, previous.OnWatch)
 	}
-	public.Companion.BeepVolume = 0.5
 	next := public.PreserveSecrets(previous)
-	if next.OnWatch.Password != "secret" || next.Companion.BeepVolume != 0.5 {
+	if next.OnWatch.Password != "secret" {
 		t.Fatalf("preserved config = %+v", next)
 	}
 	if err := next.Validate(); err != nil {
@@ -168,7 +160,7 @@ func TestConfigRedactsAndPreservesOnWatchPassword(t *testing.T) {
 	}
 }
 
-func TestCompanionConfigValidation(t *testing.T) {
+func TestOnWatchConfigValidation(t *testing.T) {
 	cfg := Defaults()
 	cfg.OnWatch.ServerURL = "file:///tmp/quota"
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "serverUrl") {
@@ -180,26 +172,6 @@ func TestCompanionConfigValidation(t *testing.T) {
 	cfg.OnWatch.Password = ""
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "password") {
 		t.Fatalf("missing password validation = %v", err)
-	}
-	cfg = Defaults()
-	cfg.Companion.BeepVolume = 1.1
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepVolume") {
-		t.Fatalf("volume validation = %v", err)
-	}
-	cfg = Defaults()
-	cfg.Companion.BeepChord = "noise"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepChord") {
-		t.Fatalf("beep chord validation = %v", err)
-	}
-	cfg = Defaults()
-	cfg.Companion.BeepProgression = "noise"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "beepProgression") {
-		t.Fatalf("beep progression validation = %v", err)
-	}
-	cfg = Defaults()
-	cfg.Companion.BeepProgression = "canon-in-c"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("canon progression validation = %v", err)
 	}
 }
 

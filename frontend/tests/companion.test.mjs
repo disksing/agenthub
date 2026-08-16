@@ -26,10 +26,12 @@ import {
 	companionPlacement,
 	companionPositionFromPixels,
 	companionPositionPixels,
+	filterQuotaSnapshot,
 	formatDuration,
 	normalizeCompanionSize,
 	pruneActivityPulses,
 	quotaCycleItems,
+	quotaVisibilityKey,
 	resizeCompanionSize,
 	SessionToneAllocator,
 	TERMINAL_TONE_HOLD_MS,
@@ -47,6 +49,28 @@ test("quota cycle keeps provider order and skips empty providers", () => {
 	assert.deepEqual(items.map((item) => item.provider), ["Codex", "Grok"]);
 	assert.equal(items[1].value, 22);
 	assert.equal(items[1].label, "credits");
+});
+
+test("quota visibility filters individual rows before card rendering and rotation", () => {
+	const snapshot = { connected: true, providers: [
+		{ provider: "kimi", label: "Kimi", quotas: [
+			{ kind: "5h", label: "5-hour", remainingPercent: 80 },
+			{ kind: "7d", label: "Weekly", remainingPercent: 60 },
+		] },
+		{ provider: "codex", label: "Codex", quotas: [{ kind: "5h", label: "5-hour", remainingPercent: 40 }] },
+	] };
+	const hiddenKey = quotaVisibilityKey(snapshot.providers[0], snapshot.providers[0].quotas[0]);
+	assert.equal(hiddenKey, '["kimi","5h"]');
+	const filtered = filterQuotaSnapshot(snapshot, [hiddenKey]);
+	assert.deepEqual(filtered.providers.map((provider) => (
+		[provider.provider, provider.quotas.map((quota) => quota.kind)]
+	)), [["kimi", ["7d"]], ["codex", ["5h"]]]);
+	assert.deepEqual(quotaCycleItems(filtered).map((item) => [item.provider, item.label]), [["Kimi", "7d"], ["Codex", "5h"]]);
+	assert.equal(snapshot.providers[0].quotas.length, 2, "filtering must not mutate the source snapshot");
+	assert.deepEqual(filterQuotaSnapshot(snapshot, [
+		hiddenKey,
+		quotaVisibilityKey(snapshot.providers[0], snapshot.providers[0].quotas[1]),
+	]).providers.map((provider) => provider.provider), ["codex"]);
 });
 
 test("session tone slots fill in octave order and reuse released slots", () => {
@@ -325,6 +349,8 @@ test("companion uses one global EventSource and never scans provider sessions", 
 	assert.ok(styles.includes(".companion-thread-row.terminal-error"));
 	assert.ok(source.includes('className="companion-resize-handle"'));
 	assert.ok(source.includes("agenthub.companion.size.v1"));
+	assert.ok(source.includes("saveCompanionPreferences"));
+	assert.ok(!source.includes('api("/v1/config", { method: "PUT"'));
 	assert.ok(styles.includes("@container companion-card (min-width: 560px)"));
 	assert.ok(styles.includes("@container companion-card (max-height: 390px)"));
 	assert.ok(!model.includes("Math.random"));

@@ -1,13 +1,3 @@
-import { COMPLETION_SOUNDS, normalizeCompletionSound } from "../companion/audio.js";
-import {
-  BEEP_CHORDS,
-  BEEP_PROGRESSIONS,
-  DEFAULT_BEEP_CHORD,
-  DEFAULT_BEEP_PROGRESSION,
-  normalizeBeepChord,
-  normalizeBeepProgression,
-} from "../companion/chords.js";
-
 // Pure data helpers with no React dependency, shared by the settings UI and tests.
 // The config model mirrors internal/config/config.go.
 
@@ -65,15 +55,6 @@ export const DEFAULT_ONWATCH = {
   username: "admin",
   password: "",
   refreshIntervalSeconds: 60,
-};
-
-export const DEFAULT_COMPANION = {
-  showActivity: true,
-  enableBeeping: true,
-  beepVolume: 0.28,
-  beepChord: DEFAULT_BEEP_CHORD,
-  beepProgression: DEFAULT_BEEP_PROGRESSION,
-  completionSound: "completed-voice",
 };
 
 // The model option is not a free-text field: the settings UI loads the
@@ -147,21 +128,11 @@ export function normalizeConfig(config = {}) {
     password: String(rawOnWatch.password ?? ""),
     refreshIntervalSeconds: Number(rawOnWatch.refreshIntervalSeconds) || DEFAULT_ONWATCH.refreshIntervalSeconds,
   };
-  const rawCompanion = config.companion || {};
-  const companion = {
-    showActivity: rawCompanion.showActivity == null ? DEFAULT_COMPANION.showActivity : Boolean(rawCompanion.showActivity),
-    enableBeeping: rawCompanion.enableBeeping == null ? DEFAULT_COMPANION.enableBeeping : Boolean(rawCompanion.enableBeeping),
-    beepVolume: rawCompanion.beepVolume == null ? DEFAULT_COMPANION.beepVolume : Number(rawCompanion.beepVolume),
-    beepChord: normalizeBeepChord(rawCompanion.beepChord),
-    beepProgression: normalizeBeepProgression(rawCompanion.beepProgression),
-    completionSound: normalizeCompletionSound(String(rawCompanion.completionSound ?? DEFAULT_COMPANION.completionSound)),
-  };
   return {
     version: Number(config.version) || 1,
     agentProviders: providers,
     agents,
     onWatch,
-    companion,
   };
 }
 
@@ -228,19 +199,6 @@ export function validateDraft(draft) {
   if (![30, 60, 300].includes(draft.onWatch.refreshIntervalSeconds)) {
     push("general", 0, "refreshIntervalSeconds", "Select a supported refresh interval");
   }
-  if (!Number.isFinite(draft.companion.beepVolume) || draft.companion.beepVolume < 0 || draft.companion.beepVolume > 1) {
-    push("activity", 0, "beepVolume", "Volume must be between 0 and 1");
-  }
-  if (!BEEP_CHORDS.some((option) => option.value === draft.companion.beepChord)) {
-    push("activity", 0, "beepChord", "Select a supported beep chord");
-  }
-  if (!BEEP_PROGRESSIONS.some((option) => option.value === draft.companion.beepProgression)) {
-    push("activity", 0, "beepProgression", "Select a supported chord progression");
-  }
-  if (!COMPLETION_SOUNDS.some((option) => option.value === draft.companion.completionSound)) {
-    push("activity", 0, "completionSound", "Select a supported completion sound");
-  }
-
   const providers = draft.agentProviders || [];
   const providerIds = new Set();
   providers.forEach((provider, index) => {

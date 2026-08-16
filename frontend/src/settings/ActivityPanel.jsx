@@ -2,12 +2,22 @@ import { useRef } from "react";
 import { Play } from "@phosphor-icons/react";
 import { COMPLETION_SOUNDS, TonePlayer } from "../companion/audio.js";
 import { BEEP_CHORDS, BEEP_PROGRESSIONS } from "../companion/chords.js";
+import { quotaVisibilityKey } from "../companion/model.js";
 import { Toggle } from "./fields.jsx";
 
-export function ActivityPanel({ draft, mutate }) {
+export function ActivityPanel({ value, mutate, quota }) {
   const player = useRef(new TonePlayer());
-  const value = draft.companion;
-  const update = (field, nextValue) => mutate((next) => { next.companion[field] = nextValue; });
+  const update = (field, nextValue) => mutate((next) => { next[field] = nextValue; });
+  const quotaEntries = (quota?.providers || []).flatMap((provider) => (
+    (provider.quotas || []).map((item) => ({ provider, item, key: quotaVisibilityKey(provider, item) }))
+  ));
+  const hiddenQuotas = new Set(value.hiddenQuotaKeys || []);
+  const toggleQuota = (key, visible) => mutate((next) => {
+    const hidden = new Set(next.hiddenQuotaKeys || []);
+    if (visible) hidden.delete(key);
+    else hidden.add(key);
+    next.hiddenQuotaKeys = [...hidden].sort();
+  });
   const previewCompletion = async () => {
     if (await player.current.resume()) player.current.completion(value.completionSound, value.beepVolume);
   };
@@ -54,6 +64,24 @@ export function ActivityPanel({ draft, mutate }) {
             <button type="button" className="settings-button" onClick={previewCompletion}><Play size={13} weight="fill" />Preview</button>
           </div>
         </label>
+      </section>
+      <section className="settings-card">
+        <div className="settings-card-heading"><div><h3>Quota visibility</h3><p>Choose which current quota rows appear in Beeper and its collapsed rotation.</p></div></div>
+        {quotaEntries.map(({ provider, item, key }) => {
+          const providerLabel = provider.label || provider.provider;
+          const quotaLabel = item.label || item.kind;
+          const visible = !hiddenQuotas.has(key);
+          return (
+            <div className="settings-toggle-row" key={key}>
+              <div>
+                <strong>{providerLabel} / {quotaLabel}</strong>
+                <small>{Math.round(Number(item.remainingPercent) || 0)}% remaining</small>
+              </div>
+              <Toggle checked={visible} label={`Show ${providerLabel} / ${quotaLabel}`} onChange={(checked) => toggleQuota(key, checked)} />
+            </div>
+          );
+        })}
+        {!quotaEntries.length ? <div className="settings-empty">{quota?.error || "No current quota data."}</div> : null}
       </section>
     </div>
   );

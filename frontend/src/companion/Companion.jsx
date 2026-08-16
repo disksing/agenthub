@@ -2,32 +2,26 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowSquareOut, Gear, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { api } from "../api.js";
 import { BEEPER_PATH } from "../routes.js";
-import { activityPlaybackPlan, COMPLETION_SOUNDS, normalizeCompletionSound, TonePlayer } from "./audio.js";
+import { activityPlaybackPlan, COMPLETION_SOUNDS, TonePlayer } from "./audio.js";
 import {
   DEFAULT_BEEP_CHORD,
-  DEFAULT_BEEP_PROGRESSION,
   nextProgressionFrame,
-  normalizeBeepChord,
-  normalizeBeepProgression,
   noteForToneSlot,
   progressionChordValues,
 } from "./chords.js";
+import {
+  loadCompanionPreferences,
+  saveCompanionPreferences,
+  subscribeCompanionPreferences,
+} from "./preferences.js";
 import { ActivityWaveform } from "./ActivityWaveform.jsx";
 import {
   activityPulsesForFrame, activitySessionHoldsTone, activitySessionNeedsTone,
   activitySessions, activitySessionTerminal, companionPlacement, companionPositionFromPixels,
   companionPositionPixels, formatDuration, normalizeCompanionPosition, normalizeCompanionSize,
-  pruneActivityPulses, quotaCycleItems, resizeCompanionSize, SessionToneAllocator,
+  filterQuotaSnapshot, pruneActivityPulses, quotaCycleItems, resizeCompanionSize, SessionToneAllocator,
 } from "./model.js";
 
-const DEFAULT_COMPANION = {
-  showActivity: true,
-  enableBeeping: true,
-  beepVolume: 0.28,
-  beepChord: DEFAULT_BEEP_CHORD,
-  beepProgression: DEFAULT_BEEP_PROGRESSION,
-  completionSound: "completed-voice",
-};
 const POSITION_STORAGE_KEY = "agenthub.companion.position.v1";
 const SIZE_STORAGE_KEY = "agenthub.companion.size.v1";
 const DEFAULT_PILL_SIZE = { width: 236, height: 42 };
@@ -99,7 +93,8 @@ function QuotaRow({ quota }) {
 
 export function Companion({ revision = 0, onOpenSettings, standalone = false }) {
   const [open, setOpen] = useState(false);
-  const [settings, setSettings] = useState({ companion: DEFAULT_COMPANION, onWatch: {} });
+  const [settings, setSettings] = useState({ onWatch: {} });
+  const [companion, setCompanion] = useState(loadCompanionPreferences);
   const [quota, setQuota] = useState({ configured: false, connected: false, providers: [] });
   const [quotaLoading, setQuotaLoading] = useState(true);
   const [quotaIndex, setQuotaIndex] = useState(0);
@@ -109,7 +104,6 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   const [activeSessions, setActiveSessions] = useState(() => new Map());
   const [activityPulses, setActivityPulses] = useState([]);
   const [audioBlocked, setAudioBlocked] = useState(false);
-  const [savingControl, setSavingControl] = useState(false);
   const [controlError, setControlError] = useState("");
   const [position, setPosition] = useState(storedPosition);
   const [viewport, setViewport] = useState(viewportSize);
@@ -127,14 +121,11 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   const resizeState = useRef(null);
   const suppressClick = useRef(false);
 
-  const companion = {
-    ...DEFAULT_COMPANION,
-    ...(settings.companion || {}),
-    beepChord: normalizeBeepChord(settings.companion?.beepChord),
-    beepProgression: normalizeBeepProgression(settings.companion?.beepProgression),
-    completionSound: normalizeCompletionSound(settings.companion?.completionSound),
-  };
-  const cycleItems = useMemo(() => quotaCycleItems(quota), [quota]);
+  const visibleQuota = useMemo(
+    () => filterQuotaSnapshot(quota, companion.hiddenQuotaKeys),
+    [quota, companion.hiddenQuotaKeys],
+  );
+  const cycleItems = useMemo(() => quotaCycleItems(visibleQuota), [visibleQuota]);
   const cycleItem = cycleItems[quotaIndex % Math.max(1, cycleItems.length)];
   const activeList = useMemo(() => [...activeSessions.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [activeSessions]);
   const anchor = companionPositionPixels(position, viewport, pillSize);
@@ -161,11 +152,14 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
 
   useEffect(() => {
     let disposed = false;
+    setCompanion(loadCompanionPreferences());
     api("/v1/config").then((body) => {
-      if (!disposed) setSettings(body.config || { companion: DEFAULT_COMPANION, onWatch: {} });
+      if (!disposed) setSettings(body.config || { onWatch: {} });
     }).catch(() => {});
     return () => { disposed = true; };
   }, [revision]);
+
+  useEffect(() => subscribeCompanionPreferences(setCompanion), []);
 
   useEffect(() => {
     let disposed = false;
@@ -429,29 +423,19 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
     ));
   };
 
-  const saveCompanion = async (patch) => {
-    if (savingControl) return;
-    setSavingControl(true);
+  const saveCompanion = (patch) => {
     setControlError("");
     try {
-      const current = await api("/v1/config");
-      const next = {
-        ...current.config,
-        companion: { ...DEFAULT_COMPANION, ...current.config?.companion, ...patch },
-      };
-      const body = await api("/v1/config", { method: "PUT", body: JSON.stringify({ config: next }) });
-      setSettings(body.config || next);
+      setCompanion(saveCompanionPreferences({ ...companion, ...patch }));
     } catch (value) {
-      setControlError(value.message || "Failed to save companion settings");
-    } finally {
-      setSavingControl(false);
+      setControlError(value.message || "Failed to save browser preferences");
     }
   };
 
   const toggleBeeping = async () => {
     const enabled = !companion.enableBeeping;
     if (enabled) await tonePlayer.current.resume();
-    await saveCompanion({ enableBeeping: enabled });
+    saveCompanion({ enableBeeping: enabled });
   };
 
   const preview = async () => {
@@ -537,13 +521,13 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
               <div className="companion-controls-grid">
                 <div className="companion-control-row">
                   <div><strong>Enable beeping</strong><small>{audioBlocked ? "Click to enable audio" : "Beep while agents are active"}</small></div>
-                  <button type="button" role="switch" aria-checked={companion.enableBeeping} className={`companion-switch ${companion.enableBeeping ? "on" : ""}`} disabled={savingControl} onClick={toggleBeeping}><span /></button>
+                  <button type="button" role="switch" aria-checked={companion.enableBeeping} className={`companion-switch ${companion.enableBeeping ? "on" : ""}`} onClick={toggleBeeping}><span /></button>
                 </div>
                 {controlError ? <p className="companion-control-error" role="alert">{controlError}</p> : null}
                 <div className="companion-control-row">
                   <div><strong>On finish</strong></div>
                   <div className="companion-sound-controls">
-                    <select value={companion.completionSound} disabled={savingControl} aria-label="Completion sound" onChange={(event) => saveCompanion({ completionSound: event.target.value })}>
+                    <select value={companion.completionSound} aria-label="Completion sound" onChange={(event) => saveCompanion({ completionSound: event.target.value })}>
                       {COMPLETION_SOUNDS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                     </select>
                     <button type="button" aria-label="Preview completion sound" onClick={preview}><Play size={13} weight="fill" /></button>
@@ -554,7 +538,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
               <div className="companion-quota-heading"><span className="companion-cap">Provider Quota</span><small>All data from OnWatch</small></div>
               {quota.error ? <div className="companion-quota-error" role="status">{quota.error}<button type="button" onClick={loadQuota}>Retry</button></div> : null}
               <div className="companion-provider-grid">
-                {(quota.providers || []).map((provider) => (
+                {(visibleQuota.providers || []).map((provider) => (
                   <section className="companion-provider" key={provider.provider}>
                     <header><strong>{provider.label}</strong>{provider.planLabel ? <span>{provider.planLabel}</span> : null}<em className={statusTone(provider.status)}>{provider.stale ? "Stale" : provider.status}</em></header>
                     {provider.error ? <p className="companion-provider-error">{provider.error}</p> : null}
@@ -562,7 +546,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
                   </section>
                 ))}
               </div>
-              {!quotaLoading && !(quota.providers || []).length ? <p className="companion-empty-quota">No quota data</p> : null}
+              {!quotaLoading && !(visibleQuota.providers || []).length ? <p className="companion-empty-quota">No visible quota data</p> : null}
               <p className="companion-source-note">The marker moves left as each reset approaches.</p>
             </div>
           </div>
