@@ -87,6 +87,61 @@ test("thinking is no longer active once later events exist", () => {
   assert.equal(items[0].active, false);
 });
 
+test("a steered message does not split the open thinking block", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "Let me " }, { turnId: "turn_1" }),
+    event("message.input", { text: "steer", steer: true }, { turnId: "turn_1" }),
+    event("message.reasoning.delta", { text: "think." }, { turnId: "turn_1" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message"]);
+  assert.equal(items[0].text, "Let me think.");
+  // The agent is still reasoning, so the block stays active even though the
+  // steered message is the last item.
+  assert.equal(items[0].active, true);
+  assert.equal(items[1].steer, true);
+});
+
+test("a legacy steered message does not split the open thinking block", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "a" }, { turnId: "turn_1" }),
+    event("message.user.steer", { text: "steer" }, { turnId: "turn_1" }),
+    event("message.reasoning.delta", { text: "b" }, { turnId: "turn_1" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message"]);
+  assert.equal(items[0].text, "ab");
+  assert.equal(items[0].active, true);
+});
+
+test("thinking closes when assistant text or tool activity follows", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "a" }, { turnId: "turn_1" }),
+    event("message.input", { text: "steer", steer: true }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "answer" }, { turnId: "turn_1" }),
+    event("message.reasoning.delta", { text: "b" }, { turnId: "turn_1" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message", "message", "thinking"]);
+  assert.equal(items[0].text, "a");
+  assert.equal(items[0].active, false);
+  assert.equal(items[3].text, "b");
+  assert.equal(items[3].active, true);
+});
+
+test("a message that starts a new turn closes the previous thinking block", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "a" }, { turnId: "turn_1" }),
+    event("turn.completed", {}, { turnId: "turn_1" }),
+    event("message.input", { text: "next question" }, { turnId: "turn_2" }),
+    event("message.reasoning.delta", { text: "b" }, { turnId: "turn_2" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["thinking", "lifecycle", "message", "thinking"]);
+  assert.equal(items[0].active, false);
+  assert.equal(items[3].active, true);
+});
+
 test("thinking block keeps the first delta time as startTime for the duration label", () => {
   reset();
   const items = buildTimeline([

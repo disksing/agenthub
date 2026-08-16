@@ -312,6 +312,11 @@
     const items = [];
     const approvalsById = new Map();
     const openToolCalls = new Map();
+    // The thinking block the agent is currently reasoning into. Unlike tool
+    // calls it is not tied to the tail of `items`: a steered message may be
+    // appended while the agent keeps thinking, and later reasoning deltas must
+    // still merge into the same block instead of starting a second one.
+    let openThinking = null;
 
     const settleOpenToolCalls = (status, time) => {
       for (const { call, group } of openToolCalls.values()) {
@@ -337,6 +342,13 @@
             text: typeof data.text === "string" ? data.text : "",
           };
           if (event.turnId) item.turnId = event.turnId;
+          // A message that starts a new turn ends any thinking still open from
+          // the previous one. A message steered into the current turn (same
+          // turnId) does not: the agent keeps reasoning and later deltas merge
+          // back into the open block.
+          if (openThinking && event.turnId && openThinking.turnId !== event.turnId) {
+            openThinking = null;
+          }
           const sender = normalizeMessageSender(data.sender);
           if (sender) item.sender = sender;
           items.push(item);
@@ -344,6 +356,9 @@
         }
         case "message.user":
         case "message.user.steer":
+          if (openThinking && event.turnId && openThinking.turnId !== event.turnId) {
+            openThinking = null;
+          }
           items.push({
             kind: "message", role: "user", key: event.id, time,
             steer: type === "message.user.steer",
@@ -351,6 +366,8 @@
           });
           break;
         case "message.assistant.delta": {
+          // Assistant text ends the reasoning phase.
+          openThinking = null;
           const last = items.at(-1);
           const text = typeof data.text === "string" ? data.text : "";
           // Deltas that arrive after a turn terminal (for example a late
@@ -367,24 +384,28 @@
           break;
         }
         case "message.reasoning.delta": {
-          const last = items.at(-1);
           const text = typeof data.text === "string" ? data.text : "";
-          if (last?.kind === "thinking" && last.turnId === (event.turnId || "")) {
-            last.text += text;
-            last.time = time;
+          const turnId = event.turnId || "";
+          if (openThinking && openThinking.turnId !== turnId) openThinking = null;
+          if (openThinking) {
+            openThinking.text += text;
+            openThinking.time = time;
           } else if (text) {
             // startTime pins the first delta so the collapsed header can show
             // how long the agent reasoned; time keeps tracking the last delta.
-            items.push({
-              kind: "thinking", key: event.id, turnId: event.turnId || "", text,
+            openThinking = {
+              kind: "thinking", key: event.id, turnId, text,
               time, startTime: event.startTime || time, active: false,
-            });
+            };
+            items.push(openThinking);
           }
           break;
         }
         case "tool.event": {
           const update = parseToolEvent(event);
           if (!update) break;
+          // Tool activity ends the reasoning phase that preceded it.
+          openThinking = null;
           const last = items.at(-1);
           const group = last?.kind === "tools" ? last : null;
           const existing = update.callId ? openToolCalls.get(update.callId) : null;
@@ -477,13 +498,16 @@
           }
           break;
         case "turn.started":
+          openThinking = null;
           items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Turn started" });
           break;
         case "turn.completed":
+          openThinking = null;
           settleOpenToolCalls("completed", time);
           items.push({ kind: "lifecycle", tone: "ok", key: event.id, time, text: "Turn completed" });
           break;
         case "turn.failed":
+          openThinking = null;
           settleOpenToolCalls("failed", time);
           items.push({
             kind: "lifecycle", tone: "danger", key: event.id, time,
@@ -491,6 +515,7 @@
           });
           break;
         case "turn.cancelled":
+          openThinking = null;
           settleOpenToolCalls("failed", time);
           items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Turn interrupted" });
           break;
@@ -509,8 +534,10 @@
         case "session.state": {
           let label = NOTABLE_STATES[data.state];
           if (data.state === "failed") {
+            openThinking = null;
             settleOpenToolCalls("failed", time);
           } else if (data.state === "stopped") {
+            openThinking = null;
             settleOpenToolCalls(data.reason === "completed" ? "completed" : "failed", time);
           }
           if (data.state === "stopped" && STOP_REASON_TIMELINE[data.reason]) {
@@ -521,6 +548,7 @@
           break;
         }
         case "session.archived":
+          openThinking = null;
           items.push({ kind: "lifecycle", tone: "muted", key: event.id, time, text: "Session archived" });
           break;
         default: {
@@ -536,9 +564,10 @@
       }
     }
 
-    // A trailing thinking block means the agent is still reasoning.
-    const last = items.at(-1);
-    if (last?.kind === "thinking") last.active = true;
+    // A thinking block still open at the end of the projected window means the
+    // agent is still reasoning. It does not have to be the last item: a steered
+    // message may have been appended after it.
+    if (openThinking) openThinking.active = true;
 
     return items;
   }
