@@ -37,6 +37,36 @@ test("buildModelChoices falls back to the id as label and dedupes", () => {
   assert.deepEqual(choices[1], { value: "kimi-code/k3", label: "kimi-code/k3", unavailable: false });
 });
 
+test("buildModelChoices prefixes the upstream provider from the model id", () => {
+  const choices = buildModelChoices(
+    [
+      { id: "xai/grok-9", label: "Grok 9" },
+      { id: "openrouter/grok-9", label: "Grok 9", default: true },
+      { id: "gpt-5.5", label: "GPT-5.5" },
+    ],
+    "",
+  );
+  // Same model name from two upstreams stays distinguishable.
+  assert.deepEqual(choices[1], { value: "xai/grok-9", label: "xai / Grok 9", unavailable: false });
+  assert.deepEqual(choices[2], { value: "openrouter/grok-9", label: "openrouter / Grok 9 (default)", unavailable: false });
+  // IDs without an upstream prefix (codex) keep the bare label.
+  assert.deepEqual(choices[3], { value: "gpt-5.5", label: "GPT-5.5", unavailable: false });
+});
+
+test("buildModelChoices does not repeat a provider the label already mentions", () => {
+  const choices = buildModelChoices(
+    [
+      // Fallback labels are the full id, which already carries the provider.
+      { id: "kimi-code/k3-256k" },
+      // Some upstream display names embed the provider themselves.
+      { id: "kimi-for-coding/k3", label: "Kimi For Coding/Kimi K3" },
+    ],
+    "",
+  );
+  assert.deepEqual(choices[1], { value: "kimi-code/k3-256k", label: "kimi-code/k3-256k", unavailable: false });
+  assert.deepEqual(choices[2], { value: "kimi-for-coding/k3", label: "Kimi For Coding/Kimi K3", unavailable: false });
+});
+
 test("buildModelChoices preserves a saved value missing from the list", () => {
   const choices = buildModelChoices([{ id: "m1", label: "M1" }], "legacy-model");
   assert.equal(choices.length, 3);

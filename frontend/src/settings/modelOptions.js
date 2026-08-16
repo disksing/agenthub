@@ -6,11 +6,32 @@
 
 export const PROVIDER_DEFAULT_VALUE = "";
 
+// withUpstreamPrefix prefixes a model label with the upstream provider parsed
+// from a "provider/model" ID (pi, kimi and opencode enumerate several
+// upstreams under one AgentHub provider, and their bare model names often
+// collide). IDs without a slash (e.g. codex) and labels that already mention
+// the provider are left untouched; the mention check ignores case and
+// punctuation so "Kimi For Coding/..." counts as mentioning "kimi-for-coding".
+function withUpstreamPrefix(id, label) {
+  const slash = id.indexOf("/");
+  if (slash <= 0) return label;
+  const compact = (text) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const provider = id.slice(0, slash);
+  if (compact(label).includes(compact(provider))) return label;
+  return `${provider} / ${label}`;
+}
+
 // buildModelChoices turns the daemon's model list into select options. The
 // first option is always the empty "Provider default" choice (the agent
 // simply omits the model option). A saved value that is missing from the
 // list is appended as an explicit unavailable option so editing an old agent
 // never silently rewrites or clears its model.
+//
+// Model IDs from multi-upstream providers (pi, kimi, opencode) look like
+// "upstream/model", while the daemon's label is only the model name, so
+// identical names from different upstreams would be indistinguishable. The
+// upstream prefix is shown as "upstream / label" unless the label already
+// mentions it.
 export function buildModelChoices(models, current) {
   const choices = [{ value: PROVIDER_DEFAULT_VALUE, label: "Provider default", unavailable: false }];
   const seen = new Set();
@@ -19,9 +40,10 @@ export function buildModelChoices(models, current) {
     if (!value || seen.has(value)) continue;
     seen.add(value);
     const label = String(model?.label ?? "").trim() || value;
+    const display = withUpstreamPrefix(value, label);
     choices.push({
       value,
-      label: model?.default ? `${label} (default)` : label,
+      label: model?.default ? `${display} (default)` : display,
       unavailable: false,
     });
   }
