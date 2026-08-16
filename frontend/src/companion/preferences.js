@@ -18,6 +18,7 @@ export const DEFAULT_COMPANION_PREFERENCES = Object.freeze({
   beepChord: DEFAULT_BEEP_CHORD,
   beepProgression: DEFAULT_BEEP_PROGRESSION,
   completionSound: "completed-voice",
+  hiddenQuotaKeys: [],
 });
 
 export function normalizeCompanionPreferences(value = {}) {
@@ -25,6 +26,11 @@ export function normalizeCompanionPreferences(value = {}) {
   const beepChord = normalizeBeepChord(value?.beepChord);
   const beepProgression = normalizeBeepProgression(value?.beepProgression);
   const completionSound = normalizeCompletionSound(String(value?.completionSound ?? DEFAULT_COMPANION_PREFERENCES.completionSound));
+  const hiddenQuotaKeys = [...new Set(
+    (Array.isArray(value?.hiddenQuotaKeys) ? value.hiddenQuotaKeys : [])
+      .map((key) => String(key || ""))
+      .filter(Boolean),
+  )].sort();
   return {
     showActivity: value?.showActivity == null ? DEFAULT_COMPANION_PREFERENCES.showActivity : Boolean(value.showActivity),
     enableBeeping: value?.enableBeeping == null ? DEFAULT_COMPANION_PREFERENCES.enableBeeping : Boolean(value.enableBeeping),
@@ -32,6 +38,7 @@ export function normalizeCompanionPreferences(value = {}) {
     beepChord: BEEP_CHORDS.some((option) => option.value === beepChord) ? beepChord : DEFAULT_COMPANION_PREFERENCES.beepChord,
     beepProgression: BEEP_PROGRESSIONS.some((option) => option.value === beepProgression) ? beepProgression : DEFAULT_COMPANION_PREFERENCES.beepProgression,
     completionSound: COMPLETION_SOUNDS.some((option) => option.value === completionSound) ? completionSound : DEFAULT_COMPANION_PREFERENCES.completionSound,
+    hiddenQuotaKeys,
   };
 }
 

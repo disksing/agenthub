@@ -19,7 +19,7 @@ import {
   activityPulsesForFrame, activitySessionHoldsTone, activitySessionNeedsTone,
   activitySessions, activitySessionTerminal, companionPlacement, companionPositionFromPixels,
   companionPositionPixels, formatDuration, normalizeCompanionPosition, normalizeCompanionSize,
-  pruneActivityPulses, quotaCycleItems, resizeCompanionSize, SessionToneAllocator,
+  filterQuotaSnapshot, pruneActivityPulses, quotaCycleItems, resizeCompanionSize, SessionToneAllocator,
 } from "./model.js";
 
 const POSITION_STORAGE_KEY = "agenthub.companion.position.v1";
@@ -121,7 +121,11 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
   const resizeState = useRef(null);
   const suppressClick = useRef(false);
 
-  const cycleItems = useMemo(() => quotaCycleItems(quota), [quota]);
+  const visibleQuota = useMemo(
+    () => filterQuotaSnapshot(quota, companion.hiddenQuotaKeys),
+    [quota, companion.hiddenQuotaKeys],
+  );
+  const cycleItems = useMemo(() => quotaCycleItems(visibleQuota), [visibleQuota]);
   const cycleItem = cycleItems[quotaIndex % Math.max(1, cycleItems.length)];
   const activeList = useMemo(() => [...activeSessions.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [activeSessions]);
   const anchor = companionPositionPixels(position, viewport, pillSize);
@@ -534,7 +538,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
               <div className="companion-quota-heading"><span className="companion-cap">Provider Quota</span><small>All data from OnWatch</small></div>
               {quota.error ? <div className="companion-quota-error" role="status">{quota.error}<button type="button" onClick={loadQuota}>Retry</button></div> : null}
               <div className="companion-provider-grid">
-                {(quota.providers || []).map((provider) => (
+                {(visibleQuota.providers || []).map((provider) => (
                   <section className="companion-provider" key={provider.provider}>
                     <header><strong>{provider.label}</strong>{provider.planLabel ? <span>{provider.planLabel}</span> : null}<em className={statusTone(provider.status)}>{provider.stale ? "Stale" : provider.status}</em></header>
                     {provider.error ? <p className="companion-provider-error">{provider.error}</p> : null}
@@ -542,7 +546,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
                   </section>
                 ))}
               </div>
-              {!quotaLoading && !(quota.providers || []).length ? <p className="companion-empty-quota">No quota data</p> : null}
+              {!quotaLoading && !(visibleQuota.providers || []).length ? <p className="companion-empty-quota">No visible quota data</p> : null}
               <p className="companion-source-note">The marker moves left as each reset approaches.</p>
             </div>
           </div>

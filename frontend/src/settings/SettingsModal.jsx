@@ -35,6 +35,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
   const [activityDraft, setActivityDraft] = useState(null);
   const [activitySnapshot, setActivitySnapshot] = useState(null);
   const [probes, setProbes] = useState([]);
+  const [quota, setQuota] = useState({ providers: [] });
   const [section, setSection] = useState("general");
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,7 +67,11 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
     setSaveError("");
     setShowErrors(false);
     try {
-      const [configBody, agentsBody] = await Promise.all([api("/v1/config"), api("/v1/agents")]);
+      const [configBody, agentsBody, quotaBody] = await Promise.all([
+        api("/v1/config"),
+        api("/v1/agents"),
+        api("/v1/quota").catch((error) => ({ quota: { providers: [], error: error.message } })),
+      ]);
       const next = createDraft(configBody.config || {});
       const nextActivity = loadCompanionPreferences();
       setDraft(next);
@@ -74,6 +79,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
       setActivityDraft(nextActivity);
       setActivitySnapshot(clone(nextActivity));
       setProbes(agentsBody.probes || []);
+      setQuota(quotaBody.quota || { providers: [] });
       setPhase("ready");
     } catch (value) {
       setLoadError(value.message || "Failed to load the configuration");
@@ -262,7 +268,7 @@ export function SettingsModal({ onClose, onSaved, triggerRef }) {
                   <GeneralPanel draft={draft} errors={errors} showErrors={showErrors} mutate={mutate} />
                 ) : null}
                 {section === "activity" ? (
-                  <ActivityPanel value={activityDraft} mutate={mutateActivity} />
+                  <ActivityPanel value={activityDraft} mutate={mutateActivity} quota={quota} />
                 ) : null}
                 {section === "providers" ? (
                   <ProvidersPanel

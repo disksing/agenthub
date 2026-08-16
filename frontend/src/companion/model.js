@@ -53,6 +53,25 @@ export function quotaCycleItems(snapshot) {
   });
 }
 
+export function quotaVisibilityKey(provider, quota) {
+  return JSON.stringify([
+    String(provider?.provider || provider?.label || ""),
+    String(quota?.kind || quota?.label || ""),
+  ]);
+}
+
+export function filterQuotaSnapshot(snapshot, hiddenQuotaKeys = []) {
+  const hidden = new Set((hiddenQuotaKeys || []).map(String));
+  return {
+    ...(snapshot || {}),
+    providers: (snapshot?.providers || []).flatMap((provider) => {
+      const quotas = (provider.quotas || []).filter((quota) => !hidden.has(quotaVisibilityKey(provider, quota)));
+      if (!quotas.length && !provider.error) return [];
+      return [{ ...provider, quotas }];
+    }),
+  };
+}
+
 export function formatDuration(seconds) {
   const value = Math.max(0, Math.floor(Number(seconds) || 0));
   const days = Math.floor(value / 86400);

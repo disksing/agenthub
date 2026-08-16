@@ -27,6 +27,7 @@ test("companion preferences normalize invalid browser-local values", () => {
     beepChord: "a-minor",
     beepProgression: "canon-in-c",
     completionSound: "smile",
+    hiddenQuotaKeys: ["b", "a", "b", ""],
   }), {
     showActivity: false,
     enableBeeping: false,
@@ -34,6 +35,7 @@ test("companion preferences normalize invalid browser-local values", () => {
     beepChord: "a-minor",
     beepProgression: "canon-in-c",
     completionSound: "smile",
+    hiddenQuotaKeys: ["a", "b"],
   });
   assert.deepEqual(normalizeCompanionPreferences({
     beepVolume: 2,
@@ -50,9 +52,11 @@ test("companion preferences persist only through the supplied browser storage", 
     enableBeeping: false,
     beepVolume: 0.51,
     beepChord: "d-minor",
+    hiddenQuotaKeys: ['["kimi","5h"]'],
   }, storage);
   assert.deepEqual(loadCompanionPreferences(storage), saved);
   assert.equal(JSON.parse(storage.getItem(COMPANION_PREFERENCES_STORAGE_KEY)).beepChord, "d-minor");
+  assert.deepEqual(loadCompanionPreferences(storage).hiddenQuotaKeys, ['["kimi","5h"]']);
   assert.equal(companionPreferencesEqual(saved, loadCompanionPreferences(storage)), true);
 
   const broken = memoryStorage({ [COMPANION_PREFERENCES_STORAGE_KEY]: "{" });
