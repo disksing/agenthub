@@ -93,13 +93,30 @@ test("session tone slots fill in octave order and reuse released slots", () => {
 	assert.equal(allocator.assign("ses_after_retain"), 0);
 });
 
-test("canon progression uses immediate random one-to-six-frame chord changes", () => {
+test("chord progressions cycle with immediate random one-to-six-frame chord changes", () => {
 	assert.equal(BEEP_MIN_FRAMES_PER_CHORD, 1);
 	assert.equal(BEEP_MAX_FRAMES_PER_CHORD, 6);
-	assert.deepEqual(BEEP_PROGRESSIONS.map((option) => option.value), ["single", "canon-in-c"]);
+	assert.deepEqual(BEEP_PROGRESSIONS.map((option) => option.value), [
+		"canon-in-c",
+		"pop-axis",
+		"doo-wop",
+		"three-chord",
+		"jazz-turnaround",
+		"andalusian",
+		"royal-road",
+		"creep",
+		"blues-12-bar",
+	]);
+	const chordValues = new Set(BEEP_CHORDS.map((option) => option.value));
+	for (const option of BEEP_PROGRESSIONS) {
+		assert.ok(option.chords?.length >= 3, `${option.value} must chain at least three chords`);
+		assert.ok(option.chords.every((value) => chordValues.has(value)), `${option.value} references unknown chords`);
+	}
 	assert.deepEqual(progressionChordValues("canon-in-c"), [
 		"c-major", "g-major", "a-minor", "e-minor", "f-major", "c-major", "f-major", "g-major",
 	]);
+	assert.deepEqual(progressionChordValues("pop-axis"), ["c-major", "g-major", "a-minor", "f-major"]);
+	assert.deepEqual(progressionChordValues("noise"), progressionChordValues("canon-in-c"));
 	assert.equal(randomProgressionDuration(() => 0), 1);
 	assert.equal(randomProgressionDuration(() => 0.999999), 6);
 
@@ -108,7 +125,7 @@ test("canon progression uses immediate random one-to-six-frame chord changes", (
 	let frame = null;
 	const observed = [];
 	for (let sequence = 1; sequence <= 9; sequence += 1) {
-		frame = nextProgressionFrame(frame, "canon-in-c", "c-major", sequence, random);
+		frame = nextProgressionFrame(frame, "canon-in-c", sequence, random);
 		observed.push([frame.chord, frame.frameInChord, frame.duration]);
 	}
 	assert.deepEqual(observed, [
@@ -122,10 +139,8 @@ test("canon progression uses immediate random one-to-six-frame chord changes", (
 		["a-minor", 1, 2],
 		["a-minor", 2, 2],
 	]);
-	const reset = nextProgressionFrame(frame, "canon-in-c", "c-major", 20, () => 0.5);
+	const reset = nextProgressionFrame(frame, "canon-in-c", 20, () => 0.5);
 	assert.deepEqual([reset.chord, reset.frameInChord, reset.duration], ["c-major", 1, 4]);
-	const single = nextProgressionFrame(null, "single", "d-major", 1, () => { throw new Error("single chord must not sample"); });
-	assert.deepEqual([single.chord, single.duration], ["d-major", null]);
 });
 
 test("activity expires after five minutes", () => {
@@ -303,9 +318,8 @@ test("TonePlayer uses a suspended Web Audio context only after resume", async ()
 	assert.equal(player.pulse(0, "c-major", 0.2, 0.08), true);
 	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.08));
 	assert.ok(scheduled.some(([kind, frequency]) => kind === "frequency" && Math.abs(frequency - 523.2511306) < 0.0001));
-	assert.deepEqual(player.previewChord("c-major", 0.2), [true, true, true]);
-	assert.ok(scheduled.some(([kind, time]) => kind === "start" && time === 10.24));
-	assert.equal(player.previewProgression("canon-in-c", "c-major", 0.2).length, 24);
+	assert.equal(player.previewProgression("canon-in-c", 0.2).length, 24);
+	assert.equal(player.previewProgression("blues-12-bar", 0.2).length, 36);
 	assert.equal(scheduled.some(([kind]) => kind === "ramp"), false);
 });
 

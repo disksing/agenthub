@@ -24,7 +24,6 @@ test("companion preferences normalize invalid browser-local values", () => {
     showActivity: false,
     enableBeeping: false,
     beepVolume: 0,
-    beepChord: "a-minor",
     beepProgression: "canon-in-c",
     completionSound: "smile",
     hiddenQuotaKeys: ["b", "a", "b", ""],
@@ -32,17 +31,17 @@ test("companion preferences normalize invalid browser-local values", () => {
     showActivity: false,
     enableBeeping: false,
     beepVolume: 0,
-    beepChord: "a-minor",
     beepProgression: "canon-in-c",
     completionSound: "smile",
     hiddenQuotaKeys: ["a", "b"],
   });
   assert.deepEqual(normalizeCompanionPreferences({
     beepVolume: 2,
-    beepChord: "noise",
     beepProgression: "noise",
     completionSound: "noise",
   }), DEFAULT_COMPANION_PREFERENCES);
+  // Legacy single-chord preferences normalize to the default progression.
+  assert.deepEqual(normalizeCompanionPreferences({ beepChord: "a-minor", beepProgression: "single" }), DEFAULT_COMPANION_PREFERENCES);
 });
 
 test("companion preferences persist only through the supplied browser storage", () => {
@@ -51,11 +50,10 @@ test("companion preferences persist only through the supplied browser storage", 
     ...DEFAULT_COMPANION_PREFERENCES,
     enableBeeping: false,
     beepVolume: 0.51,
-    beepChord: "d-minor",
     hiddenQuotaKeys: ['["kimi","5h"]'],
   }, storage);
   assert.deepEqual(loadCompanionPreferences(storage), saved);
-  assert.equal(JSON.parse(storage.getItem(COMPANION_PREFERENCES_STORAGE_KEY)).beepChord, "d-minor");
+  assert.equal(JSON.parse(storage.getItem(COMPANION_PREFERENCES_STORAGE_KEY)).beepProgression, "canon-in-c");
   assert.deepEqual(loadCompanionPreferences(storage).hiddenQuotaKeys, ['["kimi","5h"]']);
   assert.equal(companionPreferencesEqual(saved, loadCompanionPreferences(storage)), true);
 
@@ -67,13 +65,11 @@ test("companion preference validation reports unsupported draft values", () => {
   assert.deepEqual(validateCompanionPreferences(DEFAULT_COMPANION_PREFERENCES), []);
   const errors = validateCompanionPreferences({
     beepVolume: 2,
-    beepChord: "noise",
     beepProgression: "noise",
     completionSound: "noise",
   });
   assert.deepEqual(errors.map((item) => item.field), [
     "beepVolume",
-    "beepChord",
     "beepProgression",
     "completionSound",
   ]);

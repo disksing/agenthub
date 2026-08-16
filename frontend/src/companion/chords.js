@@ -1,5 +1,5 @@
 export const DEFAULT_BEEP_CHORD = "c-major";
-export const DEFAULT_BEEP_PROGRESSION = "single";
+export const DEFAULT_BEEP_PROGRESSION = "canon-in-c";
 export const BEEP_MIN_FRAMES_PER_CHORD = 1;
 export const BEEP_MAX_FRAMES_PER_CHORD = 6;
 // Prefer the lower octave bands before reaching the highest activity tones.
@@ -48,21 +48,64 @@ const progression = (value, label, description, chords) => ({
 });
 
 export const BEEP_PROGRESSIONS = [
-  progression("single", "Single chord", "Hold the selected chord", null),
   progression(
     "canon-in-c",
     "Canon in C",
     "C · G · Am · Em · F · C · F · G · random 1–6 frames each",
     ["c-major", "g-major", "a-minor", "e-minor", "f-major", "c-major", "f-major", "g-major"],
   ),
+  progression(
+    "pop-axis",
+    "Pop axis (I–V–vi–IV)",
+    "C · G · Am · F · random 1–6 frames each",
+    ["c-major", "g-major", "a-minor", "f-major"],
+  ),
+  progression(
+    "doo-wop",
+    "Doo-wop (I–vi–IV–V)",
+    "C · Am · F · G · random 1–6 frames each",
+    ["c-major", "a-minor", "f-major", "g-major"],
+  ),
+  progression(
+    "three-chord",
+    "Three-chord (I–IV–V)",
+    "C · F · G · random 1–6 frames each",
+    ["c-major", "f-major", "g-major"],
+  ),
+  progression(
+    "jazz-turnaround",
+    "Jazz turnaround (ii–V–I)",
+    "Dm · G · C · random 1–6 frames each",
+    ["d-minor", "g-major", "c-major"],
+  ),
+  progression(
+    "andalusian",
+    "Andalusian cadence (i–VII–VI–V)",
+    "Am · G · F · E · random 1–6 frames each",
+    ["a-minor", "g-major", "f-major", "e-major"],
+  ),
+  progression(
+    "royal-road",
+    "Royal road (IV–V–iii–vi)",
+    "F · G · Em · Am · random 1–6 frames each",
+    ["f-major", "g-major", "e-minor", "a-minor"],
+  ),
+  progression(
+    "creep",
+    "Creep (I–III–IV–iv)",
+    "C · E · F · Fm · random 1–6 frames each",
+    ["c-major", "e-major", "f-major", "f-minor"],
+  ),
+  progression(
+    "blues-12-bar",
+    "12-bar blues",
+    "C · F · C · C · F · F · C · C · G · F · C · G · random 1–6 frames each",
+    ["c-major", "f-major", "c-major", "c-major", "f-major", "f-major", "c-major", "c-major", "g-major", "f-major", "c-major", "g-major"],
+  ),
 ];
 
 const CHORD_BY_VALUE = new Map(BEEP_CHORDS.map((value) => [value.value, value]));
 const PROGRESSION_BY_VALUE = new Map(BEEP_PROGRESSIONS.map((value) => [value.value, value]));
-
-export function normalizeBeepChord(value) {
-  return String(value || DEFAULT_BEEP_CHORD);
-}
 
 export function normalizeBeepProgression(value) {
   return String(value || DEFAULT_BEEP_PROGRESSION);
@@ -77,9 +120,9 @@ export function beepProgression(value) {
     || PROGRESSION_BY_VALUE.get(DEFAULT_BEEP_PROGRESSION);
 }
 
-export function progressionChordValues(value, selectedChord = DEFAULT_BEEP_CHORD) {
-  const selected = beepProgression(value);
-  return selected.chords?.length ? [...selected.chords] : [normalizeBeepChord(selectedChord)];
+export function progressionChordValues(value) {
+  const chords = beepProgression(value).chords;
+  return chords?.length ? [...chords] : [DEFAULT_BEEP_CHORD];
 }
 
 export function randomProgressionDuration(
@@ -96,14 +139,12 @@ export function randomProgressionDuration(
 export function nextProgressionFrame(
   current,
   value,
-  selectedChord = DEFAULT_BEEP_CHORD,
   frameSequence = 0,
   random = Math.random,
 ) {
-  const selected = beepProgression(value);
-  const chords = progressionChordValues(value, selectedChord);
+  const chords = progressionChordValues(value);
   const sequence = Math.max(0, Math.floor(Number(frameSequence) || 0));
-  const key = `${selected.value}:${chords.join(",")}`;
+  const key = `${beepProgression(value).value}:${chords.join(",")}`;
   if (chords.length === 1) {
     return { key, sequence, chord: chords[0], chordIndex: 0, duration: null, frameInChord: 1 };
   }
