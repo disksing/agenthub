@@ -253,7 +253,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
     let disposed = false;
     const source = new EventSource("/v1/activity/events");
     progressionFrame.current = null;
-    setActivityChord(progressionChordValues(companion.beepProgression, companion.beepChord)[0]);
+    setActivityChord(progressionChordValues(companion.beepProgression)[0]);
     setActivityState("connecting");
     source.onopen = () => { if (!disposed) setActivityState("live"); };
     source.onerror = () => { if (!disposed) setActivityState("connecting"); };
@@ -273,7 +273,6 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
       progressionFrame.current = nextProgressionFrame(
         progressionFrame.current,
         companion.beepProgression,
-        companion.beepChord,
         frame.sequence,
       );
       const frameChord = progressionFrame.current.chord;
@@ -311,7 +310,7 @@ export function Companion({ revision = 0, onOpenSettings, standalone = false }) 
       setAudioBlocked(tonePlayer.current.status() !== "running");
     };
     return () => { disposed = true; source.close(); };
-  }, [companion.showActivity, companion.enableBeeping, companion.beepVolume, companion.beepChord, companion.beepProgression, companion.completionSound]);
+  }, [companion.showActivity, companion.enableBeeping, companion.beepVolume, companion.beepProgression, companion.completionSound]);
 
   const resumeAudio = async () => {
     if (!companion.enableBeeping) return;

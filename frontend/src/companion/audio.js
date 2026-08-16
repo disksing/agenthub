@@ -61,14 +61,8 @@ export class TonePlayer {
     return this.playFrequency(noteForToneSlot(toneSlot, chord).frequency, volume, delay, 0.1);
   }
 
-  previewChord(chord = DEFAULT_BEEP_CHORD, volume = 0.28) {
-    return chordTonePool(chord).slice(0, 3).map((note, index) => (
-      this.playFrequency(note.frequency, volume, index * 0.12, 0.16)
-    ));
-  }
-
-  previewProgression(progression = DEFAULT_BEEP_PROGRESSION, chord = DEFAULT_BEEP_CHORD, volume = 0.28) {
-    const chordValues = progressionChordValues(progression, chord);
+  previewProgression(progression = DEFAULT_BEEP_PROGRESSION, volume = 0.28) {
+    const chordValues = progressionChordValues(progression);
     const chordDuration = 0.72;
     return chordValues.flatMap((value, chordIndex) => chordTonePool(value).slice(0, 3).map((note, noteIndex) => (
       this.playFrequency(note.frequency, volume, chordIndex * chordDuration + noteIndex * 0.12, 0.16)

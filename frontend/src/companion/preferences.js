@@ -1,10 +1,7 @@
 import { COMPLETION_SOUNDS, normalizeCompletionSound } from "./audio.js";
 import {
-  BEEP_CHORDS,
   BEEP_PROGRESSIONS,
-  DEFAULT_BEEP_CHORD,
   DEFAULT_BEEP_PROGRESSION,
-  normalizeBeepChord,
   normalizeBeepProgression,
 } from "./chords.js";
 
@@ -15,7 +12,6 @@ export const DEFAULT_COMPANION_PREFERENCES = Object.freeze({
   showActivity: true,
   enableBeeping: true,
   beepVolume: 0.28,
-  beepChord: DEFAULT_BEEP_CHORD,
   beepProgression: DEFAULT_BEEP_PROGRESSION,
   completionSound: "completed-voice",
   hiddenQuotaKeys: [],
@@ -23,7 +19,6 @@ export const DEFAULT_COMPANION_PREFERENCES = Object.freeze({
 
 export function normalizeCompanionPreferences(value = {}) {
   const volume = Number(value?.beepVolume);
-  const beepChord = normalizeBeepChord(value?.beepChord);
   const beepProgression = normalizeBeepProgression(value?.beepProgression);
   const completionSound = normalizeCompletionSound(String(value?.completionSound ?? DEFAULT_COMPANION_PREFERENCES.completionSound));
   const hiddenQuotaKeys = [...new Set(
@@ -35,7 +30,6 @@ export function normalizeCompanionPreferences(value = {}) {
     showActivity: value?.showActivity == null ? DEFAULT_COMPANION_PREFERENCES.showActivity : Boolean(value.showActivity),
     enableBeeping: value?.enableBeeping == null ? DEFAULT_COMPANION_PREFERENCES.enableBeeping : Boolean(value.enableBeeping),
     beepVolume: Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : DEFAULT_COMPANION_PREFERENCES.beepVolume,
-    beepChord: BEEP_CHORDS.some((option) => option.value === beepChord) ? beepChord : DEFAULT_COMPANION_PREFERENCES.beepChord,
     beepProgression: BEEP_PROGRESSIONS.some((option) => option.value === beepProgression) ? beepProgression : DEFAULT_COMPANION_PREFERENCES.beepProgression,
     completionSound: COMPLETION_SOUNDS.some((option) => option.value === completionSound) ? completionSound : DEFAULT_COMPANION_PREFERENCES.completionSound,
     hiddenQuotaKeys,
@@ -47,9 +41,6 @@ export function validateCompanionPreferences(value) {
   const push = (field, message) => errors.push({ section: "activity", index: 0, field, message });
   if (!Number.isFinite(value?.beepVolume) || value.beepVolume < 0 || value.beepVolume > 1) {
     push("beepVolume", "Volume must be between 0 and 1");
-  }
-  if (!BEEP_CHORDS.some((option) => option.value === value?.beepChord)) {
-    push("beepChord", "Select a supported beep chord");
   }
   if (!BEEP_PROGRESSIONS.some((option) => option.value === value?.beepProgression)) {
     push("beepProgression", "Select a supported chord progression");
