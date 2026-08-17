@@ -181,6 +181,12 @@ Codex agents accept the options `model`, `sandbox`, `approval`, and `reasoning_e
 
 The map is deliberately persisted in the Session's `events.jsonl` and rebuildable `session.json`, and is returned by Session API responses. Do not put credentials or any other value in `launchEnvironment` that you do not want stored on disk. Session files remain private (`0600`), but that is not a substitute for secret storage.
 
+### Agent environment variables
+
+An agent configuration may also carry an optional string map named `environment`, editable in the Web UI's **Agents** panel or in `config.json`. When the daemon starts a Provider process for that agent, the agent environment is merged under the daemon environment and the session's `launchEnvironment` is merged on top, so the precedence is `daemon < agent < session launchEnvironment` (a per-session value wins over the agent default). Codex receives the merged process environment and each entry as `shell_environment_policy.set.<KEY>` on both `thread/start` and `thread/resume`; ACP and Pi receive the merged process environment.
+
+Unlike the durable per-session `launchEnvironment`, the agent environment is live configuration: a session only records the agent name, so starting or resuming a session re-reads the agent's current environment. This makes it the right place for defaults shared by every session of that agent. Values are stored in `config.json` (private, `0600`) and returned by `GET /v1/config`; do not put credentials there.
+
 ### Model Enumeration
 
 Each built-in provider can report the models currently usable on this machine through its official interface — no provider session is created and nothing is written to provider configuration:

@@ -94,6 +94,19 @@ function cleanOptions(options) {
   return result;
 }
 
+// cleanEnvironment normalizes an agent environment map: keys are trimmed and
+// empty keys are dropped, while values are kept verbatim so an explicitly
+// empty value ("FOO=\"\"") survives a settings round-trip.
+function cleanEnvironment(environment) {
+  const result = {};
+  for (const [rawKey, rawValue] of Object.entries(environment || {})) {
+    const key = String(rawKey ?? "").trim();
+    if (!key) continue;
+    result[key] = String(rawValue ?? "");
+  }
+  return result;
+}
+
 // normalizeConfig deep-copies config from any source and normalizes it into a
 // fixed shape: missing arrays become empty, values become strings, blank
 // option keys and empty optional fields are dropped.
@@ -116,6 +129,8 @@ export function normalizeConfig(config = {}) {
     };
     const options = cleanOptions(agent?.options);
     if (Object.keys(options).length) result.options = options;
+    const environment = cleanEnvironment(agent?.environment);
+    if (Object.keys(environment).length) result.environment = environment;
     return result;
   });
 
@@ -230,6 +245,12 @@ export function validateDraft(draft) {
     if (!agent.providerId.trim()) push("agents", index, "providerId", "Select a provider");
     else if (!providerById.has(agent.providerId)) {
       push("agents", index, "providerId", `Referenced provider "${agent.providerId}" does not exist`);
+    }
+    for (const [rawKey, rawValue] of Object.entries(agent.environment || {})) {
+      const key = String(rawKey ?? "").trim();
+      if (!key) push("agents", index, "environment", "Environment variable name cannot be empty");
+      else if (/[=\0]/.test(key)) push("agents", index, "environment", `Environment variable name "${key}" contains invalid characters`);
+      if (/\0/.test(String(rawValue ?? ""))) push("agents", index, "environment", `Environment variable "${key || rawKey}" contains NUL`);
     }
   });
 

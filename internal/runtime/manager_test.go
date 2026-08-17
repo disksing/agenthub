@@ -337,6 +337,42 @@ func TestManagerRunsExplicitAgentAndResumes(t *testing.T) {
 	}
 }
 
+func TestManagerMergesAgentEnvironmentWithSessionLaunchEnvironment(t *testing.T) {
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Version:        1,
+		AgentProviders: []config.Provider{{ID: "provider", Type: "pi", Enabled: true}},
+		Agents: []config.Agent{{
+			Name:        "Env Agent",
+			ProviderID:  "provider",
+			Environment: map[string]string{"AGENT_ONLY": "from-agent", "SHARED": "agent-default"},
+		}},
+	}
+	value, err := store.Create(session.CreateInput{
+		Cwd:               t.TempDir(),
+		AgentName:         "Env Agent",
+		LaunchEnvironment: map[string]string{"SESSION_ONLY": "from-session", "SHARED": "session-wins"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(store, cfg)
+	var observed map[string]string
+	manager.factory = func(options provider.Options) (provider.Session, error) {
+		observed = cloneEnvironment(options.Environment)
+		return &fakeSession{hooks: options.Hooks}, nil
+	}
+	if _, err := manager.Send(value.ID, "go", false); err != nil {
+		t.Fatal(err)
+	}
+	if observed["AGENT_ONLY"] != "from-agent" || observed["SESSION_ONLY"] != "from-session" || observed["SHARED"] != "session-wins" {
+		t.Fatalf("merged environment = %+v", observed)
+	}
+}
+
 func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
 	root := t.TempDir()
 	store, err := session.Open(root)

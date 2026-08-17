@@ -325,7 +325,7 @@ only writer) and applies it in memory.
       {"id": "codex", "name": "Codex app-server", "type": "codex", "enabled": true, "command": "codex"}
     ],
     "agents": [
-      {"name": "Codex", "providerId": "codex", "options": {"approval": "never", "sandbox": "danger-full-access"}}
+      {"name": "Codex", "providerId": "codex", "options": {"approval": "never", "sandbox": "danger-full-access"}, "environment": {"FOO": "bar"}}
     ],
     "onWatch": {
       "enabled": false,
@@ -342,7 +342,11 @@ only writer) and applies it in memory.
 - **Constraints:** provider `id` unique and `type` one of `codex`, `kimi`,
   `pi`, `opencode`; agent `name` required, at most 80 characters, unique
   case-insensitively after trimming; every agent's `providerId` must
-  reference a configured provider. Unknown fields are rejected.
+  reference a configured provider. An agent's optional `environment` map is
+  merged into the Provider process environment when a session starts or
+  resumes (the session `launchEnvironment` wins on conflicts); names cannot
+  be empty or contain `=` or NUL, and values cannot contain NUL. Unknown
+  fields are rejected.
 - **OnWatch constraints:** `serverUrl` is an absolute HTTP(S) URL without
   embedded credentials; `authMode` is `trusted_proxy`, `basic` or `none`;
   refresh is 30, 60 or 300 seconds. Basic Auth requires a username and, when
@@ -353,9 +357,9 @@ only writer) and applies it in memory.
   compatibility, a legacy top-level `companion` object is accepted and
   discarded; it is omitted from responses and from the next config-file write.
 - **Rename semantics:** if an agent disappears while exactly one new agent
-  with an identical provider and options appears, the change is treated as a
-  rename and active sessions referencing the old name are migrated with a
-  `session.agent` event. Ambiguous renames are rejected.
+  with an identical provider, options and environment appears, the change is
+  treated as a rename and active sessions referencing the old name are
+  migrated with a `session.agent` event. Ambiguous renames are rejected.
 - **Success `200`:** `{"config": {...}}` (the applied configuration).
 - **Errors:** `400 invalid_request` (malformed JSON or unknown fields,
   including removed profile/tag fields), `415 json_required`,
@@ -471,6 +475,7 @@ CLI availability probes for enabled providers.
       "name": "Codex",
       "providerId": "codex",
       "options": {"approval": "never"},
+      "environment": {"FOO": "bar"},
       "available": true
     }
   ],

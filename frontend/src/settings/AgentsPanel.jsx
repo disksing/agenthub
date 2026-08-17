@@ -78,6 +78,53 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
     });
   };
 
+  const updateEnvironment = (index, updater) => {
+    mutate((next) => {
+      const agent = next.agents[index];
+      const environment = updater({ ...(agent.environment || {}) });
+      if (environment && Object.keys(environment).length) agent.environment = environment;
+      else delete agent.environment;
+    });
+  };
+
+  const changeEnvKey = (index, oldKey, newKey) => {
+    updateEnvironment(index, (environment) => {
+      // Rebuild in place so the edited entry keeps its position; moving it to
+      // the end would shift React list indices mid-keystroke and lose focus.
+      const clean = String(newKey ?? "").trim();
+      const next = {};
+      for (const [key, value] of Object.entries(environment)) {
+        if (key === oldKey) {
+          if (clean) next[clean] = value;
+        } else {
+          next[key] = value;
+        }
+      }
+      return next;
+    });
+  };
+
+  const changeEnvValue = (index, key, value) => {
+    updateEnvironment(index, (environment) => {
+      environment[key] = value;
+      return environment;
+    });
+  };
+
+  const removeEnvVar = (index, key) => {
+    updateEnvironment(index, (environment) => {
+      delete environment[key];
+      return environment;
+    });
+  };
+
+  const addEnvVar = (index) => {
+    updateEnvironment(index, (environment) => {
+      if (!Object.prototype.hasOwnProperty.call(environment, "")) environment[""] = "";
+      return environment;
+    });
+  };
+
   const moveAgent = (fromIndex, toIndex) => {
     if (fromIndex === toIndex) return;
     // Keep row keys and the expanded set aligned with the new agent order.
@@ -248,6 +295,44 @@ export function AgentsPanel({ draft, errors, showErrors, mutate }) {
                     )}
                   </Field>
                 ))}
+                <div className="settings-env">
+                  <div className="settings-env-head">
+                    <span className="settings-env-title">Environment variables</span>
+                    <button type="button" className="settings-env-add" onClick={() => addEnvVar(index)}>
+                      <Plus size={14} />Add variable
+                    </button>
+                  </div>
+                  {Object.entries(agent.environment || {}).map(([key, value], envIndex) => (
+                    <div className="settings-env-row" key={envIndex}>
+                      <input
+                        className="settings-input"
+                        value={key}
+                        placeholder="NAME"
+                        aria-label={`Environment variable name ${envIndex + 1}`}
+                        onChange={(event) => changeEnvKey(index, key, event.target.value)}
+                      />
+                      <input
+                        className="settings-input"
+                        value={value}
+                        placeholder="value"
+                        aria-label={`Environment variable value ${envIndex + 1}`}
+                        onChange={(event) => changeEnvValue(index, key, event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={`Remove environment variable ${key || envIndex + 1}`}
+                        title="Remove variable"
+                        onClick={() => removeEnvVar(index, key)}
+                      >
+                        <Trash size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  {showErrors && fieldError(errors, "agents", index, "environment") ? (
+                    <p className="settings-field-error">{fieldError(errors, "agents", index, "environment")}</p>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </article>

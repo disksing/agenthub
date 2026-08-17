@@ -158,6 +158,12 @@ Provider 被停用后，其 Agent 会被标记为不可用（`GET /v1/agents` �
 
 `launchEnvironment` 会明确写入 Session 的 `events.jsonl` 和可重建的 `session.json`，也会由 Session API 返回。不要放入任何不希望持久化的凭据或其他 secret。Session 文件继续使用 `0600` 权限，但文件权限不能替代专门的 secret 存储。
 
+### Agent 环境变量
+
+Agent 配置还可以携带一个可选的字符串映射 `environment`，可以在 Web UI 的 **Agents** 面板或 `config.json` 中编辑。daemon 为该 Agent 启动 Provider 进程时，会先把 Agent 环境合并到 daemon 环境之上，再把 Session 的 `launchEnvironment` 合并到最上层，因此优先级为 `daemon < Agent < Session launchEnvironment`（Session 值覆盖 Agent 默认值）。Codex 会拿到合并后的进程环境，并在 `thread/start` 和 `thread/resume` 时把每项映射为 `shell_environment_policy.set.<KEY>`；ACP 和 Pi 使用合并后的进程环境。
+
+与持久化的 per-session `launchEnvironment` 不同，Agent 环境是“活”配置：Session 只记录 Agent 名称，因此启动或恢复 Session 时会重新读取 Agent 当前的环境变量，适合存放该 Agent 所有 Session 共用的默认值。这些值保存在 `config.json`（`0600`）中并由 `GET /v1/config` 返回，不要在其中存放凭据。
+
 ### 模型枚举
 
 每个内置 Provider 都可以通过各自的官方接口报告本机当前可用的模型——不创建 Provider Session，也不写入 Provider 配置：

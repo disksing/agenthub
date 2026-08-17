@@ -21,7 +21,7 @@ function sampleConfig() {
       { id: "kimi", name: "Kimi", type: "kimi", enabled: false, command: " /usr/local/bin/kimi " },
     ],
     agents: [
-      { name: "Main", providerId: "codex", options: { model: " gpt-5 ", sandbox: "workspace-write", empty: "  " } },
+      { name: "Main", providerId: "codex", options: { model: " gpt-5 ", sandbox: "workspace-write", empty: "  " }, environment: { " FOO ": " bar ", "EMPTY": "", " ": "ignored" } },
       { name: "Backup", providerId: "kimi" },
     ],
   };
@@ -36,7 +36,7 @@ test("normalizeConfig normalizes the structure and drops blank fields", () => {
       { id: "kimi", name: "Kimi", type: "kimi", enabled: false, command: "/usr/local/bin/kimi" },
     ],
     agents: [
-      { name: "Main", providerId: "codex", options: { model: "gpt-5", sandbox: "workspace-write" } },
+      { name: "Main", providerId: "codex", options: { model: "gpt-5", sandbox: "workspace-write" }, environment: { FOO: " bar ", EMPTY: "" } },
       { name: "Backup", providerId: "kimi" },
     ],
 	onWatch: DEFAULT_ONWATCH,
@@ -69,7 +69,7 @@ test("isDirty ignores equivalent differences and detects real changes", () => {
   const snapshot = createDraft(sampleConfig());
   const same = createDraft({
     ...sampleConfig(),
-    agents: [{ name: "Main", providerId: "codex", options: { model: "gpt-5 ", sandbox: "workspace-write" } },
+    agents: [{ name: "Main", providerId: "codex", options: { model: "gpt-5 ", sandbox: "workspace-write" }, environment: { " FOO ": " bar ", EMPTY: "" } },
       { name: "Backup", providerId: "kimi" }],
   });
   assert.equal(isDirty(same, snapshot), false);
@@ -124,6 +124,26 @@ test("server config ignores legacy companion settings", () => {
 	assert.equal("companion" in normalized, false);
 	assert.equal("companion" in buildPayload(normalized), false);
 	assert.deepEqual(validateDraft(normalized), []);
+});
+
+test("normalizeConfig keeps agent environment and drops empty names", () => {
+  const normalized = normalizeConfig({
+    agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
+    agents: [{ name: "A", providerId: "p", environment: { " FOO ": " bar ", "": "dropped", EMPTY: "" } }],
+  });
+  assert.deepEqual(normalized.agents[0].environment, { FOO: " bar ", EMPTY: "" });
+});
+
+test("validateDraft reports invalid agent environment variables", () => {
+  const draft = createDraft({
+    agentProviders: [{ id: "p", name: "P", type: "codex", enabled: true }],
+    agents: [{ name: "A", providerId: "p" }],
+  });
+  draft.agents[0].environment = { "": "v", "A=B": "w", NUL: "x\u0000" };
+  const errors = validateDraft(draft);
+  assert.ok(errors.some((item) => item.field === "environment" && item.message.includes("cannot be empty")));
+  assert.ok(errors.some((item) => item.field === "environment" && item.message.includes("invalid characters")));
+  assert.ok(errors.some((item) => item.field === "environment" && item.message.includes("NUL")));
 });
 
 test("validateDraft reports duplicate provider ids and missing required fields", () => {

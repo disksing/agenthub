@@ -541,7 +541,7 @@ func (m *Manager) ensure(id string) (*active, error) {
 	run := &active{turnID: value.CurrentTurnID, ready: make(chan struct{})}
 	adapter, err := m.factory(provider.Options{
 		ID: id, Cwd: value.Cwd, Title: value.Title, Agent: agent, Provider: providerConfig,
-		Environment: cloneEnvironment(value.LaunchEnvironment),
+		Environment: mergeEnvironment(agent.Environment, value.LaunchEnvironment),
 		Hooks: provider.Hooks{
 			NativeID: func(nativeID string) {
 				run.withEvent(func(_ string) {
@@ -806,6 +806,25 @@ func cloneEnvironment(value map[string]string) map[string]string {
 		cloned[key] = entry
 	}
 	return cloned
+}
+
+// mergeEnvironment combines an agent's configured environment with the
+// session's launch environment. The session overlay wins for same-named
+// entries, so a per-session value (for example a PUA-injected resource
+// identity) overrides the agent default. An empty result stays nil so the
+// provider inherits the daemon environment unchanged.
+func mergeEnvironment(agent, session map[string]string) map[string]string {
+	if len(agent) == 0 && len(session) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(agent)+len(session))
+	for key, value := range agent {
+		merged[key] = value
+	}
+	for key, value := range session {
+		merged[key] = value
+	}
+	return merged
 }
 
 func cloneConfig(value config.Config) config.Config {

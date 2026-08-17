@@ -92,6 +92,33 @@ func TestValidateAgentNames(t *testing.T) {
 	}
 }
 
+func TestValidateAgentEnvironment(t *testing.T) {
+	provider := Provider{ID: "p", Type: "pi", Enabled: true}
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"empty name", map[string]string{"": "v"}, "name cannot be empty"},
+		{"equals in name", map[string]string{"A=B": "v"}, "invalid environment variable name"},
+		{"nul in name", map[string]string{"A\x00": "v"}, "invalid environment variable name"},
+		{"nul in value", map[string]string{"A": "v\x00"}, "contains NUL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{Version: 1, AgentProviders: []Provider{provider}, Agents: []Agent{{Name: "Codex", ProviderID: "p", Environment: tc.env}}}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected an error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+	valid := Config{Version: 1, AgentProviders: []Provider{provider}, Agents: []Agent{{Name: "Codex", ProviderID: "p", Environment: map[string]string{"FOO": "bar", "BAZ": "qux"}}}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid environment rejected: %v", err)
+	}
+}
+
 func TestLoadCreatesIndependentDefaults(t *testing.T) {
 	path := t.TempDir() + "/config.json"
 	loaded, err := Load(path)
@@ -222,6 +249,25 @@ func TestSetProviderEnabledFlipsOnlyTheFlag(t *testing.T) {
 	}
 }
 
+func TestSetProviderEnabledCopiesEnvironment(t *testing.T) {
+	cfg := Config{
+		Version:        1,
+		AgentProviders: []Provider{{ID: "codex", Name: "Codex app-server", Type: "codex", Enabled: true}, {ID: "kimi", Name: "Kimi Code", Type: "kimi", Enabled: true}},
+		Agents:         []Agent{{Name: "Kimi K3", ProviderID: "kimi", Options: map[string]string{"model": "k3"}, Environment: map[string]string{"FOO": "bar"}}},
+	}
+	next, _, err := cfg.SetProviderEnabled("kimi", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Agents[0].Environment["FOO"] != "bar" {
+		t.Fatalf("toggle lost agent environment: %+v", next.Agents[0])
+	}
+	next.Agents[0].Environment["FOO"] = "mutated"
+	if cfg.Agents[0].Environment["FOO"] != "bar" {
+		t.Fatal("SetProviderEnabled mutated the input agent environment")
+	}
+}
+
 func TestSetProviderEnabledAppendsBuiltinDefault(t *testing.T) {
 	cfg := Config{
 		Version:        1,
@@ -329,5 +375,16 @@ func TestDetectRenames(t *testing.T) {
 	renames, err = DetectRenames(oldConfig, recased)
 	if err != nil || len(renames) != 0 {
 		t.Fatalf("recasing must not be a rename: %+v %v", renames, err)
+	}
+
+	// An environment change with otherwise identical options is a config
+	// change, not a rename.
+	envChanged := Config{Version: 1, AgentProviders: providers, Agents: []Agent{
+		{Name: "Codex X", ProviderID: "p", Options: map[string]string{"model": "m"}, Environment: map[string]string{"FOO": "bar"}},
+		{Name: "Kimi", ProviderID: "p"},
+	}}
+	renames, err = DetectRenames(oldConfig, envChanged)
+	if err != nil || len(renames) != 0 {
+		t.Fatalf("environment-only change must not be a rename: %+v %v", renames, err)
 	}
 }

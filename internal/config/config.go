@@ -25,9 +25,10 @@ type Provider struct {
 }
 
 type Agent struct {
-	Name       string            `json:"name"`
-	ProviderID string            `json:"providerId"`
-	Options    map[string]string `json:"options,omitempty"`
+	Name        string            `json:"name"`
+	ProviderID  string            `json:"providerId"`
+	Options     map[string]string `json:"options,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
 }
 
 type OnWatch struct {
@@ -175,6 +176,27 @@ func (c Config) Validate() error {
 		if _, exists := providers[value.ProviderID]; !exists {
 			return fmt.Errorf("agent %q references unknown provider %q", name, value.ProviderID)
 		}
+		if err := validateEnvironment(value.Environment); err != nil {
+			return fmt.Errorf("agents[%d] (%q): %w", index, name, err)
+		}
+	}
+	return nil
+}
+
+// validateEnvironment checks agent environment variables before they are
+// persisted and later merged into a provider process environment. Names
+// cannot be empty or contain '=' or NUL, and values cannot contain NUL.
+func validateEnvironment(environment map[string]string) error {
+	for key, value := range environment {
+		if key == "" {
+			return errors.New("environment variable name cannot be empty")
+		}
+		if strings.ContainsAny(key, "=\x00") {
+			return fmt.Errorf("invalid environment variable name %q", key)
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("environment variable %q contains NUL", key)
+		}
 	}
 	return nil
 }
@@ -226,6 +248,13 @@ func (c Config) SetProviderEnabled(id string, enabled bool) (Config, Provider, e
 				options[key] = value
 			}
 			agent.Options = options
+		}
+		if agent.Environment != nil {
+			environment := make(map[string]string, len(agent.Environment))
+			for key, value := range agent.Environment {
+				environment[key] = value
+			}
+			agent.Environment = environment
 		}
 		next.Agents[i] = agent
 	}
@@ -396,11 +425,16 @@ func DetectRenames(oldConfig, newConfig Config) (map[string]string, error) {
 }
 
 func agentConfigEqual(a, b Agent) bool {
-	if a.ProviderID != b.ProviderID || len(a.Options) != len(b.Options) {
+	if a.ProviderID != b.ProviderID || len(a.Options) != len(b.Options) || len(a.Environment) != len(b.Environment) {
 		return false
 	}
 	for key, value := range a.Options {
 		if b.Options[key] != value {
+			return false
+		}
+	}
+	for key, value := range a.Environment {
+		if b.Environment[key] != value {
 			return false
 		}
 	}
