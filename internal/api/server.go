@@ -36,6 +36,7 @@ const (
 	CapabilityMessageAtLeastOnce       = "messages.at-least-once"
 	CapabilityTurnsStableIndex         = "turns.stable-index"
 	CapabilityTurnsMaterialized        = "turns.materialized"
+	CapabilityTurnsActivityItems       = "turns.activity-items"
 	CapabilitySessionLaunchEnvironment = "session.launch-environment"
 	// CapabilitySessionLaunchEnvironmentUpdate reports that resume accepts
 	// an optional launchEnvironment overlay persisted before provider start.
@@ -253,6 +254,7 @@ func (s *Server) capabilities() []string {
 		CapabilityMessageAtLeastOnce,
 		CapabilityTurnsStableIndex,
 		CapabilityTurnsMaterialized,
+		CapabilityTurnsActivityItems,
 	}
 	if s.runtime != nil {
 		capabilities = append(capabilities,

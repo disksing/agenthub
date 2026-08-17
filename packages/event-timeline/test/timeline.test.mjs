@@ -15,8 +15,18 @@ function reset() {
   nextId = 1;
 }
 
+function activityChild(item, kind) {
+  assert.equal(item.kind, "activity");
+  const child = item.items.find((candidate) => candidate.kind === kind);
+  assert.ok(child, `activity is missing ${kind} child`);
+  return child;
+}
+
+const thinkingChild = (item) => activityChild(item, "thinking");
+const toolsChild = (item) => activityChild(item, "tools");
+
 test("exports stable package and canonical event contract versions", () => {
-  assert.equal(VERSION, "1.0.0");
+  assert.equal(VERSION, "2.0.0");
   assert.equal(API_EVENT_CONTRACT_VERSION, "agenthub.api.v1");
 });
 
@@ -73,8 +83,10 @@ test("reasoning deltas merge into a thinking block and stay active at the tail",
     event("message.reasoning.delta", { text: "think." }, { turnId: "turn_1" }),
   ]);
   assert.equal(items.length, 1);
-  assert.equal(items[0].kind, "thinking");
-  assert.equal(items[0].text, "Let me think.");
+  assert.equal(items[0].kind, "activity");
+  assert.equal(thinkingChild(items[0]).text, "Let me think.");
+  assert.equal(items[0].thinkingCount, 1);
+  assert.equal(items[0].reasoningUpdateCount, 2);
   assert.equal(items[0].active, true);
 });
 
@@ -94,8 +106,8 @@ test("a steered message does not split the open thinking block", () => {
     event("message.input", { text: "steer", steer: true }, { turnId: "turn_1" }),
     event("message.reasoning.delta", { text: "think." }, { turnId: "turn_1" }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message"]);
-  assert.equal(items[0].text, "Let me think.");
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "message"]);
+  assert.equal(thinkingChild(items[0]).text, "Let me think.");
   // The agent is still reasoning, so the block stays active even though the
   // steered message is the last item.
   assert.equal(items[0].active, true);
@@ -109,8 +121,8 @@ test("a legacy steered message does not split the open thinking block", () => {
     event("message.user.steer", { text: "steer" }, { turnId: "turn_1" }),
     event("message.reasoning.delta", { text: "b" }, { turnId: "turn_1" }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message"]);
-  assert.equal(items[0].text, "ab");
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "message"]);
+  assert.equal(thinkingChild(items[0]).text, "ab");
   assert.equal(items[0].active, true);
 });
 
@@ -122,10 +134,10 @@ test("thinking closes when assistant text or tool activity follows", () => {
     event("message.assistant.delta", { text: "answer" }, { turnId: "turn_1" }),
     event("message.reasoning.delta", { text: "b" }, { turnId: "turn_1" }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message", "message", "thinking"]);
-  assert.equal(items[0].text, "a");
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "message", "message", "activity"]);
+  assert.equal(thinkingChild(items[0]).text, "a");
   assert.equal(items[0].active, false);
-  assert.equal(items[3].text, "b");
+  assert.equal(thinkingChild(items[3]).text, "b");
   assert.equal(items[3].active, true);
 });
 
@@ -137,7 +149,7 @@ test("a message that starts a new turn closes the previous thinking block", () =
     event("message.input", { text: "next question" }, { turnId: "turn_2" }),
     event("message.reasoning.delta", { text: "b" }, { turnId: "turn_2" }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["thinking", "lifecycle", "message", "thinking"]);
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "lifecycle", "message", "activity"]);
   assert.equal(items[0].active, false);
   assert.equal(items[3].active, true);
 });
@@ -149,7 +161,7 @@ test("thinking block keeps the first delta time as startTime for the duration la
     event("message.reasoning.delta", { text: "think." }, { turnId: "turn_1", time: "2026-07-25T10:01:02Z" }),
     event("message.assistant.delta", { text: "answer" }, { turnId: "turn_1" }),
   ]);
-  assert.equal(items[0].kind, "thinking");
+  assert.equal(items[0].kind, "activity");
   assert.equal(items[0].startTime, "2026-07-25T10:00:00Z");
   assert.equal(items[0].time, "2026-07-25T10:01:02Z");
 });
@@ -219,9 +231,11 @@ test("codex command execution tool call is normalized and completed", () => {
     }, { turnId: "turn_1" }),
   ]);
   assert.equal(items.length, 1);
-  assert.equal(items[0].kind, "tools");
-  assert.equal(items[0].calls.length, 1);
-  const call = items[0].calls[0];
+  assert.equal(items[0].kind, "activity");
+  assert.equal(items[0].toolCallCount, 1);
+  const tools = toolsChild(items[0]);
+  assert.equal(tools.calls.length, 1);
+  const call = tools.calls[0];
   assert.equal(call.name, "Command");
   assert.equal(call.summary, "ls -la");
   assert.equal(call.status, "completed");
@@ -261,12 +275,13 @@ test("orphan command output deltas stay hidden in truncated history", () => {
     }, { turnId: "turn_1" }),
   ]);
 
-  assert.deepEqual(items.map((item) => item.kind), ["message", "tools"]);
+  assert.deepEqual(items.map((item) => item.kind), ["message", "activity"]);
   assert.equal(items[0].text, "Long commands are still running.");
-  assert.equal(items[1].calls.length, 1);
-  assert.equal(items[1].calls[0].callId, "call_visible");
-  assert.equal(items[1].calls[0].name, "Command");
-  assert.equal(items[1].calls[0].output, "working tree clean");
+  const tools = toolsChild(items[1]);
+  assert.equal(tools.calls.length, 1);
+  assert.equal(tools.calls[0].callId, "call_visible");
+  assert.equal(tools.calls[0].name, "Command");
+  assert.equal(tools.calls[0].output, "working tree clean");
 });
 
 test("codex failed command surfaces the exit code as an error", () => {
@@ -277,8 +292,8 @@ test("codex failed command surfaces the exit code as an error", () => {
       raw: { item: { id: "item_9", type: "commandExecution", command: "false", status: "completed", exitCode: 1 } },
     }),
   ]);
-  assert.equal(items[0].calls[0].status, "failed");
-  assert.equal(items[0].calls[0].error, "Exit code 1");
+  assert.equal(toolsChild(items[0]).calls[0].status, "failed");
+  assert.equal(toolsChild(items[0]).calls[0].error, "Exit code 1");
 });
 
 test("codex message and reasoning items are not rendered as tool calls", () => {
@@ -289,9 +304,10 @@ test("codex message and reasoning items are not rendered as tool calls", () => {
     event("tool.event", { method: "item/started", raw: { item: { id: "c", type: "webSearch", query: "agenthub" } } }),
   ]);
   assert.equal(items.length, 1);
-  assert.equal(items[0].calls.length, 1);
-  assert.equal(items[0].calls[0].name, "Web search");
-  assert.equal(items[0].calls[0].summary, "agenthub");
+  const tools = toolsChild(items[0]);
+  assert.equal(tools.calls.length, 1);
+  assert.equal(tools.calls[0].name, "Web search");
+  assert.equal(tools.calls[0].summary, "agenthub");
 });
 
 test("acp tool_call and tool_call_update correlate by toolCallId", () => {
@@ -307,10 +323,11 @@ test("acp tool_call and tool_call_update correlate by toolCallId", () => {
     }),
   ]);
   assert.equal(items.length, 1);
-  assert.equal(items[0].calls.length, 1);
-  assert.equal(items[0].calls[0].summary, "Read README.md");
-  assert.equal(items[0].calls[0].status, "completed");
-  assert.equal(items[0].calls[0].output, "file body");
+  const tools = toolsChild(items[0]);
+  assert.equal(tools.calls.length, 1);
+  assert.equal(tools.calls[0].summary, "Read README.md");
+  assert.equal(tools.calls[0].status, "completed");
+  assert.equal(tools.calls[0].output, "file body");
 });
 
 test("acp thought chunks become thinking, message chunks become agent text", () => {
@@ -319,7 +336,7 @@ test("acp thought chunks become thinking, message chunks become agent text", () 
     event("message.reasoning.delta", { text: "kimi thinking", method: "session/update" }, { turnId: "turn_1" }),
     event("message.assistant.delta", { text: "kimi answer", method: "session/update" }, { turnId: "turn_1" }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["thinking", "message"]);
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "message"]);
 });
 
 test("pi tool execution start and end pair into one call", () => {
@@ -329,9 +346,10 @@ test("pi tool execution start and end pair into one call", () => {
     event("tool.event", { method: "tool_execution_end", raw: { toolName: "read", result: "contents" } }),
   ]);
   assert.equal(items.length, 1);
-  assert.equal(items[0].calls.length, 1);
-  assert.equal(items[0].calls[0].status, "completed");
-  assert.equal(items[0].calls[0].output, "contents");
+  const tools = toolsChild(items[0]);
+  assert.equal(tools.calls.length, 1);
+  assert.equal(tools.calls[0].status, "completed");
+  assert.equal(tools.calls[0].output, "contents");
 });
 
 test("pi tool failure is flagged", () => {
@@ -340,8 +358,8 @@ test("pi tool failure is flagged", () => {
     event("tool.event", { method: "tool_execution_start", raw: { toolName: "bash", args: { command: "make" } } }),
     event("tool.event", { method: "tool_execution_end", raw: { toolName: "bash", isError: true, error: "boom" } }),
   ]);
-  assert.equal(items[0].calls[0].status, "failed");
-  assert.equal(items[0].calls[0].error, "boom");
+  assert.equal(toolsChild(items[0]).calls[0].status, "failed");
+  assert.equal(toolsChild(items[0]).calls[0].error, "boom");
 });
 
 test("consecutive tool calls group without projecting host expansion state", () => {
@@ -351,9 +369,35 @@ test("consecutive tool calls group without projecting host expansion state", () 
     event("tool.event", { method: "item/completed", raw: { item: { id: "2", type: "commandExecution", command: "pwd", status: "completed" } } }),
     event("message.assistant.delta", { text: "done" }, { turnId: "turn_1" }),
   ]);
-  assert.equal(items[0].kind, "tools");
-  assert.equal(items[0].calls.length, 2);
+  assert.equal(items[0].kind, "activity");
+  assert.equal(toolsChild(items[0]).calls.length, 2);
+  assert.equal(items[0].active, false);
   assert.equal("collapsed" in items[0], false);
+});
+
+test("completed tools stay active at the open tail and fold on a terminal boundary", () => {
+  reset();
+  const activityEvents = [
+    event("tool.event", { method: "item/completed", raw: { item: { id: "1", type: "commandExecution", command: "true", status: "completed" } } }),
+  ];
+  assert.equal(buildTimeline(activityEvents)[0].active, true);
+  assert.equal(buildTimeline([...activityEvents, event("turn.completed", {}, { turnId: "turn_1" })])[0].active, false);
+});
+
+test("alternating thinking and tools form one ordered activity", () => {
+  reset();
+  const items = buildTimeline([
+    event("message.reasoning.delta", { text: "plan" }, { turnId: "turn_1" }),
+    event("tool.event", { method: "item/completed", raw: { item: { id: "1", type: "commandExecution", command: "pwd", status: "completed" } } }, { turnId: "turn_1" }),
+    event("message.reasoning.delta", { text: "check" }, { turnId: "turn_1" }),
+    event("tool.event", { method: "item/completed", raw: { item: { id: "2", type: "webSearch", query: "AgentHub", status: "completed" } } }, { turnId: "turn_1" }),
+    event("message.assistant.delta", { text: "done" }, { turnId: "turn_1" }),
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "message"]);
+  assert.deepEqual(items[0].items.map((item) => item.kind), ["thinking", "tools", "thinking", "tools"]);
+  assert.equal(items[0].thinkingCount, 2);
+  assert.equal(items[0].reasoningUpdateCount, 2);
+  assert.equal(items[0].toolCallCount, 2);
 });
 
 test("approvals pair requested and resolved events", () => {
@@ -533,9 +577,9 @@ test("provider noise stays out of the timeline and does not split tool groups", 
       raw: { item: { id: "call_2", type: "commandExecution", command: "test", status: "completed" } },
     }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["tools"]);
-  assert.equal(items[0].calls.length, 2);
-  assert.equal(items[0].calls[0].status, "completed");
+  assert.deepEqual(items.map((item) => item.kind), ["activity"]);
+  assert.equal(toolsChild(items[0]).calls.length, 2);
+  assert.equal(toolsChild(items[0]).calls[0].status, "completed");
 });
 
 test("message delivery facts stay out of the conversation timeline", () => {
@@ -568,8 +612,8 @@ test("unknown tool methods produce a diagnostic fallback", () => {
   const items = buildTimeline([
     event("tool.event", { method: "mystery/tool", raw: { id: "x" } }),
   ]);
-  assert.equal(items[0].calls[0].name, "Tool");
-  assert.equal(items[0].calls[0].summary, "mystery/tool");
+  assert.equal(toolsChild(items[0]).calls[0].name, "Tool");
+  assert.equal(toolsChild(items[0]).calls[0].summary, "mystery/tool");
 });
 
 test("provider turn notifications are omitted in favor of normalized lifecycle events", () => {
@@ -594,9 +638,9 @@ test("tool completion updates an earlier group across visible events", () => {
       raw: { item: { id: "call_1", type: "commandExecution", command: "make", status: "completed" } },
     }),
   ]);
-  assert.deepEqual(items.map((item) => item.kind), ["tools", "message"]);
-  assert.equal(items[0].calls.length, 1);
-  assert.equal(items[0].calls[0].status, "completed");
+  assert.deepEqual(items.map((item) => item.kind), ["activity", "message"]);
+  assert.equal(toolsChild(items[0]).calls.length, 1);
+  assert.equal(toolsChild(items[0]).calls[0].status, "completed");
 });
 
 test("turn terminal events settle tools whose provider terminal update is missing", () => {
@@ -608,7 +652,7 @@ test("turn terminal events settle tools whose provider terminal update is missin
     }),
     event("turn.completed", {}, { turnId: "turn_1" }),
   ]);
-  assert.equal(completed[0].calls[0].status, "completed");
+  assert.equal(toolsChild(completed[0]).calls[0].status, "completed");
 
   reset();
   const failed = buildTimeline([
@@ -618,7 +662,7 @@ test("turn terminal events settle tools whose provider terminal update is missin
     }),
     event("turn.failed", { error: "provider stopped" }, { turnId: "turn_1" }),
   ]);
-  assert.equal(failed[0].calls[0].status, "failed");
+  assert.equal(toolsChild(failed[0]).calls[0].status, "failed");
 
   reset();
   const stoppedNormally = buildTimeline([
@@ -628,7 +672,7 @@ test("turn terminal events settle tools whose provider terminal update is missin
     }),
     event("session.state", { state: "stopped", reason: "completed" }),
   ]);
-  assert.equal(stoppedNormally[0].calls[0].status, "completed");
+  assert.equal(toolsChild(stoppedNormally[0]).calls[0].status, "completed");
 });
 
 test("history rebuild and live streaming produce the same timeline", () => {

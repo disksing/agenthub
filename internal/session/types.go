@@ -312,22 +312,27 @@ type TurnSummary struct {
 }
 
 // TurnItem is a compact visible projection over a stable Event range.
-// Message items retain complete text and provenance. Thinking and tool items
-// deliberately retain only deterministic count/timing metadata; callers use
-// the bounded Event range endpoint to expand their raw details.
+// Message items retain complete text and provenance. Activity items combine
+// uninterrupted thinking and tool work, retaining only deterministic
+// count/timing metadata; callers use the bounded Event range endpoint to
+// expand their raw details.
 type TurnItem struct {
-	Type         string          `json:"type"`
-	Role         MessageRole     `json:"role,omitempty"`
-	Sender       *MessageSender  `json:"sender,omitempty"`
-	Steer        bool            `json:"steer,omitempty"`
-	Text         string          `json:"text,omitempty"`
-	StartEventID int64           `json:"startEventId"`
-	EndEventID   int64           `json:"endEventId"`
-	StartedAt    time.Time       `json:"startedAt"`
-	EndedAt      time.Time       `json:"endedAt"`
-	DurationMS   int64           `json:"durationMs"`
-	Count        int             `json:"count"`
-	Data         json.RawMessage `json:"data,omitempty"`
+	Type                 string          `json:"type"`
+	Role                 MessageRole     `json:"role,omitempty"`
+	Sender               *MessageSender  `json:"sender,omitempty"`
+	Steer                bool            `json:"steer,omitempty"`
+	Text                 string          `json:"text,omitempty"`
+	StartEventID         int64           `json:"startEventId"`
+	EndEventID           int64           `json:"endEventId"`
+	StartedAt            time.Time       `json:"startedAt"`
+	EndedAt              time.Time       `json:"endedAt"`
+	DurationMS           int64           `json:"durationMs"`
+	Count                int             `json:"count"`
+	ThinkingCount        int             `json:"thinkingCount,omitempty"`
+	ReasoningUpdateCount int             `json:"reasoningUpdateCount,omitempty"`
+	ToolCallCount        int             `json:"toolCallCount,omitempty"`
+	Data                 json.RawMessage `json:"data,omitempty"`
+	activityTail         string
 }
 
 // TurnPage uses exclusive stable event-ID cursors in both directions. A

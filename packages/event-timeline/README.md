@@ -11,7 +11,7 @@ v1 clients. It accepts the complete ordered canonical event sequence:
 and returns plain timeline items with these `kind` values:
 
 ```text
-message, thinking, tools, approval, lifecycle, error, unknown
+message, activity, approval, lifecycle, error, unknown
 ```
 
 The projection filters provider activity, merges assistant and reasoning
@@ -34,8 +34,7 @@ canonical `time` string. Kind-specific fields are:
 | Kind | Fields |
 | --- | --- |
 | `message` | `role` (`user`, `system`, `agent`, or `assistant`), `text`, optional `sender`, `turnId`, and `steer` |
-| `thinking` | `text`, `turnId`, semantic `active` flag |
-| `tools` | `calls[]`; each call has identity, label, status, output/error, method, time, and a bounded raw preview |
+| `activity` | ordered `items[]` containing `thinking` and `tools` children, independent thinking/reasoning-update/tool-call counts, and semantic `active` flag |
 | `approval` | `approvalId`, summary, `pending`/`accepted`/`declined` status, decision |
 | `lifecycle` | stable English summary plus semantic `muted`/`info`/`ok`/`danger` tone |
 | `error` | provider error text |
@@ -63,8 +62,13 @@ const items = buildTimeline(events);
 ```
 
 Only `buildTimeline`, `VERSION`, and `API_EVENT_CONTRACT_VERSION` are public.
-The current package version is `1.0.0`; its input contract is
+The current package version is `2.0.0`; its input contract is
 `agenthub.api.v1`.
+
+Activity children keep the version 1 `thinking` and `tools` shapes so hosts can
+render their full details in original order. Version 2 wraps every maximal
+uninterrupted run in one activity item; messages, approvals, lifecycle entries,
+errors, and unknown events remain hard boundaries.
 
 ## Browser IIFE
 

@@ -108,6 +108,7 @@ Current runtime-backed daemon instances advertise:
 | `messages.at-least-once` | Once a message request is durably accepted, AgentHub retains provider delivery responsibility across ambiguous responses, provider failures, and daemon restarts. A crash after provider acceptance but before durable acknowledgement can cause a limited duplicate attempt. |
 | `turns.stable-index` | Turn pages expose event ranges, trigger/final-reply event references, status and forward/backward cursors. |
 | `turns.materialized` | Closed Turns and ordered compact items are read from rebuildable `turns.jsonl`; single-Turn queries repair projection lag and Event ranges provide bounded detail expansion. |
+| `turns.activity-items` | Compact Turn projections combine every uninterrupted thinking/tool run into one `activity` item with independent phase, update and tool-call counts. |
 | `session.launch-environment` | Durable per-session provider environment, including provider resume. |
 | `session.launch-environment-update` | Resume accepts a `launchEnvironment` overlay, persisted before provider start. |
 | `session.strict-stopped` | `stopped` is published only after provider exit is confirmed. |
@@ -261,6 +262,8 @@ Daemon status, effective data paths and runtime summary.
     "session.input-capabilities",
     "messages.idempotent",
     "turns.stable-index",
+    "turns.materialized",
+    "turns.activity-items",
     "events.canonical-turn-terminals",
     "recovery.closed-turns",
     "session.launch-environment",
@@ -843,9 +846,12 @@ Read a compact, rebuildable Turn index for an active or archived Session.
 Each entry contains the Turn id, status, `closed`, full timing,
 `startEventId`, `turnStartedEventId`, `lastEventId`, terminal `endEventId`,
 and ordered compact `items`. Message items retain complete text and
-provenance. Thinking and tool items retain stable Event ranges, count, and
-duration for bounded expansion; approval, error, and lifecycle items retain
-their display data directly.
+provenance. Activity items combine uninterrupted thinking/tool work and retain
+stable Event ranges, thinking phase count, reasoning update count, tool-call
+count, and duration for bounded expansion; approval, error, and lifecycle items
+retain their display data directly. Materialized legacy `thinking` and `tool`
+items are normalized to `activity` in memory when read, without requiring a
+canonical Event scan or an eager `turns.jsonl` rewrite.
 All references are stable event IDs in `events.jsonl`; byte offsets and paths
 are never exposed.
 

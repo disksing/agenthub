@@ -1891,6 +1891,7 @@ details[open] > summary > .note-chevron {
 
 .thinking-note,
 .tool-group,
+.activity-group,
 .unknown-event {
   max-width: 760px;
   margin: 10px 0 10px 52px;
@@ -1902,6 +1903,7 @@ details[open] > summary > .note-chevron {
 
 .thinking-note summary,
 .tool-group summary,
+.activity-group > summary,
 .unknown-event summary {
   display: flex;
   align-items: center;
@@ -1915,6 +1917,67 @@ details[open] > summary > .note-chevron {
 .thinking-active summary {
   color: var(--teal-dark);
   font-weight: 600;
+}
+
+.activity-active > summary {
+  color: var(--teal-dark);
+  font-weight: 600;
+}
+
+.activity-group-title {
+  flex-shrink: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.activity-group-icon {
+  display: inline-flex;
+  color: #55605f;
+}
+
+.activity-group-preview {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.activity-thinking,
+.activity-tools {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.activity-child-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  color: #55605f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.activity-thinking p {
+  margin: 0;
+  padding: 0 12px 10px 34px;
+  color: #5d6766;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.activity-tools .tool-list {
+  padding-top: 0;
 }
 
 .thinking-note p {

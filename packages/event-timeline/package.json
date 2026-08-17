@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/event-timeline",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Pure AgentHub API v1 canonical event timeline projection",
   "private": true,
   "type": "module",

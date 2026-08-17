@@ -46,13 +46,22 @@ function MessageItem({ item, agent }) {
 	);
 }
 
-function ThinkingItem({ item }) {
+function ThinkingItem({ item, embedded = false }) {
   const duration = item.active ? "" : displayDuration(item.startTime, item.time);
+  const title = item.active ? "Thinking…" : duration ? `Thought for ${duration}` : "Thought";
+  if (embedded) {
+    return (
+      <section className={`activity-thinking ${item.active ? "thinking-active" : ""}`}>
+        <div className="activity-child-heading"><Brain size={16} /><span>{title}</span></div>
+        <p>{item.text}</p>
+      </section>
+    );
+  }
   return (
     <details className={`thinking-note ${item.active ? "thinking-active" : ""}`} open={item.active}>
       <summary>
         <Brain size={16} />
-        <span>{item.active ? "Thinking…" : duration ? `Thought for ${duration}` : "Thought"}</span>
+        <span>{title}</span>
         <span className="note-time">{displayTime(item.time)}</span>
         <CaretRight className="note-chevron" size={14} />
       </summary>
@@ -61,11 +70,11 @@ function ThinkingItem({ item }) {
   );
 }
 
-function ToolCallRow({ call }) {
+function ToolCallRow({ call, expanded = false }) {
   const hasDetails = Boolean(call.output || call.error || call.rawPreview);
   const label = [call.name, call.summary].filter(Boolean).join(" · ");
   return (
-    <details className={`tool-item tool-${call.status}`}>
+    <details className={`tool-item tool-${call.status}`} open={expanded}>
       <summary>
         <ToolStatusIcon status={call.status} />
         <span className="tool-item-label" title={label}>{label || "Tool call"}</span>
@@ -88,7 +97,7 @@ function ToolCallRow({ call }) {
   );
 }
 
-function ToolsItem({ item, isOpen }) {
+function ToolsItem({ item, isOpen, embedded = false }) {
   const running = item.calls.filter((call) => call.status === "running").length;
   const failed = item.calls.filter((call) => call.status === "failed").length;
   const count = item.calls.length;
@@ -98,22 +107,69 @@ function ToolsItem({ item, isOpen }) {
     .filter(Boolean)
     .join(" · ");
   const remaining = Math.max(0, count - 2);
+  const heading = (
+    <>
+      <span className="tool-group-icon"><Wrench size={15} /></span>
+      <span className="tool-group-title">
+        {count} tool {count === 1 ? "call" : "calls"}
+        {running ? ` · ${running} running` : ""}
+        {failed ? ` · ${failed} failed` : ""}
+      </span>
+      <span className="tool-group-preview">
+        {preview}{remaining ? ` · +${remaining} more` : ""}
+      </span>
+    </>
+  );
+  if (embedded) {
+    return (
+      <section className="activity-tools">
+        <div className="activity-child-heading">{heading}</div>
+        <div className="tool-list">
+          {item.calls.map((call) => <ToolCallRow key={call.key} call={call} expanded />)}
+        </div>
+      </section>
+    );
+  }
   return (
     <details className="tool-group" open={isOpen}>
       <summary>
-        <span className="tool-group-icon"><Wrench size={15} /></span>
-        <span className="tool-group-title">
-          {count} tool {count === 1 ? "call" : "calls"}
-          {running ? ` · ${running} running` : ""}
-          {failed ? ` · ${failed} failed` : ""}
-        </span>
-        <span className="tool-group-preview">
-          {preview}{remaining ? ` · +${remaining} more` : ""}
-        </span>
+        {heading}
         <CaretRight className="note-chevron" size={14} />
       </summary>
       <div className="tool-list">
         {item.calls.map((call) => <ToolCallRow key={call.key} call={call} />)}
+      </div>
+    </details>
+  );
+}
+
+function ActivityItem({ item }) {
+  const thoughts = Number(item.thinkingCount) || 0;
+  const tools = Number(item.toolCallCount) || 0;
+  const title = [
+    thoughts ? `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}` : "",
+    tools ? `${tools} tool ${tools === 1 ? "call" : "calls"}` : "",
+  ].filter(Boolean).join(" · ") || "Agent activity";
+  const preview = item.items
+    .filter((child) => child.kind === "tools")
+    .flatMap((child) => child.calls || [])
+    .slice(0, 2)
+    .map((call) => [call.name, call.summary].filter(Boolean).join(" · "))
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <details className={`activity-group ${item.active ? "activity-active" : ""}`} open={item.active}>
+      <summary>
+        <span className="activity-group-icon"><Wrench size={15} /></span>
+        <span className="activity-group-title">{title}</span>
+        {preview ? <span className="activity-group-preview">{preview}</span> : null}
+        <span className="note-time">{displayTime(item.time)}</span>
+        <CaretRight className="note-chevron" size={14} />
+      </summary>
+      <div className="activity-list">
+        {item.items.map((child, index) => child.kind === "thinking"
+          ? <ThinkingItem key={`${child.key}:thinking:${index}`} item={child} embedded />
+          : <ToolsItem key={`${child.key}:tools:${index}`} item={child} embedded />)}
       </div>
     </details>
   );
@@ -227,6 +283,8 @@ export function Timeline({ items, agent, onApproval }) {
             }
           />
         );
+      case "activity":
+        return <ActivityItem key={item.key} item={item} />;
       case "approval":
         return <ApprovalItem key={item.key} item={item} onApproval={onApproval} />;
       case "lifecycle":

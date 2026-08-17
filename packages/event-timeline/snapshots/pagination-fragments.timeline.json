@@ -1,104 +1,144 @@
 {
   "schemaVersion": 1,
-  "packageVersion": "1.0.0",
+  "packageVersion": "2.0.0",
   "apiEventContractVersion": "agenthub.api.v1",
   "stages": [
     [
       {
-        "kind": "thinking",
+        "kind": "activity",
         "key": 1,
-        "turnId": "turn_paged",
-        "text": "Page ",
-        "time": "2026-01-02T09:00:01Z",
-        "startTime": "2026-01-02T09:00:01Z",
-        "active": false
-      },
-      {
-        "kind": "tools",
-        "key": 2,
-        "calls": [
+        "items": [
           {
+            "kind": "thinking",
+            "key": 1,
+            "turnId": "turn_paged",
+            "text": "Page ",
+            "time": "2026-01-02T09:00:01Z",
+            "startTime": "2026-01-02T09:00:01Z",
+            "active": false,
+            "count": 1
+          },
+          {
+            "kind": "tools",
             "key": 2,
-            "callId": "call_paged",
-            "name": "Command",
-            "summary": "printf paged",
-            "status": "running",
-            "output": "",
-            "error": "",
-            "method": "item/started",
-            "time": "2026-01-02T09:00:02Z",
-            "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+            "calls": [
+              {
+                "key": 2,
+                "callId": "call_paged",
+                "name": "Command",
+                "summary": "printf paged",
+                "status": "running",
+                "output": "",
+                "error": "",
+                "method": "item/started",
+                "time": "2026-01-02T09:00:02Z",
+                "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+              }
+            ],
+            "time": "2026-01-02T09:00:02Z"
           }
         ],
-        "time": "2026-01-02T09:00:02Z"
+        "time": "2026-01-02T09:00:02Z",
+        "startTime": "2026-01-02T09:00:01Z",
+        "thinkingCount": 1,
+        "reasoningUpdateCount": 1,
+        "toolCallCount": 1,
+        "active": true
       }
     ],
     [
       {
-        "kind": "thinking",
+        "kind": "activity",
         "key": 1,
-        "turnId": "turn_paged",
-        "text": "Page ",
-        "time": "2026-01-02T09:00:01Z",
-        "startTime": "2026-01-02T09:00:01Z",
-        "active": false
-      },
-      {
-        "kind": "tools",
-        "key": 2,
-        "calls": [
+        "items": [
           {
+            "kind": "thinking",
+            "key": 1,
+            "turnId": "turn_paged",
+            "text": "Page ",
+            "time": "2026-01-02T09:00:01Z",
+            "startTime": "2026-01-02T09:00:01Z",
+            "active": false,
+            "count": 1
+          },
+          {
+            "kind": "tools",
             "key": 2,
-            "callId": "call_paged",
-            "name": "Command",
-            "summary": "printf paged",
-            "status": "running",
-            "output": "pag",
-            "error": "",
-            "method": "item/started",
-            "time": "2026-01-02T09:00:04Z",
-            "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+            "calls": [
+              {
+                "key": 2,
+                "callId": "call_paged",
+                "name": "Command",
+                "summary": "printf paged",
+                "status": "running",
+                "output": "pag",
+                "error": "",
+                "method": "item/started",
+                "time": "2026-01-02T09:00:04Z",
+                "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+              }
+            ],
+            "time": "2026-01-02T09:00:04Z"
           }
         ],
-        "time": "2026-01-02T09:00:04Z"
+        "time": "2026-01-02T09:00:04Z",
+        "startTime": "2026-01-02T09:00:01Z",
+        "thinkingCount": 1,
+        "reasoningUpdateCount": 1,
+        "toolCallCount": 1,
+        "active": true
       }
     ],
     [
       {
-        "kind": "thinking",
+        "kind": "activity",
         "key": 1,
-        "turnId": "turn_paged",
-        "text": "Page ",
-        "time": "2026-01-02T09:00:01Z",
-        "startTime": "2026-01-02T09:00:01Z",
-        "active": false
-      },
-      {
-        "kind": "tools",
-        "key": 2,
-        "calls": [
+        "items": [
           {
+            "kind": "thinking",
+            "key": 1,
+            "turnId": "turn_paged",
+            "text": "Page ",
+            "time": "2026-01-02T09:00:01Z",
+            "startTime": "2026-01-02T09:00:01Z",
+            "active": false,
+            "count": 1
+          },
+          {
+            "kind": "tools",
             "key": 2,
-            "callId": "call_paged",
-            "name": "Command",
-            "summary": "printf paged",
-            "status": "completed",
-            "output": "paged",
-            "error": "",
-            "method": "item/started",
-            "time": "2026-01-02T09:00:05Z",
-            "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+            "calls": [
+              {
+                "key": 2,
+                "callId": "call_paged",
+                "name": "Command",
+                "summary": "printf paged",
+                "status": "completed",
+                "output": "paged",
+                "error": "",
+                "method": "item/started",
+                "time": "2026-01-02T09:00:05Z",
+                "rawPreview": "{\"item\":{\"id\":\"call_paged\",\"type\":\"commandExecution\",\"command\":[\"printf\",\"paged\"],\"status\":\"inProgress\"}}"
+              }
+            ],
+            "time": "2026-01-02T09:00:05Z"
+          },
+          {
+            "kind": "thinking",
+            "key": 6,
+            "turnId": "turn_paged",
+            "text": "complete.",
+            "time": "2026-01-02T09:00:06Z",
+            "startTime": "2026-01-02T09:00:06Z",
+            "active": false,
+            "count": 1
           }
         ],
-        "time": "2026-01-02T09:00:05Z"
-      },
-      {
-        "kind": "thinking",
-        "key": 6,
-        "turnId": "turn_paged",
-        "text": "complete.",
         "time": "2026-01-02T09:00:06Z",
-        "startTime": "2026-01-02T09:00:06Z",
+        "startTime": "2026-01-02T09:00:01Z",
+        "thinkingCount": 2,
+        "reasoningUpdateCount": 2,
+        "toolCallCount": 1,
         "active": false
       },
       {

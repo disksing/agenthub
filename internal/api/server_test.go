@@ -2143,6 +2143,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		CapabilityMessageAtLeastOnce,
 		CapabilityTurnsStableIndex,
 		CapabilityTurnsMaterialized,
+		CapabilityTurnsActivityItems,
 		CapabilityEventsCanonicalTerminal,
 		CapabilityRecoveryClosedTurns,
 		CapabilitySessionLaunchEnvironment,
@@ -2226,6 +2227,7 @@ func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
 		CapabilityActivityGlobalSSE, CapabilitySessionSource, CapabilitySessionSourceMetadata,
 		CapabilitySessionIdempotentCreate, CapabilitySessionInputCapabilities,
 		CapabilityMessageIdempotency, CapabilityMessageAtLeastOnce, CapabilityTurnsStableIndex, CapabilityTurnsMaterialized,
+		CapabilityTurnsActivityItems,
 	}
 	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
 		t.Fatalf("capabilities = %v, want %v", body.Capabilities, want)

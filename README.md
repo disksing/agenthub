@@ -235,7 +235,7 @@ curl -s http://127.0.0.1:4646/api.md
 `"apiVersion": "1"` and only the capabilities this daemon instance can
 actually exercise: `session.source`, `session.launch-environment`,
 `session.source-metadata`, `session.idempotent-create`,
-`session.input-capabilities`, `messages.idempotent`, `messages.at-least-once`, `turns.stable-index`, `turns.materialized`,
+`session.input-capabilities`, `messages.idempotent`, `messages.at-least-once`, `turns.stable-index`, `turns.materialized`, `turns.activity-items`,
 `session.launch-environment-update`,
 `session.strict-stopped`, `events.lossless-replay`, `events.delta-merge`,
 `activity.global-sse`,

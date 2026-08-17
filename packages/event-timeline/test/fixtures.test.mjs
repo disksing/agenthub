@@ -73,7 +73,7 @@ test("shared canonical fixtures match the checked-in snapshots", async () => {
   );
   assert.deepEqual(
     [...kinds].sort(),
-    ["approval", "error", "lifecycle", "message", "thinking", "tools", "unknown"],
+    ["activity", "approval", "error", "lifecycle", "message", "unknown"],
   );
 });
 
@@ -83,9 +83,13 @@ test("pagination fragment replay matches every checked-in projection stage", asy
     paginationFixture.apiEventContractVersion,
     API_EVENT_CONTRACT_VERSION,
   );
-  assert.equal(paginationStages[0][1].calls[0].status, "running");
-  assert.equal(paginationStages[1][1].calls[0].output, "pag");
-  assert.equal(paginationStages[2][1].calls[0].status, "completed");
+  const tools = (stage) =>
+    stage
+      .find((item) => item.kind === "activity")
+      .items.find((item) => item.kind === "tools");
+  assert.equal(tools(paginationStages[0]).calls[0].status, "running");
+  assert.equal(tools(paginationStages[1]).calls[0].output, "pag");
+  assert.equal(tools(paginationStages[2]).calls[0].status, "completed");
   assert.equal(paginationStages[2].at(-1).text, "Turn completed");
 });
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "package": {
     "name": "@agenthub/event-timeline",
-    "version": "1.0.0"
+    "version": "2.0.0"
   },
   "apiEventContractVersion": "agenthub.api.v1",
   "iifeGlobal": "AgentHubEventTimeline",
@@ -15,8 +15,8 @@
     "repository": "https://github.com/disksing/agenthub",
     "revision": "the Git commit containing this manifest",
     "inputs": {
-      "src/index.js": "90491487be10264fdb0e355d9e9877c1074ea6dfa90d1b5f9e7f268f0299204c",
-      "package.json": "9e60b16b341523720ccb2ff1c337ede982ec9982b4221369424c7a0c7352865b",
+      "src/index.js": "7414a124a1bd18e932652e0962f666bb62e4947d1804e32f3b0fc6ca8526363f",
+      "package.json": "0a43db3e981389493aef5c36975c20cb54c61f393f4cf119732453bcdf59af53",
       "scripts/build.mjs": "59109be2db4a26a1c7197103bb743b970dec9f083c19268c54478ba8f2ff9b23"
     }
   },
@@ -27,11 +27,11 @@
   "artifacts": {
     "event-timeline.mjs": {
       "format": "esm",
-      "sha256": "b2cfd1ce274028fc9b9037d6ccacbcfa712eee2f55b482dd012235cdac3ce1fc"
+      "sha256": "2efefb3bd10fa8f06ae542795520dd18e5af335831c2672612596b0e0d5368f9"
     },
     "event-timeline.iife.js": {
       "format": "iife",
-      "sha256": "6211dce0fc50d79b120ccda283e119e1c56743c3fa03440e75b5fbc80ea9da52"
+      "sha256": "c30b03b1cc54941be79fc39bfe509e5b79751f45c0f130c2e8177136bfe3d0c8"
     }
   }
 }

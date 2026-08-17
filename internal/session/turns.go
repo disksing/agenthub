@@ -179,6 +179,7 @@ func readTurnRecordsRepairTail(path string) ([]TurnSummary, error) {
 		if turn.ID == "" || turn.StartEventID <= 0 {
 			return nil, errors.New("invalid turn projection record")
 		}
+		turn.Items = normalizeTurnItems(turn.Items)
 		latest[turn.ID] = turn
 		order[turn.ID] = turn.StartEventID
 	}
@@ -277,10 +278,10 @@ func buildTurnSummaries(events []Event) []TurnSummary {
 				turn.FinalReplyPreview = preview(turn.FinalReplyPreview + data.Text)
 			}
 		case "message.reasoning.delta":
-			appendCollapsedItem(turn, event, "thinking", 1)
+			appendThinkingActivity(turn, event)
 		case "tool.event":
 			turn.ToolEventCount++
-			appendToolItem(turn, event, toolIdentities)
+			appendToolActivity(turn, event, toolIdentities)
 		case "approval.requested", "approval.resolved":
 			appendStructuredItem(turn, event, "approval")
 		case "provider.error":
@@ -311,34 +312,95 @@ func invisibleTurnEvent(eventType string) bool {
 		eventType == "provider.turn.completed" || strings.HasPrefix(eventType, "provider.process.")
 }
 
-func appendToolItem(turn *TurnSummary, event Event, identities map[string]map[string]struct{}) {
+func appendToolActivity(turn *TurnSummary, event Event, identities map[string]map[string]struct{}) {
+	item := appendActivityItem(turn, event)
 	identity := toolIdentity(event.Data)
-	if len(turn.Items) == 0 || turn.Items[len(turn.Items)-1].Type != "tool" {
-		item := newTurnItem(event, "tool")
-		turn.Items = append(turn.Items, item)
-		key := turn.ID + ":" + fmt.Sprint(item.StartEventID)
-		identities[key] = make(map[string]struct{})
-		if identity != "" {
-			identities[key][identity] = struct{}{}
-		}
-		return
-	}
-	last := &turn.Items[len(turn.Items)-1]
-	key := turn.ID + ":" + fmt.Sprint(last.StartEventID)
+	key := turn.ID + ":" + fmt.Sprint(item.StartEventID)
 	seen := identities[key]
 	if seen == nil {
 		seen = make(map[string]struct{})
 		identities[key] = seen
 	}
 	if identity == "" {
-		last.Count++
+		item.ToolCallCount++
 	} else if _, exists := seen[identity]; !exists {
 		seen[identity] = struct{}{}
-		last.Count++
+		item.ToolCallCount++
 	}
-	last.EndEventID = event.ID
-	last.EndedAt = event.Time
-	last.DurationMS = durationMilliseconds(last.StartedAt, last.EndedAt)
+	item.activityTail = "tool"
+	updateActivityItem(item, event)
+}
+
+func appendThinkingActivity(turn *TurnSummary, event Event) {
+	item := appendActivityItem(turn, event)
+	if item.activityTail != "thinking" {
+		item.ThinkingCount++
+	}
+	item.ReasoningUpdateCount++
+	item.activityTail = "thinking"
+	updateActivityItem(item, event)
+}
+
+func appendActivityItem(turn *TurnSummary, event Event) *TurnItem {
+	if len(turn.Items) == 0 || turn.Items[len(turn.Items)-1].Type != "activity" {
+		item := newTurnItem(event, "activity")
+		item.Count = 0
+		turn.Items = append(turn.Items, item)
+		return &turn.Items[len(turn.Items)-1]
+	}
+	return &turn.Items[len(turn.Items)-1]
+}
+
+func updateActivityItem(item *TurnItem, event Event) {
+	item.EndEventID = event.ID
+	item.EndedAt = event.Time
+	item.DurationMS = durationMilliseconds(item.StartedAt, item.EndedAt)
+	item.Count = item.ThinkingCount + item.ToolCallCount
+}
+
+func normalizeTurnItems(items []TurnItem) []TurnItem {
+	normalized := make([]TurnItem, 0, len(items))
+	for _, item := range items {
+		if item.Type == "thinking" || item.Type == "tool" {
+			legacyCount := item.Count
+			if legacyCount <= 0 {
+				legacyCount = 1
+			}
+			legacyType := item.Type
+			item.Type = "activity"
+			item.ThinkingCount = 0
+			item.ReasoningUpdateCount = 0
+			item.ToolCallCount = 0
+			if legacyType == "thinking" {
+				item.ThinkingCount = 1
+				item.ReasoningUpdateCount = legacyCount
+			} else {
+				item.ToolCallCount = legacyCount
+			}
+		}
+		if item.Type != "activity" {
+			normalized = append(normalized, item)
+			continue
+		}
+		if item.ThinkingCount == 0 && item.ToolCallCount == 0 {
+			item.ThinkingCount = 1
+			item.ReasoningUpdateCount = max(1, item.Count)
+		}
+		item.Count = item.ThinkingCount + item.ToolCallCount
+		if len(normalized) > 0 && normalized[len(normalized)-1].Type == "activity" {
+			previous := &normalized[len(normalized)-1]
+			previous.EndEventID = item.EndEventID
+			previous.EndedAt = item.EndedAt
+			previous.DurationMS = durationMilliseconds(previous.StartedAt, previous.EndedAt)
+			previous.ThinkingCount += item.ThinkingCount
+			previous.ReasoningUpdateCount += item.ReasoningUpdateCount
+			previous.ToolCallCount += item.ToolCallCount
+			previous.Count = previous.ThinkingCount + previous.ToolCallCount
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	return normalized
 }
 
 func toolIdentity(data json.RawMessage) string {
@@ -421,22 +483,6 @@ func appendAssistantItem(turn *TurnSummary, event Event, text string) {
 		}
 	}
 	appendMessageItem(turn, event, MessageRoleAssistant, nil, false, text)
-}
-
-func appendCollapsedItem(turn *TurnSummary, event Event, itemType string, count int) {
-	if len(turn.Items) > 0 {
-		last := &turn.Items[len(turn.Items)-1]
-		if last.Type == itemType {
-			last.EndEventID = event.ID
-			last.EndedAt = event.Time
-			last.DurationMS = durationMilliseconds(last.StartedAt, last.EndedAt)
-			last.Count += count
-			return
-		}
-	}
-	item := newTurnItem(event, itemType)
-	item.Count = count
-	turn.Items = append(turn.Items, item)
 }
 
 func appendStructuredItem(turn *TurnSummary, event Event, itemType string) {
