@@ -360,8 +360,8 @@ Usage:
 
 Events are the source of truth for a session: state changes, turn lifecycle,
 canonical message.input events, assistant messages, approvals and provider
-errors. message.input records user, system, or agent provenance; legacy
-message.user events are replayed as user messages. The daemon also streams
+errors. Schema-v2 message.input records provider-facing text and opaque caller
+payload; legacy provenance inputs and message.user events remain readable. The daemon also streams
 events over SSE at GET /v1/sessions/{id}/events.
 
 See also: agenthub help session show

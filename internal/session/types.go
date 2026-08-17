@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,8 +35,11 @@ const (
 	EventMessageDelivery = "message.delivery"
 )
 
-// MessageRole describes message provenance only. It is not an authorization
-// level, a trust boundary, or a provider instruction-priority signal.
+const MessageSchemaOpaquePayload = 2
+
+// MessageRole is retained only for schema-v1 input and materialized-history
+// compatibility. Schema-v2 callers keep application-specific provenance in
+// Payload, which AgentHub stores without interpreting.
 type MessageRole string
 
 const (
@@ -45,25 +49,27 @@ const (
 	MessageRoleAssistant MessageRole = "assistant"
 )
 
-// MessageSender identifies the source of an inbound message. AgentHub stores
-// these fields as caller-provided provenance and does not authenticate them.
+// MessageSender is the legacy schema-v1 provenance shape.
 type MessageSender struct {
 	ID        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
 }
 
-// MessageInput is the canonical durable input event payload. MessageID,
-// ReplyTo, and CorrelationID are reserved compatibility fields for future
-// agent-to-agent correlation; this task does not route or deliver them.
+// MessageInput is the canonical durable input event payload. Schema v2 owns
+// only provider-facing text, opaque caller payload, and AgentHub delivery
+// controls. The remaining provenance and correlation fields are accepted and
+// replayed only for schema-v1 compatibility.
 type MessageInput struct {
-	Text          string         `json:"text"`
-	Role          MessageRole    `json:"role"`
-	Sender        *MessageSender `json:"sender,omitempty"`
-	Steer         bool           `json:"steer"`
-	MessageID     string         `json:"messageId,omitempty"`
-	ReplyTo       string         `json:"replyTo,omitempty"`
-	CorrelationID string         `json:"correlationId,omitempty"`
+	SchemaVersion int             `json:"schemaVersion,omitempty"`
+	Text          string          `json:"text"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+	Steer         bool            `json:"steer"`
+	MessageID     string          `json:"messageId,omitempty"`
+	Role          MessageRole     `json:"role,omitempty"`
+	Sender        *MessageSender  `json:"sender,omitempty"`
+	ReplyTo       string          `json:"replyTo,omitempty"`
+	CorrelationID string          `json:"correlationId,omitempty"`
 }
 
 // MessageDeliveryEventData records attempts to hand one durable canonical
@@ -105,10 +111,54 @@ func (e *MessageInputError) Error() string {
 	return e.Message
 }
 
-// NormalizeMessageInput applies the stable inbound compatibility rules:
-// omitted role means user, assistant is provider-output-only, and sender
-// identity fields are trimmed and validated without being authenticated.
+// NormalizeMessageInput validates either the opaque schema-v2 contract or the
+// legacy provenance contract. Schema v2 never inspects Payload contents beyond
+// requiring one valid JSON value.
 func NormalizeMessageInput(value MessageInput) (MessageInput, error) {
+	if strings.TrimSpace(value.Text) == "" {
+		return MessageInput{}, &MessageInputError{
+			Code: "invalid_message_text", Field: "text", Message: "message text is required",
+		}
+	}
+	value.MessageID = strings.TrimSpace(value.MessageID)
+	if value.SchemaVersion == MessageSchemaOpaquePayload {
+		if value.Role != "" || value.Sender != nil || value.ReplyTo != "" || value.CorrelationID != "" {
+			return MessageInput{}, &MessageInputError{
+				Code: "mixed_message_schema", Field: "schemaVersion",
+				Message: "schemaVersion 2 messages must keep application metadata inside payload",
+			}
+		}
+		if len(value.Payload) > 0 {
+			if !json.Valid(value.Payload) {
+				return MessageInput{}, &MessageInputError{
+					Code: "invalid_message_payload", Field: "payload", Message: "payload must be valid JSON",
+				}
+			}
+			var compact bytes.Buffer
+			_ = json.Compact(&compact, value.Payload)
+			value.Payload = append(json.RawMessage(nil), compact.Bytes()...)
+		}
+		if err := validateMessageReference("messageId", value.MessageID); err != nil {
+			return MessageInput{}, err
+		}
+		return value, nil
+	}
+	if value.SchemaVersion != 0 {
+		return MessageInput{}, &MessageInputError{
+			Code: "invalid_message_schema", Field: "schemaVersion",
+			Message: fmt.Sprintf("unsupported message schemaVersion %d; expected 2 or omitted legacy schema", value.SchemaVersion),
+		}
+	}
+	if len(value.Payload) > 0 {
+		return MessageInput{}, &MessageInputError{
+			Code: "mixed_message_schema", Field: "payload",
+			Message: "payload requires schemaVersion 2",
+		}
+	}
+	return normalizeLegacyMessageInput(value)
+}
+
+func normalizeLegacyMessageInput(value MessageInput) (MessageInput, error) {
 	value.Role = MessageRole(strings.ToLower(strings.TrimSpace(string(value.Role))))
 	if value.Role == "" {
 		value.Role = MessageRoleUser
@@ -124,11 +174,6 @@ func NormalizeMessageInput(value MessageInput) (MessageInput, error) {
 		return MessageInput{}, &MessageInputError{
 			Code: "invalid_message_role", Field: "role",
 			Message: fmt.Sprintf("unsupported message role %q; expected user, system, or agent", value.Role),
-		}
-	}
-	if strings.TrimSpace(value.Text) == "" {
-		return MessageInput{}, &MessageInputError{
-			Code: "invalid_message_text", Field: "text", Message: "message text is required",
 		}
 	}
 	if value.Sender != nil {
@@ -166,32 +211,34 @@ func NormalizeMessageInput(value MessageInput) (MessageInput, error) {
 		}
 		value.Sender = &sender
 	}
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
+	for _, field := range []struct{ name, value string }{
 		{name: "messageId", value: value.MessageID},
 		{name: "replyTo", value: value.ReplyTo},
 		{name: "correlationId", value: value.CorrelationID},
 	} {
-		entry := field.value
-		if strings.ContainsRune(entry, '\x00') {
-			return MessageInput{}, &MessageInputError{
-				Code: "invalid_message_reference", Field: field.name,
-				Message: fmt.Sprintf("%s must not contain NUL", field.name),
-			}
-		}
-		if len(entry) > 4096 {
-			return MessageInput{}, &MessageInputError{
-				Code: "invalid_message_reference", Field: field.name,
-				Message: fmt.Sprintf("%s is too long", field.name),
-			}
+		if err := validateMessageReference(field.name, field.value); err != nil {
+			return MessageInput{}, err
 		}
 	}
-	value.MessageID = strings.TrimSpace(value.MessageID)
 	value.ReplyTo = strings.TrimSpace(value.ReplyTo)
 	value.CorrelationID = strings.TrimSpace(value.CorrelationID)
 	return value, nil
+}
+
+func validateMessageReference(name, value string) error {
+	if strings.ContainsRune(value, '\x00') {
+		return &MessageInputError{
+			Code: "invalid_message_reference", Field: name,
+			Message: fmt.Sprintf("%s must not contain NUL", name),
+		}
+	}
+	if len(value) > 4096 {
+		return &MessageInputError{
+			Code: "invalid_message_reference", Field: name,
+			Message: fmt.Sprintf("%s is too long", name),
+		}
+	}
+	return nil
 }
 
 // TurnTerminalEventData is the provider-independent payload of a canonical
@@ -287,28 +334,30 @@ type CreateInput struct {
 // reference is a stable event ID; no filesystem path or byte offset escapes
 // through the public API.
 type TurnSummary struct {
-	ID                 string         `json:"id"`
-	TurnID             string         `json:"turnId"`
-	Status             string         `json:"status"`
-	Closed             bool           `json:"closed"`
-	StartedAt          time.Time      `json:"startedAt"`
-	EndedAt            *time.Time     `json:"endedAt,omitempty"`
-	DurationMS         int64          `json:"durationMs"`
-	StartEventID       int64          `json:"startEventId"`
-	TurnStartedEventID int64          `json:"turnStartedEventId,omitempty"`
-	EndEventID         int64          `json:"endEventId,omitempty"`
-	CompletedAt        *time.Time     `json:"completedAt,omitempty"`
-	FirstEventID       int64          `json:"firstEventId"`
-	LastEventID        int64          `json:"lastEventId"`
-	TriggerEventID     int64          `json:"triggerEventId,omitempty"`
-	FinalReplyEventID  int64          `json:"finalReplyEventId,omitempty"`
-	TriggerPreview     string         `json:"triggerPreview,omitempty"`
-	TriggerRole        MessageRole    `json:"triggerRole,omitempty"`
-	TriggerSender      *MessageSender `json:"triggerSender,omitempty"`
-	FinalReplyPreview  string         `json:"finalReplyPreview,omitempty"`
-	EventCount         int            `json:"eventCount"`
-	ToolEventCount     int            `json:"toolEventCount"`
-	Items              []TurnItem     `json:"items"`
+	ID                 string          `json:"id"`
+	TurnID             string          `json:"turnId"`
+	Status             string          `json:"status"`
+	Closed             bool            `json:"closed"`
+	StartedAt          time.Time       `json:"startedAt"`
+	EndedAt            *time.Time      `json:"endedAt,omitempty"`
+	DurationMS         int64           `json:"durationMs"`
+	StartEventID       int64           `json:"startEventId"`
+	TurnStartedEventID int64           `json:"turnStartedEventId,omitempty"`
+	EndEventID         int64           `json:"endEventId,omitempty"`
+	CompletedAt        *time.Time      `json:"completedAt,omitempty"`
+	FirstEventID       int64           `json:"firstEventId"`
+	LastEventID        int64           `json:"lastEventId"`
+	TriggerEventID     int64           `json:"triggerEventId,omitempty"`
+	FinalReplyEventID  int64           `json:"finalReplyEventId,omitempty"`
+	TriggerPreview     string          `json:"triggerPreview,omitempty"`
+	TriggerRole        MessageRole     `json:"triggerRole,omitempty"`
+	TriggerSender      *MessageSender  `json:"triggerSender,omitempty"`
+	TriggerPayload     json.RawMessage `json:"triggerPayload,omitempty"`
+	TriggerMessageID   string          `json:"triggerMessageId,omitempty"`
+	FinalReplyPreview  string          `json:"finalReplyPreview,omitempty"`
+	EventCount         int             `json:"eventCount"`
+	ToolEventCount     int             `json:"toolEventCount"`
+	Items              []TurnItem      `json:"items"`
 }
 
 // TurnItem is a compact visible projection over a stable Event range.
@@ -322,6 +371,8 @@ type TurnItem struct {
 	Sender               *MessageSender  `json:"sender,omitempty"`
 	Steer                bool            `json:"steer,omitempty"`
 	Text                 string          `json:"text,omitempty"`
+	Payload              json.RawMessage `json:"payload,omitempty"`
+	MessageID            string          `json:"messageId,omitempty"`
 	StartEventID         int64           `json:"startEventId"`
 	EndEventID           int64           `json:"endEventId"`
 	StartedAt            time.Time       `json:"startedAt"`

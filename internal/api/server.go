@@ -34,6 +34,7 @@ const (
 	CapabilitySessionInputCapabilities = "session.input-capabilities"
 	CapabilityMessageIdempotency       = "messages.idempotent"
 	CapabilityMessageAtLeastOnce       = "messages.at-least-once"
+	CapabilityMessageOpaquePayloadV2   = "messages.opaque-payload-v2"
 	CapabilityTurnsStableIndex         = "turns.stable-index"
 	CapabilityTurnsMaterialized        = "turns.materialized"
 	CapabilityTurnsActivityItems       = "turns.activity-items"
@@ -252,6 +253,7 @@ func (s *Server) capabilities() []string {
 		CapabilitySessionInputCapabilities,
 		CapabilityMessageIdempotency,
 		CapabilityMessageAtLeastOnce,
+		CapabilityMessageOpaquePayloadV2,
 		CapabilityTurnsStableIndex,
 		CapabilityTurnsMaterialized,
 		CapabilityTurnsActivityItems,
@@ -710,12 +712,13 @@ func (s *Server) sessionOps() []sessionOp {
 	}
 }
 
-// inboundMessageRequest is shared by the messages endpoint and the optional
-// initialMessage on session creation. Sender stays raw until it is decoded so
-// malformed JSON shapes can receive a stable invalid_message_sender error
-// instead of leaking a Go decoder type error.
+// inboundMessageRequest is shared by the messages endpoint and optional
+// initialMessage. Schema v2 carries opaque caller payload. The provenance
+// fields below are accepted only by the schema-v1 compatibility adapter.
 type inboundMessageRequest struct {
+	SchemaVersion int             `json:"schemaVersion"`
 	Text          string          `json:"text"`
+	Payload       json.RawMessage `json:"payload"`
 	Role          string          `json:"role"`
 	Sender        json.RawMessage `json:"sender"`
 	Steer         bool            `json:"steer"`
@@ -726,6 +729,7 @@ type inboundMessageRequest struct {
 
 func (request inboundMessageRequest) hasMessageIntent() bool {
 	return strings.TrimSpace(request.Text) != "" ||
+		request.SchemaVersion != 0 || len(bytes.TrimSpace(request.Payload)) > 0 ||
 		strings.TrimSpace(request.Role) != "" || request.Steer ||
 		len(bytes.TrimSpace(request.Sender)) > 0 || request.MessageID != "" ||
 		request.ReplyTo != "" || request.CorrelationID != ""
@@ -737,7 +741,9 @@ func (request inboundMessageRequest) messageInput() (session.MessageInput, error
 		return session.MessageInput{}, err
 	}
 	return session.NormalizeMessageInput(session.MessageInput{
+		SchemaVersion: request.SchemaVersion,
 		Text:          request.Text,
+		Payload:       request.Payload,
 		Role:          session.MessageRole(request.Role),
 		Sender:        sender,
 		Steer:         request.Steer,

@@ -33,7 +33,7 @@ canonical `time` string. Kind-specific fields are:
 
 | Kind | Fields |
 | --- | --- |
-| `message` | `role` (`user`, `system`, `agent`, or `assistant`), `text`, optional `sender`, `turnId`, and `steer` |
+| `message` | `role` (`user`, `system`, `agent`, or `assistant`), `text`, optional opaque `payload`, `sender`, `turnId`, and `steer` |
 | `activity` | ordered `items[]` containing `thinking` and `tools` children, independent thinking/reasoning-update/tool-call counts, and semantic `active` flag |
 | `approval` | `approvalId`, summary, `pending`/`accepted`/`declined` status, decision |
 | `lifecycle` | stable English summary plus semantic `muted`/`info`/`ok`/`danger` tone |
@@ -44,6 +44,8 @@ canonical `time` string. Kind-specific fields are:
 It identifies who supplied a system or agent message for display only; it is
 not authentication, authorization, trust, or instruction priority. Legacy
 `message.user` and `message.user.steer` events are projected as user messages.
+For schema-v2 `message.input`, `payload` is copied to the message item without
+inspection; hosts may decode their own payload schema for presentation.
 
 Tool status is `running`, `completed`, or `failed`. The library does not emit
 an expanded/collapsed property; hosts choose their own initial and persistent

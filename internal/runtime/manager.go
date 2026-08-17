@@ -177,13 +177,13 @@ func (m *Manager) inputLock(id string) *sync.Mutex {
 
 func (m *Manager) Send(id, text string, steer bool) (session.Session, error) {
 	return m.SendMessage(id, session.MessageInput{
-		Text: text, Role: session.MessageRoleUser, Steer: steer,
+		SchemaVersion: session.MessageSchemaOpaquePayload, Text: text, Steer: steer,
 	})
 }
 
 // SendMessage persists and delivers one canonical inbound message. The
-// message role is provenance metadata only; providers receive it as ordinary
-// prompt text through provider.PromptText or the source-aware adapter hook.
+// schema-v2 text is delivered byte-for-byte. Schema-v1 prompt construction is
+// retained by provider.PromptText only for old requests and durable replay.
 func (m *Manager) SendMessage(id string, input session.MessageInput) (session.Session, error) {
 	input, err := session.NormalizeMessageInput(input)
 	if err != nil {
@@ -353,9 +353,6 @@ func (m *Manager) schedulePendingRetry(id string) {
 }
 
 func promptAdapter(adapter provider.Session, input session.MessageInput) error {
-	if sourceAware, ok := adapter.(provider.MessageSession); ok {
-		return sourceAware.PromptMessage(input)
-	}
 	text, err := provider.PromptText(input)
 	if err != nil {
 		return err

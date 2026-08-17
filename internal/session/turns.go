@@ -258,7 +258,7 @@ func buildTurnSummaries(events []Event) []TurnSummary {
 		case EventMessageInput:
 			var input MessageInput
 			if json.Unmarshal(event.Data, &input) == nil {
-				appendMessageItem(turn, event, input.Role, input.Sender, input.Steer, input.Text)
+				appendInputMessageItem(turn, event, input)
 			}
 			if turn.TriggerEventID == 0 {
 				if json.Unmarshal(event.Data, &input) == nil {
@@ -266,6 +266,8 @@ func buildTurnSummaries(events []Event) []TurnSummary {
 					turn.TriggerPreview = preview(input.Text)
 					turn.TriggerRole = input.Role
 					turn.TriggerSender = cloneMessageSender(input.Sender)
+					turn.TriggerPayload = cloneRawMessage(input.Payload)
+					turn.TriggerMessageID = input.MessageID
 				}
 			}
 		case "message.assistant.delta":
@@ -464,9 +466,17 @@ func newTurnItem(event Event, itemType string) TurnItem {
 	}
 }
 
-func appendMessageItem(turn *TurnSummary, event Event, role MessageRole, sender *MessageSender, steer bool, text string) {
+func appendInputMessageItem(turn *TurnSummary, event Event, input MessageInput) {
 	item := newTurnItem(event, "message")
-	item.Role, item.Sender, item.Steer, item.Text = role, cloneMessageSender(sender), steer, text
+	item.Role, item.Sender = input.Role, cloneMessageSender(input.Sender)
+	item.Steer, item.Text = input.Steer, input.Text
+	item.Payload, item.MessageID = cloneRawMessage(input.Payload), input.MessageID
+	turn.Items = append(turn.Items, item)
+}
+
+func appendMessageItem(turn *TurnSummary, event Event, role MessageRole, text string) {
+	item := newTurnItem(event, "message")
+	item.Role, item.Text = role, text
 	turn.Items = append(turn.Items, item)
 }
 
@@ -482,7 +492,7 @@ func appendAssistantItem(turn *TurnSummary, event Event, text string) {
 			return
 		}
 	}
-	appendMessageItem(turn, event, MessageRoleAssistant, nil, false, text)
+	appendMessageItem(turn, event, MessageRoleAssistant, text)
 }
 
 func appendStructuredItem(turn *TurnSummary, event Event, itemType string) {
@@ -530,10 +540,15 @@ func cloneMessageSender(value *MessageSender) *MessageSender {
 	return &cloned
 }
 
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), value...)
+}
+
 func cloneTurnSummaries(values []TurnSummary) []TurnSummary {
 	cloned := append([]TurnSummary(nil), values...)
 	for i := range cloned {
 		cloned[i].TriggerSender = cloneMessageSender(cloned[i].TriggerSender)
+		cloned[i].TriggerPayload = cloneRawMessage(cloned[i].TriggerPayload)
 		if cloned[i].CompletedAt != nil {
 			value := *cloned[i].CompletedAt
 			cloned[i].CompletedAt = &value
@@ -545,6 +560,7 @@ func cloneTurnSummaries(values []TurnSummary) []TurnSummary {
 		cloned[i].Items = append([]TurnItem(nil), cloned[i].Items...)
 		for itemIndex := range cloned[i].Items {
 			cloned[i].Items[itemIndex].Sender = cloneMessageSender(cloned[i].Items[itemIndex].Sender)
+			cloned[i].Items[itemIndex].Payload = cloneRawMessage(cloned[i].Items[itemIndex].Payload)
 			cloned[i].Items[itemIndex].Data = append(json.RawMessage(nil), cloned[i].Items[itemIndex].Data...)
 		}
 	}

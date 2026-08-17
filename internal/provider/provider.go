@@ -91,23 +91,16 @@ type Session interface {
 	Close() error
 }
 
-// MessageSession is the optional source-aware prompt interface implemented by
-// built-in adapters. Keeping Session.Prompt compatible lets older test and
-// external adapters continue to work; the runtime falls back to Prompt with
-// the same encoded text when an adapter does not implement this interface.
-type MessageSession interface {
-	PromptMessage(session.MessageInput) error
-}
-
-// PromptText returns the text sent to a provider adapter. Plain, unsourced
-// user messages stay byte-for-byte unchanged for compatibility. Sourced and
-// steer messages receive a compact, single-line provenance header. Provider
-// adapters still submit every message as ordinary user-level text rather than
-// using a native system/developer role.
+// PromptText resolves the provider-facing text of a canonical input. Schema
+// v2 is returned byte-for-byte unchanged. Header construction exists only for
+// durable schema-v1 inputs and old clients.
 func PromptText(value session.MessageInput) (string, error) {
 	value, err := session.NormalizeMessageInput(value)
 	if err != nil {
 		return "", err
+	}
+	if value.SchemaVersion == session.MessageSchemaOpaquePayload {
+		return value.Text, nil
 	}
 	if value.Role == session.MessageRoleUser && value.Sender == nil && !value.Steer {
 		return value.Text, nil

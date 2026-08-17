@@ -106,6 +106,7 @@ Current runtime-backed daemon instances advertise:
 | `session.input-capabilities` | Every Session reports whether its selected provider supports active-Turn steer. |
 | `messages.idempotent` | A non-empty `messageId` creates at most one canonical `message.input` per Session; conflicting reuse is rejected. |
 | `messages.at-least-once` | Once a message request is durably accepted, AgentHub retains provider delivery responsibility across ambiguous responses, provider failures, and daemon restarts. A crash after provider acceptance but before durable acknowledgement can cause a limited duplicate attempt. |
+| `messages.opaque-payload-v2` | Schema-v2 inputs persist caller-owned JSON payloads opaquely and forward provider-facing text without transformation. |
 | `turns.stable-index` | Turn pages expose event ranges, trigger/final-reply event references, status and forward/backward cursors. |
 | `turns.materialized` | Closed Turns and ordered compact items are read from rebuildable `turns.jsonl`; single-Turn queries repair projection lag and Event ranges provide bounded detail expansion. |
 | `turns.activity-items` | Compact Turn projections combine every uninterrupted thinking/tool run into one `activity` item with independent phase, update and tool-call counts. |
@@ -217,7 +218,7 @@ the repeated id as a full replacement, never as an append. Core event types:
 | `session.agent` | `{"agentName"}` | The configured agent was renamed; the session now references the new name. |
 | `session.launch-environment` | `{"environment": {...}}` | The session's launch environment was overlaid at resume; the payload is the full merged map, replacing the projected environment. |
 | `session.archived` | — | The session was archived (moved to the archive store). |
-| `message.input` | `{"text", "role", "sender?", "steer", "messageId?", "replyTo?", "correlationId?"}` | The canonical inbound message and its provenance metadata. `role` is `user`, `system`, or `agent`; `sender` is caller-provided identity metadata, not an authorization boundary. |
+| `message.input` | v2: `{"schemaVersion":2,"text","payload?","steer","messageId?"}`; legacy: `{"text","role","sender?",...}` | The canonical inbound message. AgentHub treats v2 payload as opaque JSON and forwards v2 text unchanged; legacy provenance fields remain readable. |
 | `message.user` | `{"text"}` | Legacy user input event. Readers must project it as `message.input` with `role: "user"`; new writes never use this type. |
 | `message.user.steer` | `{"text"}` | Legacy steer input event. Readers must project it as `message.input` with `role: "user", "steer": true`; new writes never use this type. |
 | `turn.started` | `{}` | A turn began. This is lifecycle-only; message text and provenance come from `message.input`. |
@@ -261,6 +262,7 @@ Daemon status, effective data paths and runtime summary.
     "session.idempotent-create",
     "session.input-capabilities",
     "messages.idempotent",
+    "messages.opaque-payload-v2",
     "turns.stable-index",
     "turns.materialized",
     "turns.activity-items",
@@ -881,24 +883,16 @@ curl -s "$BASE/v1/sessions/$SESSION/turns/$TURN"
 ### POST /v1/sessions/{id}/messages
 
 Send an inbound message. Without an active turn this starts a new turn; with
-an active turn the message is rejected unless `steer` is set. The role and
-sender describe message provenance only. They are not authentication,
-authorization, trust, or instruction-priority signals. Every accepted input is
-still submitted to the selected Provider as ordinary user-level prompt text.
-Sourced and steer inputs receive a compact first line such as
-`Message from agent "Review Agent" (steer):`, followed immediately by the
-original text. The sender label prefers `name`, then `id`, then `sessionId`.
-Idempotency and correlation fields remain durable metadata and are not exposed
-in Provider prompt text.
+an active turn the message is rejected unless `steer` is set. Schema v2 sends
+`text` to the selected Provider byte-for-byte and persists `payload` as opaque
+caller-owned JSON. AgentHub does not derive prompt text, display metadata, or
+trust semantics from that payload.
 
-- **Request body:** `{"text": "...", "role": "user", "sender": {...}, "steer": false}`
-  - `text` (required) — the original message text; blank text is rejected.
-  - `role` (optional) — `user`, `system`, or `agent`; omitted means `user`.
-    `assistant` is reserved for output events produced by the current Session
-    Provider and is rejected on inbound requests.
-  - `sender` (optional) — provenance identity object with optional `id`,
-    `name`, and `sessionId`. It is stored and displayed, but never
-    authenticated. Agent messages can omit it for compatibility.
+- **Request body:** `{"schemaVersion":2,"text":"...","payload":{...},"steer":false,"messageId":"msg-..."}`
+  - `schemaVersion` — use `2` for the opaque payload contract.
+  - `text` (required) — the complete provider-facing prompt; blank text is rejected.
+  - `payload` (optional) — any valid JSON value. It is stored and returned
+    unchanged in meaning and is never interpreted by AgentHub.
   - `steer` (optional) — inject the message into the currently active turn
     instead of starting a new one. Providers that cannot steer an active
     prompt (the ACP providers: Kimi and OpenCode) reject steer requests.
@@ -909,13 +903,17 @@ in Provider prompt text.
     recoverable delivery path. A crash after Provider acceptance but before
     the acceptance Event is durable can produce one or more limited duplicate
     attempts, which is the intentional at-least-once tradeoff.
-    Reusing the id with different text, provenance, correlation, or steer input
+    Reusing the id with different canonical text, payload, or steer input
     is rejected.
-  - `replyTo`, `correlationId` (optional) — correlation fields persisted for
-    future Agent-to-Agent routing.
+  - Legacy compatibility — if `schemaVersion` is omitted, `role`, `sender`,
+    `replyTo`, and `correlationId` retain their historical behavior, including
+    AgentHub's provenance header construction. Schema v2 rejects these fields
+    so application metadata cannot leak back into the transport abstraction.
 - **Success `202`:** `{"session": {...}}` — the turn runs asynchronously;
   watch it through the events endpoint.
 - **Errors:** `400 invalid_request`, `415 json_required`,
+  `400 invalid_message_schema`, `400 mixed_message_schema`,
+  `400 invalid_message_payload`,
   `400 invalid_message_role`, `400 assistant_message_forbidden`,
   `400 invalid_message_sender`, `400 invalid_message_reference`,
   `404 session_not_found`, `409 session_archived`,

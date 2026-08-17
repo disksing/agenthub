@@ -438,6 +438,7 @@ func TestPUAGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 	}
 	for _, required := range []string{
 		"session.source", "session.launch-environment", "session.launch-environment-update", "session.strict-stopped",
+		"messages.opaque-payload-v2",
 		"events.lossless-replay", "events.canonical-turn-terminals", "recovery.closed-turns",
 	} {
 		if !capabilities[required] {
@@ -484,7 +485,9 @@ func TestPUAGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			code, response := gate.request(http.MethodPost, "/v1/sessions/"+value.ID+"/messages", map[string]any{"text": "first"})
+			code, response := gate.request(http.MethodPost, "/v1/sessions/"+value.ID+"/messages", map[string]any{
+				"schemaVersion": 2, "text": "first", "payload": map[string]any{"schema": "pua.test.v1", "resource": value.Source.ExternalID},
+			})
 			if code != http.StatusAccepted {
 				t.Errorf("message status=%d body=%v", code, response)
 			}
@@ -493,7 +496,22 @@ func TestPUAGateSourceEnvironmentResumeCapabilitiesAndErrors(t *testing.T) {
 	wait.Wait()
 	for index, value := range sessions {
 		gate.waitSession(value.ID, func(current sessionValue) bool { return current.CurrentTurnID == "" })
-		text := assistantText(gate.events(value.ID))
+		events := gate.events(value.ID)
+		text := assistantText(events)
+		var input struct {
+			SchemaVersion int             `json:"schemaVersion"`
+			Text          string          `json:"text"`
+			Payload       json.RawMessage `json:"payload"`
+		}
+		for _, event := range events {
+			if event.Type == "message.input" {
+				_ = json.Unmarshal(event.Data, &input)
+				break
+			}
+		}
+		if input.SchemaVersion != 2 || input.Text != "first" || !bytes.Contains(input.Payload, []byte(`"schema":"pua.test.v1"`)) {
+			t.Errorf("opaque input was not persisted unchanged: %+v payload=%s", input, input.Payload)
+		}
 		for _, want := range []string{
 			"context=pua-" + []string{"one", "two"}[index],
 			"instance=" + strconv.Itoa(index),

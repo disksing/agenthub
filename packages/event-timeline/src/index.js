@@ -339,6 +339,7 @@ export function buildTimeline(events) {
           text: typeof data.text === "string" ? data.text : "",
         };
         if (event.turnId) item.turnId = event.turnId;
+        if (Object.prototype.hasOwnProperty.call(data, "payload")) item.payload = data.payload;
         // A message that starts a new turn ends any thinking still open from
         // the previous one. A message steered into the current turn (same
         // turnId) does not: the agent keeps reasoning and later deltas merge

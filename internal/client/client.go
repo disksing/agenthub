@@ -158,7 +158,7 @@ func (c *Client) CreateSessionWithMessage(title, cwd, agentName, message string)
 		"agentName": agentName,
 	}
 	if strings.TrimSpace(message) != "" {
-		body["initialMessage"] = map[string]any{"text": message}
+		body["initialMessage"] = map[string]any{"schemaVersion": session.MessageSchemaOpaquePayload, "text": message}
 	}
 	var result struct {
 		Session session.Session `json:"session"`
@@ -179,12 +179,12 @@ func (c *Client) Agents() (map[string]any, error) {
 
 func (c *Client) SendMessage(id, text string, steer bool) (session.Session, error) {
 	return c.SendMessageInput(id, session.MessageInput{
-		Text: text, Role: session.MessageRoleUser, Steer: steer,
+		SchemaVersion: session.MessageSchemaOpaquePayload, Text: text, Steer: steer,
 	})
 }
 
-// SendMessageInput sends an inbound message with explicit provenance. The
-// daemon still treats every role as ordinary user-level provider input.
+// SendMessageInput sends one canonical input. Schema-v2 payload is opaque to
+// AgentHub; schema-v1 provenance fields remain available for compatibility.
 func (c *Client) SendMessageInput(id string, input session.MessageInput) (session.Session, error) {
 	var result struct {
 		Session session.Session `json:"session"`

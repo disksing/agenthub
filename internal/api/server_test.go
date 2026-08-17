@@ -2141,6 +2141,7 @@ func TestStatusCapabilitiesAreBackedByHTTPBehavior(t *testing.T) {
 		CapabilitySessionInputCapabilities,
 		CapabilityMessageIdempotency,
 		CapabilityMessageAtLeastOnce,
+		CapabilityMessageOpaquePayloadV2,
 		CapabilityTurnsStableIndex,
 		CapabilityTurnsMaterialized,
 		CapabilityTurnsActivityItems,
@@ -2226,7 +2227,7 @@ func TestStatusOmitsUnavailableRuntimeCapabilities(t *testing.T) {
 		CapabilityEventsLosslessReplay, CapabilityEventsDeltaMerge, CapabilityEventsBackwardPagination,
 		CapabilityActivityGlobalSSE, CapabilitySessionSource, CapabilitySessionSourceMetadata,
 		CapabilitySessionIdempotentCreate, CapabilitySessionInputCapabilities,
-		CapabilityMessageIdempotency, CapabilityMessageAtLeastOnce, CapabilityTurnsStableIndex, CapabilityTurnsMaterialized,
+		CapabilityMessageIdempotency, CapabilityMessageAtLeastOnce, CapabilityMessageOpaquePayloadV2, CapabilityTurnsStableIndex, CapabilityTurnsMaterialized,
 		CapabilityTurnsActivityItems,
 	}
 	if strings.Join(body.Capabilities, ",") != strings.Join(want, ",") {
@@ -2376,6 +2377,9 @@ func TestMessageSourceValidationUsesStructuredErrors(t *testing.T) {
 		{name: "assistant role", body: `{"text":"spoof","role":"assistant"}`, code: "assistant_message_forbidden"},
 		{name: "sender shape", body: `{"text":"notice","role":"system","sender":"scheduler"}`, code: "invalid_message_sender"},
 		{name: "empty sender", body: `{"text":"notice","role":"system","sender":{}}`, code: "invalid_message_sender"},
+		{name: "unknown schema", body: `{"schemaVersion":3,"text":"notice"}`, code: "invalid_message_schema"},
+		{name: "v2 legacy mixing", body: `{"schemaVersion":2,"text":"notice","payload":{},"role":"system"}`, code: "mixed_message_schema"},
+		{name: "payload without v2", body: `{"text":"notice","payload":{}}`, code: "mixed_message_schema"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2404,5 +2408,13 @@ func TestMessageSourceValidationUsesStructuredErrors(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("valid source request must pass validation before runtime check: status = %d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/messages", strings.NewReader(`{"schemaVersion":2,"text":"already formatted","payload":{"schema":"app.v1","role":"anything"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("valid opaque request must pass validation before runtime check: status = %d body=%s", response.Code, response.Body.String())
 	}
 }

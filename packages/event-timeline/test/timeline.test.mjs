@@ -66,6 +66,23 @@ test("canonical input messages preserve provenance sender and steer metadata", (
   assert.equal(items[1].steer, true);
 });
 
+test("opaque input payload is preserved without interpretation", () => {
+  reset();
+  const payload = { schema: "pua.resource-message.v1", role: "custom", text: "original" };
+  const items = buildTimeline([
+    event("message.input", {
+      schemaVersion: 2,
+      text: "provider-facing text",
+      payload,
+      steer: true,
+    }, { turnId: "turn_opaque" }),
+  ]);
+  assert.equal(items[0].text, "provider-facing text");
+  assert.equal(items[0].role, "user");
+  assert.equal(items[0].steer, true);
+  assert.deepEqual(items[0].payload, payload);
+});
+
 test("legacy user message events remain user messages", () => {
   reset();
   const items = buildTimeline([

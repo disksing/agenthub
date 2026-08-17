@@ -235,7 +235,8 @@ curl -s http://127.0.0.1:4646/api.md
 `"apiVersion": "1"` and only the capabilities this daemon instance can
 actually exercise: `session.source`, `session.launch-environment`,
 `session.source-metadata`, `session.idempotent-create`,
-`session.input-capabilities`, `messages.idempotent`, `messages.at-least-once`, `turns.stable-index`, `turns.materialized`, `turns.activity-items`,
+`session.input-capabilities`, `messages.idempotent`, `messages.at-least-once`,
+`messages.opaque-payload-v2`, `turns.stable-index`, `turns.materialized`, `turns.activity-items`,
 `session.launch-environment-update`,
 `session.strict-stopped`, `events.lossless-replay`, `events.delta-merge`,
 `activity.global-sse`,
@@ -305,31 +306,24 @@ are stable event IDs and remains readable after archival.
 
 The `source` object is persisted in `session.created`, rebuilt into `session.json` on replay, and returned by session GET/list responses. It is deliberately self-asserted metadata: AgentHub does not register applications, reserve names, authenticate values, enforce uniqueness, or isolate tenants. Any client may submit any values and duplicates are valid. `GET /v1/sessions` accepts exact, case-sensitive `sourceApp`, `sourceInstanceId`, and `sourceExternalId` filters in any combination; they also compose with `includeArchived`, `archived`, and `state`. Sessions created without source metadata remain compatible and do not match source filters. See the complete [HTTP API reference](http://127.0.0.1:4646/api.md) served by the daemon.
 
-### Message provenance
+### Opaque message payloads
 
-`POST /v1/sessions/{id}/messages` accepts `role: "user"`, `"system"`, or
-`"agent"`; an omitted role remains `user` for old clients. An optional
-`sender` object carries descriptive `id`, `name`, and `sessionId` values. These
-fields describe provenance only: they are self-asserted, unauthenticated, and
-never change permissions, trust, or instruction priority. `assistant` is
-reserved for output events produced by the current Provider and cannot be
-submitted by an inbound client.
+Schema-v2 inputs contain provider-facing `text` and an optional caller-owned
+JSON `payload`. AgentHub stores and returns the payload without interpreting
+it, while forwarding `text` to the Provider byte-for-byte. `steer` and
+`messageId` remain AgentHub delivery controls. Application provenance,
+correlation, and presentation metadata belong inside `payload`.
 
-New inputs are persisted as one `message.input` event containing the original
-text, role, sender, and `steer` flag. Historical `message.user` and
-`message.user.steer` events replay as user messages without rewriting the
-session log. Sourced and steer inputs are delivered to Codex, Kimi, OpenCode,
-and Pi as ordinary user-level text with a compact header such as
-`Message from agent "Review Agent" (steer):`; the original text follows on the
-next line. Delivery and correlation fields are not included in Provider prompt
-text. The header is not stored in the event timeline or shown in the Web UI.
+Inputs without `schemaVersion` retain the legacy contract: AgentHub accepts
+`role`, `sender`, `replyTo`, and `correlationId`, and constructs the historical
+Provider prompt header. Existing durable `message.input`, `message.user`, and
+`message.user.steer` events continue to replay without rewriting session logs.
 
 Examples:
 
 ```json
-{"text":"Please inspect the failing test."}
-{"text":"Resume the queued work.","role":"system","sender":{"name":"Workflow Coordinator"}}
-{"text":"The worker finished its scan.","role":"agent","sender":{"name":"Review Agent","sessionId":"ses_worker"}}
+{"schemaVersion":2,"text":"Message from agent \"Review Agent\":\nThe worker finished its scan.","payload":{"schema":"my-app.message.v1","text":"The worker finished its scan.","role":"agent","sender":{"name":"Review Agent"}},"messageId":"msg-42"}
+{"text":"Legacy input","role":"agent","sender":{"name":"Old Client"}}
 ```
 
 ### Reusable Event Timeline

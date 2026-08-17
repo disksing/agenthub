@@ -233,29 +233,23 @@ Session 的 `inputCapabilities.steer` 明确说明当前 Provider 是否支持�
 输入；不支持时调用方应排队。`turns` 端点返回以稳定 event id 为引用的紧凑
 Turn 索引，Session 归档后仍可读取。
 
-### 消息来源角色
+### 不透明消息 Payload
 
-`POST /v1/sessions/{id}/messages` 接受 `role: "user"`、`"system"` 或
-`"agent"`；省略 `role` 时为兼容旧客户端按 `user` 处理。可选的
-`sender` 对象可携带描述性 `id`、`name` 和 `sessionId`。这些字段只表示
-provenance（消息来源）：它们由调用方自报、不会认证，也不会改变权限、信任
-级别或指令优先级。`assistant` 只保留给当前 Provider 产生的输出事件，入站
-客户端不能伪造。
+schema v2 入站消息只包含面向 Provider 的 `text` 和可选、由调用方定义的
+JSON `payload`。AgentHub 不解释 payload，只负责持久化并原样返回；`text`
+则逐字节转发给 Provider。`steer` 与 `messageId` 仍是 AgentHub 的投递控制
+字段，应用侧的来源、关联和展示信息都应放入 payload。
 
-新消息统一持久化为包含原始文本、role、sender 和 `steer` 的
-`message.input` 事件。历史 `message.user` 与 `message.user.steer` 事件重放
-时等价为 user 消息，不改写 Session 日志。带来源或 steer 标记的消息发给
-Codex、Kimi、OpenCode 和 Pi 时仍是普通用户级文本，只在原文前增加
-`Message from agent "Review Agent" (steer):` 这样的简短来源行。
-投递和关联字段不会加入 Provider prompt；来源行也不会进入公共事件
-时间线或显示在 Web UI 中。
+未提供 `schemaVersion` 的消息继续走旧协议：AgentHub 仍接受 `role`、
+`sender`、`replyTo` 和 `correlationId`，并按旧规则拼接 Provider prompt。
+已有 `message.input`、`message.user` 与 `message.user.steer` 数据无需迁移，
+仍可读取和重放。
 
 示例：
 
 ```json
-{"text":"请检查失败的测试。"}
-{"text":"恢复排队的工作。","role":"system","sender":{"name":"Workflow Coordinator"}}
-{"text":"Worker 已完成扫描。","role":"agent","sender":{"name":"Review Agent","sessionId":"ses_worker"}}
+{"schemaVersion":2,"text":"Message from agent \"Review Agent\":\nWorker 已完成扫描。","payload":{"schema":"my-app.message.v1","text":"Worker 已完成扫描。","role":"agent","sender":{"name":"Review Agent"}},"messageId":"msg-42"}
+{"text":"旧客户端消息","role":"agent","sender":{"name":"Old Client"}}
 ```
 
 ### 可复用 Event Timeline

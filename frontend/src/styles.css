@@ -1089,31 +1089,6 @@ select {
   border-top: 1px solid var(--line);
 }
 
-/* Inbound provenance messages keep their raw text but use a quiet visual
-   treatment that distinguishes coordinator notices and other agents from the
-   user's conversation and the current assistant. */
-.message-system,
-.message-agent {
-  margin: 2px 0 14px;
-  padding: 12px 14px;
-  border: 1px solid #dce7e4;
-  border-left: 3px solid #8ebbb4;
-  border-radius: 7px;
-  background: #f8fbfa;
-}
-
-.message-agent {
-  border-color: #d9e5ed;
-  border-left-color: #6f9eb5;
-  background: #f7fafc;
-}
-
-.message + .message-system,
-.message + .message-agent {
-  padding-top: 12px;
-  border-top: 1px solid #dce7e4;
-}
-
 .avatar {
   display: inline-flex;
   align-items: center;
@@ -1129,16 +1104,6 @@ select {
 
 .avatar-assistant {
   background: #117c76;
-}
-
-.avatar-system {
-  color: #426b65;
-  background: #dcece8;
-}
-
-.avatar-agent {
-  color: #315c71;
-  background: #dcebf3;
 }
 
 .message-meta {
@@ -1163,30 +1128,6 @@ select {
 .message-meta span {
   color: #858b8b;
   font-size: 13px;
-}
-
-.message-role-tag {
-  padding: 1px 7px;
-  border: 1px solid #c5d9d5;
-  border-radius: 99px;
-  color: #4a716b !important;
-  background: #edf6f4;
-  font-size: 11px !important;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.message-agent .message-role-tag {
-  border-color: #c5d8e2;
-  color: #426d82 !important;
-  background: #edf5f8;
-}
-
-.message-source {
-  max-width: min(100%, 360px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .message-body {

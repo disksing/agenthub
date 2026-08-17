@@ -20,6 +20,22 @@ func TestPromptTextLeavesUnmarkedUserTextUntouched(t *testing.T) {
 	}
 }
 
+func TestPromptTextLeavesOpaquePayloadTextUntouched(t *testing.T) {
+	input := session.MessageInput{
+		SchemaVersion: session.MessageSchemaOpaquePayload,
+		Text:          "Message from application:\nkeep exactly",
+		Payload:       []byte(`{"role":"anything"}`),
+		Steer:         true,
+	}
+	got, err := PromptText(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != input.Text {
+		t.Fatalf("prompt text = %q, want %q", got, input.Text)
+	}
+}
+
 func TestPromptTextFormatsCompactProvenance(t *testing.T) {
 	tests := []struct {
 		name  string

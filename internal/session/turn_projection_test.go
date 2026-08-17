@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -103,6 +104,36 @@ func TestClosedTurnProjectionPreservesMessagesAndCollapsesDetailRanges(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(root, created.ID, "turns.jsonl")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTurnProjectionPreservesOpaquePayloadWithoutProvenance(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(CreateInput{Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"schema":"pua.resource-message.v1","role":"system","text":"original"}`)
+	appendProjectionEvent(t, store, created.ID, EventMessageInput, "turn_opaque", MessageInput{
+		SchemaVersion: MessageSchemaOpaquePayload,
+		Text:          "Message from system:\noriginal",
+		Payload:       payload,
+		MessageID:     "msg-opaque",
+	})
+	appendProjectionEvent(t, store, created.ID, "turn.started", "turn_opaque", nil)
+	appendProjectionEvent(t, store, created.ID, EventTurnCompleted, "turn_opaque", nil)
+
+	turn, err := store.Turn(created.ID, "turn_opaque")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.TriggerRole != "" || turn.TriggerSender != nil || turn.TriggerMessageID != "msg-opaque" ||
+		!bytes.Equal(turn.TriggerPayload, payload) || len(turn.Items) < 1 || !bytes.Equal(turn.Items[0].Payload, payload) ||
+		turn.Items[0].Role != "" || turn.Items[0].Text != "Message from system:\noriginal" {
+		t.Fatalf("opaque turn projection = %+v", turn)
 	}
 }
 

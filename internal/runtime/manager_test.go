@@ -34,18 +34,6 @@ type fakeSession struct {
 	mu            sync.Mutex
 }
 
-type sourceAwareFakeSession struct {
-	*fakeSession
-	inputs []session.MessageInput
-}
-
-func (f *sourceAwareFakeSession) PromptMessage(input session.MessageInput) error {
-	f.mu.Lock()
-	f.inputs = append(f.inputs, input)
-	f.mu.Unlock()
-	return f.fakeSession.Prompt(input.Text, input.Steer)
-}
-
 func (f *fakeSession) Start(resumeID string) error {
 	f.resumeID = resumeID
 	if f.startErr != nil {
@@ -373,7 +361,7 @@ func TestManagerMergesAgentEnvironmentWithSessionLaunchEnvironment(t *testing.T)
 	}
 }
 
-func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
+func TestManagerPersistsOpaquePayloadAndDeliversTextVerbatim(t *testing.T) {
 	root := t.TempDir()
 	store, err := session.Open(root)
 	if err != nil {
@@ -384,22 +372,22 @@ func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := New(store, testConfig())
-	var adapter *sourceAwareFakeSession
+	defer manager.Close()
+	var adapter *fakeSession
 	manager.factory = func(options provider.Options) (provider.Session, error) {
-		adapter = &sourceAwareFakeSession{fakeSession: &fakeSession{hooks: options.Hooks}}
+		adapter = &fakeSession{hooks: options.Hooks}
 		return adapter, nil
 	}
 	input := session.MessageInput{
-		Text:   "wake the worker",
-		Role:   session.MessageRoleAgent,
-		Sender: &session.MessageSender{Name: "Scheduler", SessionID: "ses_scheduler"},
+		SchemaVersion: session.MessageSchemaOpaquePayload,
+		Text:          "Message from agent \"Scheduler\":\nwake the worker",
+		Payload:       json.RawMessage(`{"schema":"pua.resource-message.v1","role":"agent","text":"wake the worker"}`),
 	}
 	if _, err := manager.SendMessage(value.ID, input); err != nil {
 		t.Fatal(err)
 	}
-	if len(adapter.inputs) != 1 || adapter.inputs[0].Role != session.MessageRoleAgent ||
-		adapter.inputs[0].Sender == nil || adapter.inputs[0].Sender.SessionID != "ses_scheduler" {
-		t.Fatalf("source-aware prompt input = %+v", adapter.inputs)
+	if len(adapter.prompts) != 1 || adapter.prompts[0] != input.Text {
+		t.Fatalf("provider prompts = %#v", adapter.prompts)
 	}
 	events, err := store.EventsAfter(value.ID, 0, 20)
 	if err != nil {
@@ -419,8 +407,8 @@ func TestManagerPersistsAndDeliversCanonicalSourceMessage(t *testing.T) {
 			t.Fatalf("turn.started must remain lifecycle-only: %s", event.Data)
 		}
 	}
-	if found.Role != session.MessageRoleAgent || found.Text != input.Text || found.Sender == nil ||
-		found.Sender.Name != "Scheduler" || found.Sender.SessionID != "ses_scheduler" {
+	if found.SchemaVersion != session.MessageSchemaOpaquePayload || found.Text != input.Text ||
+		string(found.Payload) != string(input.Payload) || found.Role != "" || found.Sender != nil {
 		t.Fatalf("persisted message input = %+v", found)
 	}
 }
@@ -1029,6 +1017,7 @@ func TestCustomApprovalReplyIsDeliveredAfterTurnCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := New(store, testConfig())
+	defer manager.Close()
 	var adapter *fakeSession
 	manager.factory = func(options provider.Options) (provider.Session, error) {
 		adapter = &fakeSession{hooks: options.Hooks, holdTurn: true}
