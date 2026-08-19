@@ -2,6 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
+> [!IMPORTANT]
+> This repository has been merged into [disksing/pua](https://github.com/disksing/pua)
+> and is archived. AgentHub development, issues, and releases now live in that
+> repository under `agenthub/`. The unified build still produces a standalone
+> `agenthub` binary as well as the `pua` binary with embedded AgentHub.
+
 AgentHub is a local agent launcher and session hub. A single Go daemon manages Codex, Kimi, Pi/Grok, and OpenCode on your machine, and both the Web UI and the CLI work through the same HTTP API and SSE event stream.
 
 ## Capabilities

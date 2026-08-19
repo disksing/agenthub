@@ -2,6 +2,11 @@
 
 [English](README.md)
 
+> [!IMPORTANT]
+> 本仓库已合并到 [disksing/pua](https://github.com/disksing/pua) 并停止独立维护。
+> AgentHub 后续开发、Issue 与发布均在该仓库的 `agenthub/` 目录进行。统一构建仍会同时
+> 产出独立的 `agenthub` binary，以及内嵌 AgentHub 的 `pua` binary。
+
 AgentHub 是一个本地 Agent 启动器与 Session 中枢。一个 Go daemon 统一管理本机 Codex、Kimi、Pi/Grok 和 OpenCode，Web UI 与 CLI 都通过同一套 HTTP API 和 SSE 事件流工作。
 
 ## 能力
